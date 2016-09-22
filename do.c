@@ -157,8 +157,11 @@ int lsl_main(int argc, char** argv)
 		dd_graph_connect(g, n2->id, 1, n3->id, 1);
 	}
 
-	lsl_set_atlas("default.atls");
-	lsl_set_type_index(lsl_get_type_index_for_name("main"));
+	struct atls* atls = atls_load_from_file("default.atls");
+	assert(atls != NULL);
+	lsl_set_atls(atls);
+
+	lsl_set_type_index(atls_get_glyph_table_index(atls, "main"));
 	clone_win(NULL);
 	lsl_main_loop();
 

@@ -368,8 +368,8 @@ static void draw_glyph(struct atls_glyph* gly)
 			.dim = { .w = gly->w, .h = gly->h }
 		},
 		(struct rect) {
-			.p0 = { .x = (float)gly->x / (float)atls->atlas_width, .y = (float)gly->y / (float)atls->atlas_height },
-			.dim = { .w = (float)gly->w / (float)atls->atlas_width, .h = (float)gly->h / (float)atls->atlas_height }
+			.p0 = { .x = (float)gly->x / (float)active_atls->atlas_width, .y = (float)gly->y / (float)active_atls->atlas_height },
+			.dim = { .w = (float)gly->w / (float)active_atls->atlas_width, .h = (float)gly->h / (float)active_atls->atlas_height }
 		}
 	);
 }
@@ -525,11 +525,11 @@ void lsl_main_loop()
 			GL_TEXTURE_2D,
 			level,
 			1,
-			atls->atlas_width, atls->atlas_height,
+			active_atls->atlas_width, active_atls->atlas_height,
 			border,
 			GL_RED,
 			GL_UNSIGNED_BYTE,
-			atls->atlas_bitmap); CHKGL;
+			active_atls->atlas_bitmap); CHKGL;
 
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST); CHKGL;
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST); CHKGL;
@@ -537,11 +537,8 @@ void lsl_main_loop()
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER); CHKGL;
 
 		// setup dotuv
-		struct atls_glyph* gly = atls_glyph_table_lookup(
-			&atls->glyph_tables[atls_get_glyph_table_index(atls, "lsl_reserved")],
-			2);
-		assert(gly != NULL);
-		dotuv = (union vec2) { .u = (float)(gly->x+1) / (float)atls->atlas_width, .v = (float)(gly->y+1) / (float)atls->atlas_height };
+		assert(rgly_dot != NULL);
+		dotuv = (union vec2) { .u = (float)(rgly_dot->x+1) / (float)active_atls->atlas_width, .v = (float)(rgly_dot->y+1) / (float)active_atls->atlas_height };
 	}
 
 	glEnable(GL_BLEND);

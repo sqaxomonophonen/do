@@ -1,6 +1,7 @@
 #ifndef LSL_PRG_H
 
 #include "m.h"
+#include "atls.h"
 
 #define LSL_MAX_BUTTONS (5)
 #define LSL_MAX_TEXT_LENGTH (31)
@@ -27,8 +28,7 @@ struct lsl_frame* lsl_frame_top();
 
 int lsl_main(int argc, char** argv);
 
-void lsl_set_atlas(char* f);
-int lsl_get_type_index_for_name(char* name);
+void lsl_set_atls(struct atls*);
 void lsl_set_type_index(unsigned int index);
 void lsl_set_cursor(int x, int y);
 void lsl_set_gradient(union vec4 color0, union vec4 color1);

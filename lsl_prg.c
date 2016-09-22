@@ -5,7 +5,6 @@
 #include <assert.h>
 
 #include "lsl_prg.h"
-#include "atls.h"
 
 #define ASSERT(cond) \
 	do { \
@@ -17,8 +16,10 @@
 
 #define AN(expr) do { ASSERT((expr) != 0); } while(0)
 
-struct atls* atls;
+struct atls* active_atls;
 struct atls_glyph_table* active_glyph_table;
+struct atls_glyph* rgly_dot;
+struct atls_glyph* rgly_gradient;
 int cursor_x;
 int cursor_x0;
 int cursor_y;
@@ -93,49 +94,40 @@ void lsl_putch(int codepoint)
 	cursor_x += glyph->w;
 }
 
-void lsl_set_atlas(char* f)
+void lsl_set_atls(struct atls* a)
 {
-	assert(atls == NULL);
-	atls = atls_load_from_file(f);
-	if (atls == NULL) {
-		fprintf(stderr, "failed to load atlas: %s\n", atls_get_error());
-		assert(0);
-	}
+	assert(a != NULL);
+	active_atls = a;
 
-	int ri = atls_get_glyph_table_index(atls, "lsl_reserved");
+	int ri = atls_get_glyph_table_index(a, "lsl_reserved");
 	assert(ri >= 0);
-	struct atls_glyph_table* r = &atls->glyph_tables[ri];
-	struct atls_glyph* gradient = atls_glyph_table_lookup(r, 1);
-	assert(gradient != NULL);
-	struct atls_glyph* dot = atls_glyph_table_lookup(r, 2);
-	assert(dot != NULL);
+	struct atls_glyph_table* r = &a->glyph_tables[ri];
+	rgly_gradient = atls_glyph_table_lookup(r, 1);
+	assert(rgly_gradient != NULL);
+	rgly_dot = atls_glyph_table_lookup(r, 2);
+	assert(rgly_dot != NULL);
 
 	// paint reserved stuff; dot
-	for (int y = dot->y; y < (dot->y+dot->h); y++) {
-		for (int x = dot->x; x < (dot->x+dot->w); x++) {
-			atls->atlas_bitmap[x + y * atls->atlas_width] = 255;
+	for (int y = rgly_dot->y; y < (rgly_dot->y+rgly_dot->h); y++) {
+		for (int x = rgly_dot->x; x < (rgly_dot->x+rgly_dot->w); x++) {
+			a->atlas_bitmap[x + y * a->atlas_width] = 255;
 		}
 	}
 
 	// paint reserved stuff; gradient
-	for (int y = gradient->y; y < (gradient->y+gradient->h); y++) {
-		for (int x = gradient->x; x < (gradient->x+gradient->w); x++) {
-			int v = ((x - gradient->x) * 256) / gradient->w;
-			atls->atlas_bitmap[x + y * atls->atlas_width] = v;
+	for (int y = rgly_gradient->y; y < (rgly_gradient->y+rgly_gradient->h); y++) {
+		for (int x = rgly_gradient->x; x < (rgly_gradient->x+rgly_gradient->w); x++) {
+			int v = ((x - rgly_gradient->x) * 256) / rgly_gradient->w;
+			a->atlas_bitmap[x + y * a->atlas_width] = v;
 		}
 	}
-}
-
-int lsl_get_type_index_for_name(char* name)
-{
-	return atls_get_glyph_table_index(atls, name);
 }
 
 void lsl_set_type_index(unsigned int i)
 {
 	assert(i >= 0);
-	assert(i < atls->n_glyph_tables);
-	active_glyph_table = &atls->glyph_tables[i];
+	assert(i < active_atls->n_glyph_tables);
+	active_glyph_table = &active_atls->glyph_tables[i];
 }
 
 void lsl_set_cursor(int x, int y)
