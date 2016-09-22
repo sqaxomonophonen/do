@@ -19,7 +19,6 @@
 struct atls* active_atls;
 struct atls_glyph_table* active_glyph_table;
 struct atls_glyph* rgly_dot;
-struct atls_glyph* rgly_gradient;
 int cursor_x;
 int cursor_x0;
 int cursor_y;
@@ -102,23 +101,13 @@ void lsl_set_atls(struct atls* a)
 	int ri = atls_get_glyph_table_index(a, "lsl_reserved");
 	assert(ri >= 0);
 	struct atls_glyph_table* r = &a->glyph_tables[ri];
-	rgly_gradient = atls_glyph_table_lookup(r, 1);
-	assert(rgly_gradient != NULL);
-	rgly_dot = atls_glyph_table_lookup(r, 2);
+	rgly_dot = atls_glyph_table_lookup(r, 1);
 	assert(rgly_dot != NULL);
 
 	// paint reserved stuff; dot
 	for (int y = rgly_dot->y; y < (rgly_dot->y+rgly_dot->h); y++) {
 		for (int x = rgly_dot->x; x < (rgly_dot->x+rgly_dot->w); x++) {
 			a->atlas_bitmap[x + y * a->atlas_width] = 255;
-		}
-	}
-
-	// paint reserved stuff; gradient
-	for (int y = rgly_gradient->y; y < (rgly_gradient->y+rgly_gradient->h); y++) {
-		for (int x = rgly_gradient->x; x < (rgly_gradient->x+rgly_gradient->w); x++) {
-			int v = ((x - rgly_gradient->x) * 256) / rgly_gradient->w;
-			a->atlas_bitmap[x + y * a->atlas_width] = v;
 		}
 	}
 }
