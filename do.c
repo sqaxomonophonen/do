@@ -14,6 +14,8 @@ enum window_type {
 	WINDOW_GRAPH
 };
 
+struct atls_cell_table* clt;
+
 
 struct window {
 	int pdrag_id;
@@ -32,7 +34,7 @@ struct window {
 
 static int winproc_graph(struct window* w)
 {
-	lsl_set_color(lsl_black());
+	lsl_set_color((union vec4) { .r = 0.1, .g = 0.2, .b = 0.5, .a = 1 });
 	lsl_clear();
 
 	// locate graph
@@ -48,8 +50,8 @@ static int winproc_graph(struct window* w)
 
 	int drag_id = 1;
 
-	const int XXXw = 80;
-	const int XXXh = 50;
+	const int XXXw = 120;
+	const int XXXh = 80;
 
 	// draw connections
 	for (int i = 0; i < graph->conns_dya.n; i++) {
@@ -79,21 +81,36 @@ static int winproc_graph(struct window* w)
 		s32 sx = n->x - w->graph_px;
 		s32 sy = n->y - w->graph_py;
 
-		lsl_set_color(lsl_white());
 		struct rect r = (struct rect) {
 			.p0 = { .x = sx , .y = sy },
 			.dim = { .w = XXXw, .h = XXXh }
 		};
-		lsl_fill_rect(&r);
 
-		lsl_set_color(lsl_black());
-		const int border = 2;
-		r.p0.x += border; r.p0.y += border; r.dim.w -= border*2; r.dim.h -= border*2;
-		lsl_fill_rect(&r);
-
-		lsl_set_cursor(sx, sy);
-		lsl_set_color((union vec4) { .r = 0, .g = 1, .b = 0, .a = 0 });
-		lsl_printf("hello");
+		for (int row = 0; row < 3; row++) {
+			for (int column = 0; column < 3; column++) {
+				int x;
+				int y;
+				int w = 0;
+				int h = 0;
+				if (column == 0) {
+					x = sx;
+				} else if (column == 1) {
+					x = sx + clt->widths[0];
+					w = r.dim.w - (clt->widths[0] + clt->widths[2]);
+				} else if (column == 2) {
+					x = sx + r.dim.w - clt->widths[2];
+				}
+				if (row == 0) {
+					y = sy;
+				} else if (row == 1) {
+					y = sy + clt->heights[0];
+					h = r.dim.h - (clt->heights[0] + clt->heights[2]);
+				} else if (row == 2) {
+					y = sy + r.dim.h - clt->heights[2];
+				}
+				lsl_cell_plot(column, row, x, y, w, h);
+			}
+		}
 
 		lsl_drag(&r, drag_id++, &n->x, &n->y, 1, 1);
 	}
@@ -162,6 +179,14 @@ int lsl_main(int argc, char** argv)
 	lsl_set_atls(atls);
 
 	lsl_set_type_index(atls_get_glyph_table_index(atls, "main"));
+	union vec4 palette[] = {
+		{ .r = 0, .g = 0, .b = 0, .a = 0.5 },
+		{ .r = 0.3, .g = 0.4, .b = 0.6, .a = 0.8 },
+		{ .r = 0.3, .g = 0.3, .b = 0.3, .a = 0 }
+	};
+
+	clt = lsl_set_cell_table(atls_get_cell_table_index(atls, "box"), palette, 3);
+
 	clone_win(NULL);
 	lsl_main_loop();
 

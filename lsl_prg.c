@@ -18,7 +18,11 @@
 
 struct atls* active_atls;
 struct atls_glyph_table* active_glyph_table;
+struct atls_cell_table* active_cell_table;
 struct atls_glyph* rgly_dot;
+#define MAX_PALETTE_LENGTH (16)
+union vec4 cell_table_palette[MAX_PALETTE_LENGTH];
+int cell_table_palette_length;
 int cursor_x;
 int cursor_x0;
 int cursor_y;
@@ -112,11 +116,26 @@ void lsl_set_atls(struct atls* a)
 	}
 }
 
-void lsl_set_type_index(unsigned int i)
+void lsl_set_type_index(unsigned int index)
 {
-	assert(i >= 0);
-	assert(i < active_atls->n_glyph_tables);
-	active_glyph_table = &active_atls->glyph_tables[i];
+	assert(index >= 0);
+	assert(index < active_atls->n_glyph_tables);
+	active_glyph_table = &active_atls->glyph_tables[index];
+}
+
+struct atls_cell_table* lsl_set_cell_table(unsigned int index, union vec4* palette, int palette_length)
+{
+	assert(index >= 0);
+	assert(index < active_atls->n_cell_tables);
+	active_cell_table = &active_atls->cell_tables[index];
+
+	assert(palette_length <= MAX_PALETTE_LENGTH);
+	if (palette != NULL && palette_length > 0) {
+		memcpy(cell_table_palette, palette, palette_length * sizeof(*palette));
+		cell_table_palette_length = palette_length;
+	}
+
+	return active_cell_table;
 }
 
 void lsl_set_cursor(int x, int y)

@@ -323,7 +323,7 @@ static void draw_append(int n_vertices, int n_elements, struct draw_vertex* vert
 	draw_n_elements += n_elements;
 }
 
-static void draw_rect(struct rect posrect, struct rect uvrect)
+static void draw_rect_2col(struct rect posrect, struct rect uvrect, union vec4 c0, union vec4 c1)
 {
 	struct rect fr = lsl_frame_top()->rect;
 
@@ -350,14 +350,27 @@ static void draw_rect(struct rect posrect, struct rect uvrect)
 	float v1 = v0 + auv.dim.h;
 
 	struct draw_vertex vs[4] = {
-		{ .position = { .x = dx0, .y = dy0 }, .uv = { .u = u0, .v = v0 }, .color = draw_color0 },
-		{ .position = { .x = dx1, .y = dy0 }, .uv = { .u = u1, .v = v0 }, .color = draw_color0 },
-		{ .position = { .x = dx1, .y = dy1 }, .uv = { .u = u1, .v = v1 }, .color = draw_color1 },
-		{ .position = { .x = dx0, .y = dy1 }, .uv = { .u = u0, .v = v1 }, .color = draw_color1 }
+		{ .position = { .x = dx0, .y = dy0 }, .uv = { .u = u0, .v = v0 }, .color = c0 },
+		{ .position = { .x = dx1, .y = dy0 }, .uv = { .u = u1, .v = v0 }, .color = c0 },
+		{ .position = { .x = dx1, .y = dy1 }, .uv = { .u = u1, .v = v1 }, .color = c1 },
+		{ .position = { .x = dx0, .y = dy1 }, .uv = { .u = u0, .v = v1 }, .color = c1 }
 	};
 	GLushort es[6] = {0,1,2,0,2,3};
 
 	draw_append(4, 6, vs, es);
+}
+
+static void draw_rect(struct rect posrect, struct rect uvrect)
+{
+	draw_rect_2col(posrect, uvrect, draw_color0, draw_color1);
+}
+
+static struct rect calc_uv_rect(int x, int y, int w, int h)
+{
+	return (struct rect) {
+		.p0 = { .x = (float)x / (float)active_atls->atlas_width, .y = (float)y / (float)active_atls->atlas_height },
+		.dim = { .w = (float)w / (float)active_atls->atlas_width, .h = (float)h / (float)active_atls->atlas_height }
+	};
 }
 
 static void draw_glyph(struct atls_glyph* gly)
@@ -367,11 +380,37 @@ static void draw_glyph(struct atls_glyph* gly)
 			.p0 = { .x = cursor_x + gly->xoff, .y = cursor_y + gly->yoff },
 			.dim = { .w = gly->w, .h = gly->h }
 		},
-		(struct rect) {
-			.p0 = { .x = (float)gly->x / (float)active_atls->atlas_width, .y = (float)gly->y / (float)active_atls->atlas_height },
-			.dim = { .w = (float)gly->w / (float)active_atls->atlas_width, .h = (float)gly->h / (float)active_atls->atlas_height }
-		}
+		calc_uv_rect(gly->x, gly->y, gly->w, gly->h)
 	);
+}
+
+void lsl_cell_plot(int column, int row, int x, int y, int width, int height)
+{
+	assert(column >= 0);
+	assert(column < active_cell_table->n_columns);
+	int cell_width = active_cell_table->widths[column];
+	if (width == 0) width = cell_width;
+
+	assert(row >= 0);
+	assert(row < active_cell_table->n_rows);
+	int cell_height = active_cell_table->heights[row];
+	if (height == 0) height = cell_height;
+
+	assert(active_cell_table->n_layers < MAX_PALETTE_LENGTH);
+
+	for (int i = 0; i < active_cell_table->n_layers; i++) {
+		struct atls_cell* cell = atls_cell_table_lookup(active_cell_table, column, row, i);
+		if (cell == NULL) continue;
+		union vec4 col = cell_table_palette[i];
+		draw_rect_2col(
+			(struct rect) {
+				.p0 = { .x = x, .y = y },
+				.dim = { .w = width, .h = height }
+			},
+			calc_uv_rect(cell->x, cell->y, cell_width, cell_height),
+			col, col
+		);
+	}
 }
 
 void lsl_line(union vec2 p0, union vec2 p1)

@@ -30,6 +30,8 @@ int lsl_main(int argc, char** argv);
 
 void lsl_set_atls(struct atls*);
 void lsl_set_type_index(unsigned int index);
+struct atls_cell_table* lsl_set_cell_table(unsigned int index, union vec4* palette, int palette_length);
+void lsl_cell_plot(int column, int row, int x, int y, int width, int height);
 void lsl_set_cursor(int x, int y);
 void lsl_set_gradient(union vec4 color0, union vec4 color1);
 void lsl_set_color(union vec4 color);
