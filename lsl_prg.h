@@ -1,0 +1,65 @@
+#ifndef LSL_PRG_H
+
+#include "m.h"
+
+#define LSL_MAX_BUTTONS (5)
+#define LSL_MAX_TEXT_LENGTH (31)
+
+#define LSL_MOD_LSHIFT (1<<0)
+#define LSL_MOD_RSHIFT (1<<1)
+#define LSL_MOD_LCTRL (1<<2)
+#define LSL_MOD_RCTRL (1<<3)
+#define LSL_MOD_LALT (1<<4)
+#define LSL_MOD_RALT (1<<5)
+
+struct lsl_frame {
+	struct rect rect;
+	int minside;
+	union vec2 mpos;
+	int button[LSL_MAX_BUTTONS];
+	int button_cycles[LSL_MAX_BUTTONS];
+	int mod;
+	int text_length;
+	char text[LSL_MAX_TEXT_LENGTH + 1]; /* UTF-8 */
+};
+
+struct lsl_frame* lsl_frame_top();
+
+int lsl_main(int argc, char** argv);
+
+void lsl_set_atlas(char* f);
+int lsl_get_type_index_for_name(char* name);
+void lsl_set_type_index(unsigned int index);
+void lsl_set_cursor(int x, int y);
+void lsl_set_gradient(union vec4 color0, union vec4 color1);
+void lsl_set_color(union vec4 color);
+void lsl_putch(int codepoint);
+int lsl_printf(const char* fmt, ...);
+void lsl_line(union vec2 p0, union vec2 p1);
+void lsl_fill_rect(struct rect*);
+void lsl_clear();
+void lsl_win_open(const char* title, int(*proc)(void*), void* usr);
+void lsl_main_loop();
+
+void lsl_frame_push_clip(struct rect* r);
+void lsl_frame_pop();
+
+#define LSL_POINTER_HORIZONTAL (1)
+#define LSL_POINTER_VERTICAL (2)
+#define LSL_POINTER_4WAY (4)
+void lsl_set_pointer(int);
+
+
+#define LSL_DRAG_START (1)
+#define LSL_DRAG_CONT (2)
+#define LSL_DRAG_STOP (3)
+
+int lsl_drag(struct rect* handle, int drag_id, int* x, int* y, int fx, int fy);
+
+// standard colors
+union vec4 lsl_white();
+union vec4 lsl_black();
+
+
+#define LSL_PRG_H
+#endif
