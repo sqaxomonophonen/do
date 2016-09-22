@@ -310,6 +310,28 @@ void strtbl_finalize(struct strtbl* t, FILE* f)
 	blk_finalize(t->strings, f);
 }
 
+static char* penultimate(char* name)
+{
+	size_t len = strlen(name);
+	char* retval = name;
+	for (int o = (len-1); o >= 0; o--) {
+		char ch = name[o];
+		if (ch == '.') {
+			name[o] = 0;
+			break;
+		}
+	}
+	len = strlen(name);
+	for (int o = (len-1); o >= 0; o--) {
+		char ch = name[o];
+		if (ch == '.') {
+			retval = &name[o+1];
+			break;
+		}
+	}
+	return retval;
+}
+
 static int try_sz(int sz, char* outfile, int n, char** filenames)
 {
 	assert(n < MAX_N);
@@ -344,21 +366,7 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 			}
 
 			if (get_name_from_filename) {
-				for (int o = (len-1); o >= 0; o--) {
-					char ch = name[o];
-					if (ch == '.') {
-						name[o] = 0;
-						break;
-					}
-				}
-				len = strlen(name);
-				for (int o = (len-1); o >= 0; o--) {
-					char ch = name[o];
-					if (ch == '.') {
-						name = &name[o+1];
-						break;
-					}
-				}
+				name = penultimate(name);
 			}
 		}
 
@@ -398,6 +406,8 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 				assert(clt->layer_bitmaps[j] != NULL);
 				assert("image is RGBA" && comp == 4);
 			}
+
+			for (int j = 0; j < clt->n_layers; j++) clt->layer_names[j] = penultimate(clt->layer_names[j]);
 
 			int n_cells = clt->n_columns * clt->n_rows;
 			clt->cells = calloc(n_cells, sizeof(*clt->cells));
