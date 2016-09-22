@@ -102,7 +102,7 @@ void lsl_set_atlas(char* f)
 		assert(0);
 	}
 
-	int ri = atls_get_glyph_table_index(atls, "reserved");
+	int ri = atls_get_glyph_table_index(atls, "lsl_reserved");
 	assert(ri >= 0);
 	struct atls_glyph_table* r = &atls->glyph_tables[ri];
 	struct atls_glyph* gradient = atls_glyph_table_lookup(r, 1);
@@ -117,7 +117,13 @@ void lsl_set_atlas(char* f)
 		}
 	}
 
-	// paint reserved stuff; gradient (TODO)
+	// paint reserved stuff; gradient
+	for (int y = gradient->y; y < (gradient->y+gradient->h); y++) {
+		for (int x = gradient->x; x < (gradient->x+gradient->w); x++) {
+			int v = ((x - gradient->x) * 256) / gradient->w;
+			atls->atlas_bitmap[x + y * atls->atlas_width] = v;
+		}
+	}
 }
 
 int lsl_get_type_index_for_name(char* name)

@@ -538,8 +538,9 @@ void lsl_main_loop()
 
 		// setup dotuv
 		struct atls_glyph* gly = atls_glyph_table_lookup(
-			&atls->glyph_tables[atls_get_glyph_table_index(atls, "reserved")],
+			&atls->glyph_tables[atls_get_glyph_table_index(atls, "lsl_reserved")],
 			2);
+		assert(gly != NULL);
 		dotuv = (union vec2) { .u = (float)(gly->x+1) / (float)atls->atlas_width, .v = (float)(gly->y+1) / (float)atls->atlas_height };
 	}
 
