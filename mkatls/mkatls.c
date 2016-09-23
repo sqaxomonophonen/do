@@ -43,7 +43,7 @@ struct cell_table {
 	int *vertical;
 	int *horizontal;
 	int n_layers;
-	char** layer_names;
+	int* layer_names_sid;
 	stbi_uc** layer_bitmaps;
 	int width;
 	int height;
@@ -56,7 +56,7 @@ enum table_type {
 };
 
 struct table {
-	char* name;
+	int name_sid;
 	enum table_type type;
 	union {
 		struct glyph_table glyph;
@@ -197,13 +197,13 @@ static int* explode_integers(char* s, int* out_n)
 struct table tables[MAX_N];
 int n_tables;
 
-struct table* table_alloc(enum table_type tt, char* name)
+struct table* table_alloc(enum table_type tt, int name_sid)
 {
 	assert(n_tables < MAX_N);
 	struct table* t = &tables[n_tables++];
 	memset(t, 0, sizeof(*t));
 	t->type = tt;
-	t->name = name;
+	t->name_sid = name_sid;
 	return t;
 }
 
@@ -333,8 +333,8 @@ static char* penultimate(char* name)
 }
 
 struct userblk {
-	char* type;
-	char* name;
+	int type_sid;
+	int name_sid;
 	char* srcpath;
 	struct userblk* next;
 };
@@ -356,6 +356,9 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 
 	struct userblk* userblks = NULL;
 	struct userblk** userblk_cursor = &userblks;
+
+	struct strtbl strtbl;
+	strtbl_init(&strtbl);
 
 	for (int i = 0; i < n; i++) {
 		char* filename = filenames[i];
@@ -402,17 +405,18 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 		if (is_user) {
 			struct userblk* u = calloc(1, sizeof(*u));
 			assert(u != NULL);
-			u->type = user_type;
-			u->name = name;
+			u->type_sid = strtbl_add(&strtbl, user_type);
+			u->name_sid = strtbl_add(&strtbl, name);
 			u->srcpath = filename;
 			*userblk_cursor = u;
 			userblk_cursor = &u->next;
 		} else if (endswith(filename, ".atls")) {
 			assert(!"TODO merge with .atls file");
 		} else if (endswith(filename, ".tbl")) {
-			struct table* tbl = table_alloc(TT_CELL, name);
+			struct table* tbl = table_alloc(TT_CELL, strtbl_add(&strtbl, name));
 			struct cell_table* clt = &tbl->cell;
 
+			char** layer_names = NULL;
 			FILE* f = fopen(filename, "r");
 			for (;;) {
 				fread_line(f, line, sizeof(line));
@@ -422,29 +426,36 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 				split2(line, &tail);
 
 				if (strcmp(line, "LAYERS") == 0) {
-					clt->layer_names = explode_strings(tail, &clt->n_layers);
-					// XXX fix name: for instance foo.bar.png => "bar"
+					assert(layer_names == NULL);
+					layer_names = explode_strings(tail, &clt->n_layers);
 				} else if (strcmp(line, "VERTICAL") == 0) {
+					assert(clt->vertical == NULL);
 					clt->vertical = explode_integers(tail, &clt->n_columns);
 				} else if (strcmp(line, "HORIZONTAL") == 0) {
+					assert(clt->horizontal == NULL);
 					clt->horizontal = explode_integers(tail, &clt->n_rows);
 				} else {
 					continue;
 				}
 			}
 			fclose(f);
+			assert(layer_names != NULL);
 
 			clt->layer_bitmaps = calloc(clt->n_layers, sizeof(*clt->layer_bitmaps));
 			assert(clt->layer_bitmaps != NULL);
 
 			for (int j = 0; j < clt->n_layers; j++) {
 				int comp = 4;
-				clt->layer_bitmaps[j] = stbi_load(clt->layer_names[j], &clt->width, &clt->height, &comp, comp);
+				clt->layer_bitmaps[j] = stbi_load(layer_names[j], &clt->width, &clt->height, &comp, comp);
 				assert(clt->layer_bitmaps[j] != NULL);
 				assert("image is RGBA" && comp == 4);
 			}
 
-			for (int j = 0; j < clt->n_layers; j++) clt->layer_names[j] = penultimate(clt->layer_names[j]);
+			clt->layer_names_sid = calloc(clt->n_layers, sizeof(*clt->layer_names_sid));
+			assert(clt->layer_names_sid != NULL);
+			for (int j = 0; j < clt->n_layers; j++) {
+				clt->layer_names_sid[j] = strtbl_add(&strtbl, penultimate(layer_names[j]));
+			}
 
 			int n_cells = clt->n_columns * clt->n_rows;
 			clt->cells = calloc(n_cells, sizeof(*clt->cells));
@@ -479,7 +490,7 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 			n_total_rects += n_cells * clt->n_layers;
 
 		} else if (endswith(filename, ".rects")) {
-			struct table* tbl = table_alloc(TT_GLYPH, name);
+			struct table* tbl = table_alloc(TT_GLYPH, strtbl_add(&strtbl, name));
 			struct glyph_table* glt = &tbl->glyph;
 
 			glt->is_dummy = 1; // no bitmaps associated
@@ -539,7 +550,7 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 				}
 			}
 		} else if (endswith(filename, ".bdf")) {
-			struct table* tbl = table_alloc(TT_GLYPH, name);
+			struct table* tbl = table_alloc(TT_GLYPH, strtbl_add(&strtbl, name));
 			struct glyph_table* glt = &tbl->glyph;
 			glt->filename = filename;
 
@@ -778,10 +789,6 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 	} else if (endswith(outfile, ".atls")) {
 		FILE* f = fopen(outfile, "wb");
 
-		struct strtbl strtbl;
-		strtbl_init(&strtbl);
-
-
 		{
 			struct blk* b = blk_new("ATLS");
 			blk_u32(b, 3); // version
@@ -795,7 +802,7 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 			case TT_GLYPH: {
 				struct glyph_table* glt = &t->glyph;
 				b = blk_new("GLYT");
-				blk_u32(b, strtbl_add(&strtbl, t->name));
+				blk_u32(b, t->name_sid);
 				blk_u32(b, glt->n_glyphs);
 				blk_u32(b, glt->height);
 				blk_u32(b, glt->baseline);
@@ -816,13 +823,13 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 			case TT_CELL: {
 				struct cell_table* clt = &t->cell;
 				b = blk_new("CELT");
-				blk_u32(b, strtbl_add(&strtbl, t->name));
+				blk_u32(b, t->name_sid);
 				blk_u32(b, clt->n_columns);
 				blk_u32(b, clt->n_rows);
 				blk_u32(b, clt->n_layers);
 
 				for (int j = 0; j < clt->n_layers; j++) {
-					blk_u32(b, strtbl_add(&strtbl, clt->layer_names[j]));
+					blk_u32(b, clt->layer_names_sid[j]);
 				}
 				for (int j = 0; j < clt->n_columns; j++) {
 					blk_u32(b, clt->vertical[j]);
@@ -866,8 +873,8 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 
 		for (struct userblk* ub = userblks; ub != NULL; ub = ub->next) {
 			struct blk* b = blk_new("USER");
-			blk_u32(b, strtbl_add(&strtbl, ub->type));
-			blk_u32(b, strtbl_add(&strtbl, ub->name));
+			blk_u32(b, ub->type_sid);
+			blk_u32(b, ub->name_sid);
 			unsigned char buffer[65536];
 			FILE* sf = fopen(ub->srcpath, "r");
 			assert(sf != NULL);
