@@ -332,6 +332,13 @@ static char* penultimate(char* name)
 	return retval;
 }
 
+struct userblk {
+	char* type;
+	char* name;
+	char* srcpath;
+	struct userblk* next;
+};
+
 static int try_sz(int sz, char* outfile, int n, char** filenames)
 {
 	assert(n < MAX_N);
@@ -347,11 +354,33 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 
 	int n_total_rects = 0;
 
+	struct userblk* userblks = NULL;
+	struct userblk** userblk_cursor = &userblks;
+
 	for (int i = 0; i < n; i++) {
 		char* filename = filenames[i];
 
 		char* name = strdup(filename);
 		assert(name != NULL);
+
+		int is_user = 0;
+		char* user_type = NULL;
+		if (name[0] == '@') {
+			is_user = 1;
+			size_t len = strlen(name);
+			for (int o = 0; o < len; o++) {
+				char ch = name[o];
+				if (ch == ':') {
+					name[o] = 0;
+					user_type = &name[1];
+					name = &name[o+1];
+					filename = name;
+					break;
+				}
+			}
+			assert("USER arg contains :-delimiter" && user_type != NULL);
+		}
+
 		{
 			int get_name_from_filename = 1;
 			size_t len = strlen(name);
@@ -370,7 +399,15 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 			}
 		}
 
-		if (endswith(filename, ".atls")) {
+		if (is_user) {
+			struct userblk* u = calloc(1, sizeof(*u));
+			assert(u != NULL);
+			u->type = user_type;
+			u->name = name;
+			u->srcpath = filename;
+			*userblk_cursor = u;
+			userblk_cursor = &u->next;
+		} else if (endswith(filename, ".atls")) {
 			assert(!"TODO merge with .atls file");
 		} else if (endswith(filename, ".tbl")) {
 			struct table* tbl = table_alloc(TT_CELL, name);
@@ -588,7 +625,6 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 			fprintf(stderr, "unknown extension in '%s'\n", filename);
 			exit(EXIT_FAILURE);
 		}
-		// XXX TODO metadata
 	}
 
 	// codepoints are used for binary search; make sure they're sorted
@@ -828,12 +864,26 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 			blk_finalize(b, f);
 		}
 
+		for (struct userblk* ub = userblks; ub != NULL; ub = ub->next) {
+			struct blk* b = blk_new("USER");
+			blk_u32(b, strtbl_add(&strtbl, ub->type));
+			blk_u32(b, strtbl_add(&strtbl, ub->name));
+			unsigned char buffer[65536];
+			FILE* sf = fopen(ub->srcpath, "r");
+			assert(sf != NULL);
+			while (!feof(sf)) {
+				size_t read = fread(buffer, 1, sizeof(buffer), sf);
+				blk_append(b, buffer, read);
+			}
+			fclose(sf);
+			blk_finalize(b, f);
+		}
+
 		strtbl_finalize(&strtbl, f);
 
 		/*
 		TODO
 		 - glyph/cell table aliases
-		 - metadata
 		*/
 
 		fclose(f);
