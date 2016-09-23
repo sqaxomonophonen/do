@@ -244,6 +244,8 @@ struct atls* atls_load_from_file(char* file)
 					atlas_height = read_u32(f);
 					unsigned int encoding = read_u32(f);
 					if (encoding != 1) {
+						error = 1;
+						error_str = "unsupported BTMP encoding";
 						fclose(f);
 						return NULL;
 					}
