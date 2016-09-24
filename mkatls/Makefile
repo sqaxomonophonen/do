@@ -7,8 +7,8 @@ mkatls: mkatls.c
 box.tbl: box.xcf
 	./gimp2tblspec.sh $^
 
-DEFAULT_DEPS=mkatls lsl_reserved.rects ter-u18n.bdf box.tbl # garbage.txt
-DEFAULT_ARGS=lsl_reserved.rects main:ter-u18n.bdf box.tbl # @textfile:gaaaarbage:garbage.txt
+DEFAULT_DEPS=mkatls lsl_reserved.rects ter-u18n.bdf box.tbl default.cols
+DEFAULT_ARGS=lsl_reserved.rects main:ter-u18n.bdf box.tbl default.cols
 
 default.atls: $(DEFAULT_DEPS)
 	./mkatls default.atls $(DEFAULT_ARGS)

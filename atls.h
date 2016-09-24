@@ -1,12 +1,17 @@
 #ifndef ATLS_H
 
+struct atls_string {
+	char* cstr;
+	int id;
+};
+
 struct atls_glyph {
 	int codepoint;
 	int w,h,x,y,xoff,yoff;
 };
 
 struct atls_glyph_table {
-	char* name;
+	struct atls_string name;
 	int n_glyphs;
 	int height;
 	int baseline;
@@ -18,14 +23,26 @@ struct atls_cell {
 };
 
 struct atls_cell_table {
-	char* name;
+	struct atls_string name;
 	int n_columns;
 	int n_rows;
 	int n_layers;
-	char** layer_names;
+	struct atls_string* layer_names;
 	int* widths;
 	int* heights;
 	struct atls_cell* cells;
+};
+
+struct atls_color {
+	struct atls_string tag;
+	struct atls_string layer;
+	unsigned int rgba;
+};
+
+struct atls_colorscheme {
+	struct atls_string name;
+	int n_colors;
+	struct atls_color* colors;
 };
 
 struct atls {
@@ -35,9 +52,12 @@ struct atls {
 	int n_cell_tables;
 	struct atls_cell_table* cell_tables;
 
+	int n_colorschemes;
+	struct atls_colorscheme* colorschemes;
+
 	int atlas_width;
 	int atlas_height;
-	char* atlas_bitmap;
+	unsigned char* atlas_bitmap;
 };
 
 struct atls* atls_load_from_file(char* file);
@@ -46,10 +66,17 @@ void atls_free(struct atls*);
 /* NOTE uses linear search */
 int atls_get_glyph_table_index(struct atls*, char* name);
 int atls_get_cell_table_index(struct atls*, char* name);
+int atls_get_colorscheme(struct atls*, char* name);
 
 int atls_glyph_table_index(struct atls_glyph_table*, int codepoint);
 struct atls_glyph* atls_glyph_table_lookup(struct atls_glyph_table*, int codepoint);
+
 struct atls_cell* atls_cell_table_lookup(struct atls_cell_table*, int x, int y, int layer);
+
+int atls_colorscheme_tag_lookup(struct atls_colorscheme* dst, struct atls_colorscheme* src, char* tag);
+struct atls_color* atls_colorscheme_layer_lookup(struct atls_colorscheme*, int id);
+
+void atls_color_rgba(struct atls_color*, float* r, float* g, float* b, float* a);
 
 char* atls_get_error();
 

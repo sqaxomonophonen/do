@@ -15,6 +15,8 @@ enum window_type {
 };
 
 struct atls_cell_table* clt;
+struct atls_colorscheme* colorscheme;
+struct atls_colorscheme box_palette;
 
 
 struct window {
@@ -179,13 +181,13 @@ int lsl_main(int argc, char** argv)
 	lsl_set_atls(atls);
 
 	lsl_set_type_index(atls_get_glyph_table_index(atls, "main"));
-	union vec4 palette[] = {
-		{ .r = 0, .g = 0, .b = 0, .a = 0.5 },
-		{ .r = 0.3, .g = 0.4, .b = 0.6, .a = 0.8 },
-		{ .r = 0.3, .g = 0.3, .b = 0.3, .a = 0 }
-	};
 
-	clt = lsl_set_cell_table(atls_get_cell_table_index(atls, "box"), palette, 3);
+	int cs_id = atls_get_colorscheme(atls, "default");
+	assert(cs_id >= 0);
+	colorscheme = &atls->colorschemes[cs_id];
+	assert(atls_colorscheme_tag_lookup(&box_palette, colorscheme, "box0"));
+
+	clt = lsl_set_cell_table(atls_get_cell_table_index(atls, "box"), &box_palette);
 
 	clone_win(NULL);
 	lsl_main_loop();

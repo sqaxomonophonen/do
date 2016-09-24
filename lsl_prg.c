@@ -20,7 +20,7 @@ struct atls* active_atls;
 struct atls_glyph_table* active_glyph_table;
 struct atls_cell_table* active_cell_table;
 struct atls_glyph* rgly_dot;
-#define MAX_PALETTE_LENGTH (16)
+#define MAX_PALETTE_LENGTH (256)
 union vec4 cell_table_palette[MAX_PALETTE_LENGTH];
 int cell_table_palette_length;
 int cursor_x;
@@ -123,16 +123,23 @@ void lsl_set_type_index(unsigned int index)
 	active_glyph_table = &active_atls->glyph_tables[index];
 }
 
-struct atls_cell_table* lsl_set_cell_table(unsigned int index, union vec4* palette, int palette_length)
+struct atls_cell_table* lsl_set_cell_table(unsigned int index, struct atls_colorscheme* palette)
 {
 	assert(index >= 0);
 	assert(index < active_atls->n_cell_tables);
 	active_cell_table = &active_atls->cell_tables[index];
 
-	assert(palette_length <= MAX_PALETTE_LENGTH);
-	if (palette != NULL && palette_length > 0) {
-		memcpy(cell_table_palette, palette, palette_length * sizeof(*palette));
-		cell_table_palette_length = palette_length;
+	for (int i = 0; i < active_cell_table->n_layers && i < MAX_PALETTE_LENGTH; i++) {
+		struct atls_color* color = atls_colorscheme_layer_lookup(palette, active_cell_table->layer_names[i].id);
+		if (color == NULL) {
+			cell_table_palette[i] = (union vec4) { .r=1, .g=0, .b=1, .a=1 };
+		} else {
+			atls_color_rgba(color,
+				&cell_table_palette[i].r,
+				&cell_table_palette[i].g,
+				&cell_table_palette[i].b,
+				&cell_table_palette[i].a);
+		}
 	}
 
 	return active_cell_table;

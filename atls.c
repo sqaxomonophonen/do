@@ -41,6 +41,12 @@ static size_t reserve(size_t* csz, int n, size_t esz)
 	return p;
 }
 
+static void atls_string_set(struct atls_string* s, char* base, unsigned int id)
+{
+	s->cstr = base + id;
+	s->id = id;
+}
+
 struct atls* atls_load_from_file(char* file)
 {
 	error = 0;
@@ -57,8 +63,10 @@ struct atls* atls_load_from_file(char* file)
 	int n_cell_tables = 0;
 	int n_glyphs_total = 0;
 	int n_cells_total = 0;
-	int n_charptrs = 0;
+	int n_strings = 0;
 	int n_ints = 0;
+	int n_colorschemes = 0;
+	int n_colors_total = 0;
 	int atlas_width = 0;
 	int atlas_height = 0;
 	int strlst_sz = 0;
@@ -68,14 +76,17 @@ struct atls* atls_load_from_file(char* file)
 	struct atls* r_atls = NULL;
 	struct atls_glyph* r_gly = NULL;
 	struct atls_cell* r_cel = NULL;
+	struct atls_color* r_colors = NULL;
 	int* r_ints = NULL;
-	char** r_charptrs = NULL;
+	struct atls_string* r_strings = NULL;
 	char* r_strlst = NULL;
 
 	int i_glt = 0;
 	int i_clt = 0;
 	int i_gly = 0;
 	int i_cel = 0;
+	int i_colorscheme = 0;
+	int i_color = 0;
 	int i_int = 0;
 	int i_charptr = 0;
 
@@ -104,7 +115,9 @@ struct atls* atls_load_from_file(char* file)
 			size_t offset_clt = reserve(&sz, n_cell_tables, sizeof(struct atls_cell_table));
 			size_t offset_cel = reserve(&sz, n_cells_total, sizeof(struct atls_cell));
 			size_t offset_ints = reserve(&sz, n_ints, sizeof(int));
-			size_t offset_charptrs = reserve(&sz, n_charptrs, sizeof(char*));
+			size_t offset_colorschemes = reserve(&sz, n_colorschemes, sizeof(struct atls_colorscheme));
+			size_t offset_colors = reserve(&sz, n_colors_total, sizeof(struct atls_color));
+			size_t offset_strings = reserve(&sz, n_strings, sizeof(struct atls_string));
 			size_t offset_btmp = reserve(&sz, atlas_width * atlas_height, 1);
 			size_t offset_strlst = reserve(&sz, strlst_sz, 1);
 
@@ -117,12 +130,15 @@ struct atls* atls_load_from_file(char* file)
 			r_atls->cell_tables = data + offset_clt;
 			r_cel = data + offset_cel;
 			r_ints = data + offset_ints;
-			r_charptrs = data + offset_charptrs;
+			r_atls->colorschemes = data + offset_colorschemes;
+			r_colors = data + offset_colors;
+			r_strings = data + offset_strings;
 			r_atls->atlas_bitmap = data + offset_btmp;
 			r_strlst = data + offset_strlst;
 
 			r_atls->n_glyph_tables = n_glyph_tables;
 			r_atls->n_cell_tables = n_cell_tables;
+			r_atls->n_colorschemes = n_colorschemes;
 			r_atls->atlas_width = atlas_width;
 			r_atls->atlas_height = atlas_height;
 		}
@@ -164,7 +180,7 @@ struct atls* atls_load_from_file(char* file)
 						struct atls_glyph_table* glt = &r_atls->glyph_tables[i_glt++];
 						assert(i_glt <= n_glyph_tables);
 
-						glt->name = r_strlst + name_offset;
+						atls_string_set(&glt->name, r_strlst, name_offset);
 						glt->n_glyphs = n_glyphs;
 						glt->height = height;
 						glt->baseline = baseline;
@@ -191,20 +207,20 @@ struct atls* atls_load_from_file(char* file)
 					if (pass == 0) {
 						n_cell_tables++;
 						n_cells_total += n_cells;
-						n_charptrs += n_layers;
+						n_strings += n_layers;
 						n_ints += n_columns + n_rows;
 					} else {
 						struct atls_cell_table* clt = &r_atls->cell_tables[i_clt++];
 						assert(i_clt <= n_cell_tables);
 
-						clt->name = r_strlst + name_offset;
+						atls_string_set(&clt->name, r_strlst, name_offset);
 						clt->n_columns = n_columns;
 						clt->n_rows = n_rows;
 						clt->n_layers = n_layers;
 
-						clt->layer_names = r_charptrs + i_charptr;
+						clt->layer_names = r_strings + i_charptr;
 						i_charptr += n_layers;
-						assert(i_charptr <= n_charptrs);
+						assert(i_charptr <= n_strings);
 
 						clt->widths = r_ints + i_int;
 						i_int += n_columns;
@@ -217,7 +233,7 @@ struct atls* atls_load_from_file(char* file)
 						assert(i_cel <= n_cells_total);
 
 						for (int i = 0; i < n_layers; i++) {
-							clt->layer_names[i] = r_strlst + read_u32(f);
+							atls_string_set(&clt->layer_names[i], r_strlst, read_u32(f));
 						}
 						for (int i = 0; i < n_columns; i++) {
 							clt->widths[i] = read_u32(f);
@@ -266,6 +282,28 @@ struct atls* atls_load_from_file(char* file)
 					} else {
 						read_data(f, r_strlst, blksize);
 					}
+				} else if (strcmp("COLS", fourcc) == 0) {
+					int n_colors = (blksize-4)/12;
+					if (pass == 0) {
+						n_colorschemes++;
+						n_colors_total += n_colors;
+					} else {
+						struct atls_colorscheme* cs = &r_atls->colorschemes[i_colorscheme++];
+						atls_string_set(&cs->name, r_strlst, read_u32(f));
+						cs->n_colors = n_colors;
+						cs->colors = &r_colors[i_color];
+						i_color += n_colors;
+
+						for (int i = 0; i < n_colors; i++) {
+							unsigned int tag_offset = read_u32(f);
+							unsigned int layer_offset = read_u32(f);
+							unsigned int rgba = read_u32(f);
+							struct atls_color* e = &cs->colors[i];
+							atls_string_set(&e->tag, r_strlst, tag_offset);
+							atls_string_set(&e->layer, r_strlst, layer_offset);
+							e->rgba = rgba;
+						}
+					}
 				}
 
 				if (error) {
@@ -292,7 +330,7 @@ int atls_get_glyph_table_index(struct atls* a, char* name)
 {
 	for (int i = 0; i < a->n_glyph_tables; i++) {
 		struct atls_glyph_table* t = &a->glyph_tables[i];
-		if (strcmp(t->name, name) == 0) return i;
+		if (strcmp(t->name.cstr, name) == 0) return i;
 	}
 	return -1;
 }
@@ -301,7 +339,16 @@ int atls_get_cell_table_index(struct atls* a, char* name)
 {
 	for (int i = 0; i < a->n_cell_tables; i++) {
 		struct atls_cell_table* t = &a->cell_tables[i];
-		if (strcmp(t->name, name) == 0) return i;
+		if (strcmp(t->name.cstr, name) == 0) return i;
+	}
+	return -1;
+}
+
+int atls_get_colorscheme(struct atls* a, char* name)
+{
+	for (int i = 0; i < a->n_colorschemes; i++) {
+		struct atls_colorscheme* t = &a->colorschemes[i];
+		if (strcmp(t->name.cstr, name) == 0) return i;
 	}
 	return -1;
 }
@@ -348,6 +395,51 @@ struct atls_cell* atls_cell_table_lookup(struct atls_cell_table* t, int x, int y
 	struct atls_cell* cell = &t->cells[index];
 	if (cell->x == -1) return NULL;
 	return cell;
+}
+
+int atls_colorscheme_tag_lookup(struct atls_colorscheme* dst, struct atls_colorscheme* src, char* tag)
+{
+	struct atls_color* first = NULL;
+	int n_tag_colors = 0;
+	for (int i = 0; i < src->n_colors; i++) {
+		int tag_match = strcmp(tag, src->colors[i].tag.cstr) == 0;
+		if (tag_match && first == NULL) first = &src->colors[i];
+		if (tag_match) n_tag_colors++;
+	}
+	if (first == NULL) return 0;
+	dst->name = first->tag;
+	dst->n_colors = n_tag_colors;
+	dst->colors = first;
+	return 1;
+}
+
+struct atls_color* atls_colorscheme_layer_lookup(struct atls_colorscheme* cs, int id)
+{
+	int l = 0;
+	int r = cs->n_colors-1;
+	while (l <= r) {
+		int m = (l+r) >> 1;
+		struct atls_color* c = &cs->colors[m];
+		int cmp = c->layer.id - id;
+		if (cmp < 0) {
+			l = m + 1;
+		} else if (cmp > 0) {
+			r = m - 1;
+		} else {
+			return c;
+		}
+	}
+	return NULL;
+}
+
+void atls_color_rgba(struct atls_color* c, float* r, float* g, float* b, float* a)
+{
+	unsigned int rgba = c->rgba;
+	const float s = 1.0/255.0;
+	if (r) *r = s*(rgba & 255);
+	if (g) *g = s*((rgba>>8) & 255);
+	if (b) *b = s*((rgba>>16) & 255);
+	if (a) *a = s*((rgba>>24) & 255);
 }
 
 char* atls_get_error()

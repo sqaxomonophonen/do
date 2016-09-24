@@ -69,8 +69,7 @@ static void fread_line(FILE* f, char* buf, size_t sz)
 {
 	int n = 0;
 	while (!feof(f)) {
-		assert(fread(buf, 1, 1, f));
-		if ((n+1) >= sz || *buf == '\n') {
+		if (fread(buf, 1, 1, f) == 0 || (n+1) >= sz || *buf == '\n') {
 			*buf = 0;
 			return;
 		}
@@ -229,6 +228,7 @@ struct blk {
 	int cap_log2;
 	int data_sz;
 	char* data;
+	struct blk* next;
 };
 
 void blk_append(struct blk* b, unsigned char* data, int sz)
@@ -299,7 +299,15 @@ void strtbl_init(struct strtbl* t)
 
 unsigned int strtbl_add(struct strtbl* t, char* str)
 {
-	// TODO return old index if duplicate
+	int cursor = 0;
+	while (cursor < t->strings->data_sz) {
+		char* s = t->strings->data + cursor;
+		if (strcmp(s, str) == 0) {
+			return cursor;
+		}
+		cursor += strlen(s)+1;
+	}
+
 	int p = t->strings->data_sz;
 	blk_append(t->strings, (unsigned char*)str, strlen(str)+1);
 	return p;
@@ -339,6 +347,28 @@ struct userblk {
 	struct userblk* next;
 };
 
+static int atoi8(char* s)
+{
+	int v = atoi(s);
+	assert(v >= 0);
+	assert(v < 256);
+	return v;
+}
+
+static int decode_s32(const char* v)
+{
+	return v[0] + (v[1]<<8) + (v[2]<<16) + (v[3]<<24);
+}
+
+static int col_compar(const void* va, const void* vb)
+{
+	int d0 = decode_s32(va) - decode_s32(vb);
+	if (d0 != 0) return d0;
+
+	int d1 = decode_s32(va+4) - decode_s32(vb+4);
+	return d1;
+}
+
 static int try_sz(int sz, char* outfile, int n, char** filenames)
 {
 	assert(n < MAX_N);
@@ -356,6 +386,9 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 
 	struct userblk* userblks = NULL;
 	struct userblk** userblk_cursor = &userblks;
+
+	struct blk* xblks = NULL;
+	struct blk** xblk_cursor = &xblks;
 
 	struct strtbl strtbl;
 	strtbl_init(&strtbl);
@@ -632,6 +665,48 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 			}
 
 			fclose(f);
+		} else if (endswith(filename, ".cols")) {
+			FILE* f = fopen(filename, "r");
+			assert(f);
+
+			struct blk* cb = blk_new("COLS");
+			blk_u32(cb, strtbl_add(&strtbl, name));
+
+			int i0 = cb->data_sz;
+
+			int n = 0;
+			while (!feof(f)) {
+				fread_line(f, line, sizeof(line));
+				char* layer;
+				char* red;
+				char* green;
+				char* blue;
+				char* alpha;
+				if (
+					!split2(line, &layer) ||
+					!split2(layer, &red) ||
+					!split2(red, &green) ||
+					!split2(green, &blue) ||
+					!split2(blue, &alpha)) continue;
+
+				blk_u32(cb, strtbl_add(&strtbl, line)); // name
+				blk_u32(cb, strtbl_add(&strtbl, layer)); // layer name
+				blk_u32(cb, // rgba
+					atoi8(red) |
+					(atoi8(green)<<8) |
+					(atoi8(blue)<<16) |
+					(atoi8(alpha)<<24));
+				n++;
+			}
+
+			int sz = cb->data_sz - i0;
+			if (sz > 0) {
+				qsort(cb->data + i0, n, 12, col_compar);
+				*xblk_cursor = cb;
+				xblk_cursor = &cb->next;
+			}
+
+			fclose(f);
 		} else {
 			fprintf(stderr, "unknown extension in '%s'\n", filename);
 			exit(EXIT_FAILURE);
@@ -870,6 +945,8 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 			blk_append(b, bitmap, atlas_width*atlas_height);
 			blk_finalize(b, f);
 		}
+
+		for (struct blk* xb = xblks; xb != NULL; xb = xb->next) blk_finalize(xb, f);
 
 		for (struct userblk* ub = userblks; ub != NULL; ub = ub->next) {
 			struct blk* b = blk_new("USER");
