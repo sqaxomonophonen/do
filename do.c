@@ -21,8 +21,6 @@ union vec4 background_color;
 
 
 struct window {
-	int pdrag_id;
-
 	struct dya graph_stack_dya;
 	u32* graph_stack;
 
