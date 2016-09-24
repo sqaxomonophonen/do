@@ -1,0 +1,4 @@
+*.o
+.*swp
+do
+*.atls
