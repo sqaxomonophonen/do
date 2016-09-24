@@ -1,3 +1,4 @@
+background - 10 30 80 255
 box0 shadow 0 0 0 128
-box0 main 30 80 50 96
+box0 main 30 50 70 96
 box0 highlight 40 40 40 40

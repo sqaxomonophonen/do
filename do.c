@@ -17,6 +17,7 @@ enum window_type {
 struct atls_cell_table* clt;
 struct atls_colorscheme* colorscheme;
 struct atls_colorscheme box_palette;
+union vec4 background_color;
 
 
 struct window {
@@ -36,7 +37,7 @@ struct window {
 
 static int winproc_graph(struct window* w)
 {
-	lsl_set_color((union vec4) { .r = 0.1, .g = 0.2, .b = 0.5, .a = 1 });
+	lsl_set_color(background_color);
 	lsl_clear();
 
 	// locate graph
@@ -161,6 +162,38 @@ static struct window* clone_win(struct window* ow)
 	return w;
 }
 
+static union vec4 color_rgba(struct atls_color* color)
+{
+	union vec4 c;
+	atls_color_rgba(color, &c.r, &c.g, &c.b, &c.a);
+	return c;
+}
+
+static union vec4 get_color(char* name)
+{
+	struct atls_colorscheme cs;
+	assert(atls_colorscheme_tag_lookup(&cs, colorscheme, name));
+	return color_rgba(&cs.colors[0]);
+}
+
+static void load_atlas(char* path)
+{
+	struct atls* atls = atls_load_from_file("default.atls");
+	assert(atls != NULL);
+	lsl_set_atls(atls);
+
+	lsl_set_type_index(atls_get_glyph_table_index(atls, "main"));
+
+	int cs_id = atls_get_colorscheme(atls, "default");
+	assert(cs_id >= 0);
+	colorscheme = &atls->colorschemes[cs_id];
+
+	assert(atls_colorscheme_tag_lookup(&box_palette, colorscheme, "box0"));
+
+	background_color = get_color("background");
+
+	clt = lsl_set_cell_table(atls_get_cell_table_index(atls, "box"), &box_palette);
+}
 
 int lsl_main(int argc, char** argv)
 {
@@ -176,18 +209,7 @@ int lsl_main(int argc, char** argv)
 		dd_graph_connect(g, n2->id, 1, n3->id, 1);
 	}
 
-	struct atls* atls = atls_load_from_file("default.atls");
-	assert(atls != NULL);
-	lsl_set_atls(atls);
-
-	lsl_set_type_index(atls_get_glyph_table_index(atls, "main"));
-
-	int cs_id = atls_get_colorscheme(atls, "default");
-	assert(cs_id >= 0);
-	colorscheme = &atls->colorschemes[cs_id];
-	assert(atls_colorscheme_tag_lookup(&box_palette, colorscheme, "box0"));
-
-	clt = lsl_set_cell_table(atls_get_cell_table_index(atls, "box"), &box_palette);
+	load_atlas("default.atls");
 
 	clone_win(NULL);
 	lsl_main_loop();
