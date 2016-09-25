@@ -133,6 +133,7 @@ static int winproc(void* usr)
 		break;
 	case WINDOW_GRAPH:
 		retval = winproc_graph(win);
+		break;
 	}
 
 	return retval;
