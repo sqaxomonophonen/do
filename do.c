@@ -20,9 +20,15 @@ int box2_cltidx;
 union vec4 background_color;
 
 
+#define MODAL_NONE (0)
+#define MODAL_NODEINSERT (1)
+
+
 struct window {
 	struct dya graph_stack_dya;
 	u32* graph_stack;
+
+	int modal;
 
 	s32 graph_px, graph_py;
 
@@ -48,8 +54,6 @@ static int winproc_graph(struct window* w)
 		if (next_graph == NULL) break;
 		graph = next_graph;
 	}
-
-	int drag_id = 1;
 
 	const int XXXw = 120;
 	const int XXXh = 80;
@@ -115,11 +119,22 @@ static int winproc_graph(struct window* w)
 			}
 		}
 
-		lsl_drag(&r, drag_id++, &n->x, &n->y, 1, 1);
+		lsl_set_color(lsl_white());
+		lsl_set_cursor(sx, sy + 50);
+		lsl_printf("hello");
+
+		lsl_scope_push_data(&n->id, sizeof(n->id));
+		lsl_drag("node", &r, &n->x, &n->y, 1, 1);
+		lsl_scope_pop();
 	}
 
 	// pan drag
-	lsl_drag(NULL, drag_id++, &w->graph_px, &w->graph_py, -1, -1);
+	lsl_drag("pan", NULL, &w->graph_px, &w->graph_py, -1, -1);
+
+	if (w->modal == MODAL_NONE && lsl_accept(' ')) w->modal = MODAL_NODEINSERT;
+
+	if (w->modal == MODAL_NODEINSERT) {
+	}
 
 	return lsl_frame_top()->button[2];
 }

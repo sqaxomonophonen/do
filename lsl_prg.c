@@ -5,6 +5,7 @@
 #include <assert.h>
 
 #include "lsl_prg.h"
+#include "dtypes.h"
 
 #define ASSERT(cond) \
 	do { \
@@ -27,11 +28,15 @@ int cursor_x;
 int cursor_x0;
 int cursor_y;
 
+#define STACK_MAX (256)
+
+int scope_stack_size;
+u64 scope_stack[STACK_MAX];
+
 union vec4 draw_color0;
 union vec4 draw_color1;
 
-#define FRAME_STACK_MAX (16)
-struct lsl_frame frame_stack[FRAME_STACK_MAX];
+struct lsl_frame frame_stack[STACK_MAX];
 int frame_stack_top_index;
 
 static void frame_stack_reset(struct lsl_frame* f)
@@ -42,14 +47,13 @@ static void frame_stack_reset(struct lsl_frame* f)
 
 static void assert_valid_frame_stack_top(int i)
 {
-	assert(i >= 0 && i < FRAME_STACK_MAX);
+	assert(i >= 0 && i < STACK_MAX);
 }
 
 struct lsl_frame* lsl_frame_top()
 {
 	return &frame_stack[frame_stack_top_index];
 }
-
 
 static inline int utf8_decode(char** c0z, int* n)
 {
@@ -78,6 +82,88 @@ static inline int utf8_decode(char** c0z, int* n)
 	}
 	return -1;
 }
+
+
+static u64 hash(const void* key, int len, u64 seed)
+{
+	// migrated from MurmurHash64A
+	const u64 m = 0xc6a4a7935bd1e995;
+	const int r = 47;
+
+	u64 h = seed ^ (len * m);
+
+	const u64* data = (const u64*)key;
+	const u64* end = data + (len/8);
+
+	while (data != end) {
+		u64 k = *data++;
+
+		k *= m;
+		k ^= k >> r;
+		k *= m;
+
+		h ^= k;
+		h *= m;
+	}
+
+	const unsigned char* data2 = (const unsigned char*)data;
+
+	switch(len & 7) {
+		case 7: h ^= (u64)data2[6] << 48;
+		case 6: h ^= (u64)data2[5] << 40;
+		case 5: h ^= (u64)data2[4] << 32;
+		case 4: h ^= (u64)data2[3] << 24;
+		case 3: h ^= (u64)data2[2] << 16;
+		case 2: h ^= (u64)data2[1] << 8;
+		case 1: h ^= (u64)data2[0];
+			h *= m;
+	}
+
+	h ^= h >> r;
+	h *= m;
+	h ^= h >> r;
+
+	return h;
+}
+
+static u64 get_scope_id(const char* id)
+{
+	return hash(&id, sizeof(id), scope_stack_size == 0 ? 0 : scope_stack[scope_stack_size-1]);
+}
+
+void lsl_scope_push_data(const void* data, size_t sz)
+{
+	assert(scope_stack_size < STACK_MAX);
+	u64 prev = scope_stack_size == 0 ? 0 : scope_stack[scope_stack_size-1];
+	scope_stack[scope_stack_size++] = hash(data, sz, prev);
+}
+
+void lsl_scope_push_static(const void* ptr)
+{
+	lsl_scope_push_data(&ptr, sizeof(ptr));
+}
+
+void lsl_scope_pop()
+{
+	assert(scope_stack_size > 0);
+	scope_stack_size--;
+}
+
+int lsl_accept(int codepoint)
+{
+	struct lsl_frame* top = lsl_frame_top();
+	char* p = top->text;
+	int n = top->text_length;
+	if (utf8_decode(&p, &n) == codepoint) {
+		memmove(top->text, top->text + (top->text_length - n), n);
+		top->text_length = n;
+		return 1;
+	} else {
+		return 0;
+	}
+}
+
+
 
 static void draw_glyph(struct atls_glyph*);
 
@@ -195,22 +281,25 @@ static void set_vh_pointer(int xp, int yp)
 	}
 }
 
-int drag_active_id;
+u64 drag_active_id;
+int drag_active;
 int drag_initial_x;
 int drag_initial_y;
 int drag_initial_mx;
 int drag_initial_my;
 
-int lsl_drag(struct rect* r, int drag_id, int* x, int* y, int fx, int fy)
+int lsl_drag(const char* id, struct rect* r, int* x, int* y, int fx, int fy)
 {
 	if (x == NULL && y == NULL) return 0;
+
+	u64 drag_id = get_scope_id(id);
 
 	struct lsl_frame* f = lsl_frame_top();
 
 	int btn = f->button[0];
 	int retval = 0;
 
-	if (drag_active_id) {
+	if (drag_active) {
 		if (drag_active_id != drag_id) return 0;
 
 		set_vh_pointer(x != NULL, y != NULL);
@@ -218,7 +307,7 @@ int lsl_drag(struct rect* r, int drag_id, int* x, int* y, int fx, int fy)
 		retval = LSL_DRAG_CONT;
 		if (!btn) {
 			lsl_set_pointer(0);
-			drag_active_id = 0;
+			drag_active = 0;
 			retval = LSL_DRAG_STOP;
 		}
 		if (x != NULL) *x = drag_initial_x + (f->mpos.x - drag_initial_mx) * fx;
@@ -228,6 +317,7 @@ int lsl_drag(struct rect* r, int drag_id, int* x, int* y, int fx, int fy)
 
 		if (btn) {
 			drag_active_id = drag_id;
+			drag_active = 1;
 			retval = LSL_DRAG_START;
 			if (x != NULL) drag_initial_x = *x;
 			if (y != NULL) drag_initial_y = *y;

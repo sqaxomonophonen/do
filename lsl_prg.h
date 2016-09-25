@@ -26,6 +26,8 @@ struct lsl_frame {
 
 struct lsl_frame* lsl_frame_top();
 
+int lsl_accept(int codepoint);
+
 int lsl_main(int argc, char** argv);
 
 void lsl_set_atls(struct atls*);
@@ -46,6 +48,10 @@ void lsl_main_loop();
 void lsl_frame_push_clip(struct rect* r);
 void lsl_frame_pop();
 
+void lsl_scope_push_data(const void* data, size_t sz);
+void lsl_scope_push_static(const void* ptr);
+void lsl_scope_pop();
+
 #define LSL_POINTER_HORIZONTAL (1)
 #define LSL_POINTER_VERTICAL (2)
 #define LSL_POINTER_4WAY (4)
@@ -56,7 +62,8 @@ void lsl_set_pointer(int);
 #define LSL_DRAG_CONT (2)
 #define LSL_DRAG_STOP (3)
 
-int lsl_drag(struct rect* handle, int drag_id, int* x, int* y, int fx, int fy);
+int lsl_drag(const char* id, struct rect* handle, int* x, int* y, int fx, int fy);
+
 
 // standard colors
 union vec4 lsl_white();
