@@ -94,7 +94,10 @@ void lsl_putch(int codepoint)
 	struct atls_glyph* glyph = atls_glyph_table_lookup(active_glyph_table, codepoint);
 	if (glyph == NULL) glyph = &active_glyph_table->glyphs[0];
 	draw_glyph(glyph);
-	cursor_x += glyph->w;
+	/* XXX is the "off-by-1" required due to padding in mkatls? if so, is
+	 * it that way by convention, or is it something I ought to throw into
+	 * the .atls file? */
+	cursor_x += glyph->w - 1;
 }
 
 void lsl_set_atls(struct atls* a)
