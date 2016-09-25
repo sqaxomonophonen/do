@@ -14,9 +14,9 @@ enum window_type {
 	WINDOW_GRAPH
 };
 
-struct atls_cell_table* clt;
 struct atls_colorscheme* colorscheme;
 struct atls_colorscheme box_palette;
+int box2_cltidx;
 union vec4 background_color;
 
 
@@ -74,6 +74,8 @@ static int winproc_graph(struct window* w)
 		/* TODO look at blender node editor for delicous curved
 		 * connections */
 	}
+
+	struct atls_cell_table* clt = lsl_set_cell_table(box2_cltidx, &box_palette);
 
 	// draw nodes
 	for (int i = 0; i < graph->nodes_dya.n; i++) {
@@ -183,6 +185,8 @@ static void load_atlas(char* path)
 
 	lsl_set_type_index(atls_get_glyph_table_index(atls, "main"));
 
+	box2_cltidx = atls_get_cell_table_index(atls, "box2");
+
 	int cs_id = atls_get_colorscheme(atls, "default");
 	assert(cs_id >= 0);
 	colorscheme = &atls->colorschemes[cs_id];
@@ -190,8 +194,6 @@ static void load_atlas(char* path)
 	assert(atls_colorscheme_tag_lookup(&box_palette, colorscheme, "box0"));
 
 	background_color = get_color("background");
-
-	clt = lsl_set_cell_table(atls_get_cell_table_index(atls, "box"), &box_palette);
 }
 
 int lsl_main(int argc, char** argv)
