@@ -251,23 +251,27 @@ void lsl_set_color(union vec4 color)
 	lsl_set_gradient(color, color);
 }
 
-int lsl_printf(const char* fmt, ...)
+int lsl_write(char* buf, int n)
 {
-	char buf[8192];
-	va_list ap;
-	va_start(ap, fmt);
-	int nret = vsnprintf(buf, sizeof(buf), fmt, ap);
-	va_end(ap);
-
-	int n = nret;
 	char* c = buf;
 	while (n > 0) {
 		int codepoint = utf8_decode(&c, &n);
 		if (codepoint == -1) return -1;
 		lsl_putch(codepoint);
 	}
+	return 0;
+}
 
-	return nret;
+int lsl_printf(const char* fmt, ...)
+{
+	char buf[8192];
+	va_list ap;
+	va_start(ap, fmt);
+	int n = vsnprintf(buf, sizeof(buf), fmt, ap);
+	va_end(ap);
+
+	if (n < 0) return -1;
+	return lsl_write(buf, n);
 }
 
 static void set_vh_pointer(int xp, int yp)

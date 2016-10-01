@@ -129,11 +129,13 @@ static int winproc_graph(struct window* w)
 
 		lsl_set_color((union vec4) { .r = 1, .g = 1, .b = 0, .a = 1 });
 		for (struct dd_port_it it = dd_node_inport_it(n); it.valid; dd_port_it_next(&it)) {
-			lsl_printf(" in: %s (%d)\n", it.name, it.id);
+			lsl_write(it.name, it.name_len);
+			lsl_printf(" (%d) [%d]\n", it.id, it.name_len);
 		}
 		lsl_set_color((union vec4) { .r = 0, .g = 1, .b = 1, .a = 1 });
 		for (struct dd_port_it it = dd_node_outport_it(n); it.valid; dd_port_it_next(&it)) {
-			lsl_printf(" out: %s (%d)\n", it.name, it.id);
+			lsl_write(it.name, it.name_len);
+			lsl_printf(" (%d) [%d]\n", it.id, it.name_len);
 		}
 
 		lsl_scope_push_data(&n->id, sizeof(n->id));

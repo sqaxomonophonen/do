@@ -38,6 +38,7 @@ void lsl_set_cursor(int x, int y);
 void lsl_set_gradient(union vec4 color0, union vec4 color1);
 void lsl_set_color(union vec4 color);
 void lsl_putch(int codepoint);
+int lsl_write(char* buf, int n);
 int lsl_printf(const char* fmt, ...);
 void lsl_line(union vec2 p0, union vec2 p1);
 void lsl_fill_rect(struct rect*);

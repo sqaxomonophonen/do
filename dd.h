@@ -69,6 +69,7 @@ struct dd_node {
 	union {
 		struct {
 			u16 id;
+			u8 name_off, name_len;
 		} port;
 		struct {
 			struct dd_graph* graph;
@@ -84,6 +85,7 @@ struct dd_conn {
 struct dd__portdef;
 struct dd_port_it {
 	char* name;
+	int name_len;
 	u16 id;
 
 	u8 valid:1;

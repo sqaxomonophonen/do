@@ -162,8 +162,11 @@ static int parse_nodedef0(char* def, struct dd_nodedef* nd)
 						nd->type = DD_EXPRESSION;
 					} else if (nd->ident[0] == '-') {
 						nd->type = DD_OUT_PORT;
+						nd->ident++;
+						nd->ident_len--;
 					} else if (nd->ident[nd->ident_len-1] == '-') {
 						nd->type = DD_IN_PORT;
+						nd->ident_len--;
 					} else {
 						if (0) {}
 						#define DDEF(t,s,p) \
@@ -240,6 +243,8 @@ struct dd_node* dd_graph_new_node(struct dd_graph* dg, char* def)
 		}
 		assert(max_id < (1<<16)); // XXX can try simply finding a free slot instead
 		nn.port.id = max_id + 1;
+		nn.port.name_off = nd.ident - def;
+		nn.port.name_len = nd.ident_len;
 		dg->n_port_nodes++;
 	}
 
@@ -465,6 +470,7 @@ void dd_port_it_next(struct dd_port_it* it)
 
 			if (in == it->_in || out == it->_out) {
 				it->name = pd->name;
+				it->name_len = strlen(it->name);
 				it->id = pd->id;
 				it->in = in;
 				it->multiple = (pd->type == N_IN || pd->type == N_OUT);
@@ -481,7 +487,9 @@ void dd_port_it_next(struct dd_port_it* it)
 			}
 			struct dd_node* pn = &g->nodes[it->_index];
 			if ((it->_in && pn->type == DD_IN_PORT) || (it->_out && pn->type == DD_OUT_PORT)) {
-				it->name = pn->def; // XXX it's a substring
+				it->name = pn->def + pn->port.name_off;
+				it->name_len = pn->port.name_len;
+
 				it->id = pn->port.id;
 				it->in = pn->type == DD_IN_PORT;
 				it->multiple = 0;
