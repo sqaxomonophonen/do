@@ -238,7 +238,8 @@ struct dd_node* dd_graph_new_node(struct dd_graph* dg, char* def)
 				max_id = pn->port.id;
 			}
 		}
-		nn.port.id = max_id + 1; // XXX check for overflow?
+		assert(max_id < (1<<16)); // XXX can try simply finding a free slot instead
+		nn.port.id = max_id + 1;
 		dg->n_port_nodes++;
 	}
 
