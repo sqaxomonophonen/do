@@ -279,27 +279,18 @@ struct dd_node* dd_graph_find_node(struct dd_graph* dg, u32 id)
 }
 
 
-static int is_valid_port_id(struct dd_node* node, u16 port_id)
+static int is_valid_port_id(struct dd_node* node, u16 port_id, int in)
 {
-	/*
-	TODO: validate port ids.
-	 - if src_node and/or dst_node is a container, I need to iterate its
-	   ports to verify the id exists
-	 - if node is a builtin with static number of ports, then port id must
-	   lie within the range [1;n_ports].
-	 - if node is a builtin with a dynamic number of unnamed ports, then
-	   any id is acceptable?
-	*/
+	if (port_id == 0) return 1;
 
-	if (is_container(node)) {
-		struct dd_graph* dg = node->container.graph;
-		for (int i = 0; i < dg->n_port_nodes; i++) {
-			//assert(is_port_node(node));
-			// TODO
+	for (struct dd_port_it it = (in ? dd_node_inport_it(node) : dd_node_outport_it(node)); it.valid; dd_port_it_next(&it)) {
+		assert(it.in == in);
+		if (it.multiple) return 1;
+		if (it.id == port_id) {
+			return 1;
 		}
-	} else if (is_builtin(node)) {
 	}
-	return 1; // XXX
+	return 0;
 }
 
 int dd_graph_connect(struct dd_graph* dg, u32 src_node_id, u16 src_port_id, u32 dst_node_id, u16 dst_port_id)
@@ -309,8 +300,8 @@ int dd_graph_connect(struct dd_graph* dg, u32 src_node_id, u16 src_port_id, u32 
 	struct dd_node* dst_node = dd_graph_find_node(dg, dst_node_id);
 	if (dst_node == NULL) return -1;
 
-	if (!is_valid_port_id(src_node, src_port_id)) return -1;
-	if (!is_valid_port_id(dst_node, dst_port_id)) return -1;
+	if (!is_valid_port_id(src_node, src_port_id, 0)) return -1;
+	if (!is_valid_port_id(dst_node, dst_port_id, 1)) return -1;
 
 	struct dd_conn nc;
 	memset(&nc, 0, sizeof(nc));
