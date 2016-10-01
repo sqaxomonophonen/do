@@ -6,7 +6,8 @@ struct dd_node;
 struct dd_conn;
 
 struct dd_graph {
-	int n_port_nodes;
+	u16 n_inport_nodes;
+	u16 n_outport_nodes;
 	struct dya nodes_dya;
 	struct dd_node* nodes;
 	struct dya conns_dya;
@@ -119,6 +120,8 @@ int dd_graph_connect(struct dd_graph*, u32 src_node_id, u16 src_port_id, u32 dst
 int dd_graph_disconnect(struct dd_graph*, u32 src_node_id, u16 src_port_id, u32 dst_node_id, u16 dst_port_id);
 
 struct dd_graph* dd_node_get_graph(struct dd_node*);
+
+void dd_node_nports(struct dd_node* n, int* n_total, int* n_inports, int* n_outports);
 struct dd_port_it dd_node_inport_it(struct dd_node*);
 struct dd_port_it dd_node_outport_it(struct dd_node*);
 void dd_port_it_next(struct dd_port_it*);

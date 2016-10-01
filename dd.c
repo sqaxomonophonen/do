@@ -31,6 +31,11 @@ static inline int is_inport_node(const struct dd_node* node)
 	return node->type == DD_IN_PORT;
 }
 
+static inline int get_n_port_nodes(struct dd_graph* dg)
+{
+	return dg->n_inport_nodes + dg->n_outport_nodes;
+}
+
 static void node_free(struct dd_node* n)
 {
 	/* TODO dispose resources that node might refer to here */
@@ -235,7 +240,9 @@ struct dd_node* dd_graph_new_node(struct dd_graph* dg, char* def)
 
 	if (nn.type == DD_IN_PORT || nn.type == DD_OUT_PORT) {
 		u32 max_id = 0;
-		for (int i = 0; i < dg->n_port_nodes; i++) {
+
+		int n_port_nodes = get_n_port_nodes(dg);
+		for (int i = 0; i < n_port_nodes; i++) {
 			struct dd_node* pn = &dg->nodes[i];
 			if (pn->type != nn.type) continue;
 			if (pn->port.id > max_id) {
@@ -246,7 +253,11 @@ struct dd_node* dd_graph_new_node(struct dd_graph* dg, char* def)
 		nn.port.id = max_id + 1;
 		nn.port.name_off = nd.ident - def;
 		nn.port.name_len = nd.ident_len;
-		dg->n_port_nodes++;
+		if (nn.type == DD_IN_PORT) {
+			dg->n_inport_nodes++;
+		} else {
+			dg->n_outport_nodes++;
+		}
 	}
 
 	return dya_bs_insert(&dg->nodes_dya, (void**)&dg->nodes, node_compar, &nn);
@@ -270,8 +281,11 @@ int dd_graph_delete_node(struct dd_graph* dg, u32 id)
 		int delnode_id = delnode->id;
 		dya_delete(&dg->nodes_dya, (void**)&dg->nodes, index);
 		dya_delete_scan(&dg->conns_dya, (void**)&dg->conns, conn_match_node_id, &delnode_id);
-		if (dnt == DD_IN_PORT || dnt == DD_OUT_PORT) {
-			dg->n_port_nodes--;
+		if (dnt == DD_IN_PORT) {
+			dg->n_inport_nodes--;
+		}
+		if ( dnt == DD_OUT_PORT) {
+			dg->n_outport_nodes--;
 		}
 		return 1;
 	} else {
@@ -398,7 +412,7 @@ struct dd__portdef anon21[] = {
 	{0}
 };
 
-struct dd_port_it dd_node_port_it(struct dd_node* n, int in, int out)
+static struct dd_port_it port_it(struct dd_node* n, int in, int out)
 {
 	struct dd_port_it it;
 	memset(&it, 0, sizeof(it));
@@ -443,14 +457,40 @@ struct dd_port_it dd_node_port_it(struct dd_node* n, int in, int out)
 	return it;
 }
 
+void dd_node_nports(struct dd_node* dn, int* n_total, int* n_inports, int* n_outports)
+{
+	int ni = 0;
+	int no = 0;
+
+	if (is_container(dn)) {
+		struct dd_graph* dg = dd_node_get_graph(dn);
+		ni = dg->n_inport_nodes;
+		no = dg->n_outport_nodes;
+	} else {
+		// iterator fallback
+		for (struct dd_port_it it = port_it(dn, 1, 1); it.valid; dd_port_it_next(&it)) {
+			if (it.in) {
+				ni++;
+			} else {
+				no++;
+			}
+		}
+	}
+
+	if (n_total) *n_total = ni + no;
+	if (n_inports) *n_inports = ni;
+	if (n_outports) *n_outports = no;
+}
+
+
 struct dd_port_it dd_node_inport_it(struct dd_node* n)
 {
-	return dd_node_port_it(n, 1, 0);
+	return port_it(n, 1, 0);
 }
 
 struct dd_port_it dd_node_outport_it(struct dd_node* n)
 {
-	return dd_node_port_it(n, 0, 1);
+	return port_it(n, 0, 1);
 }
 
 void dd_port_it_next(struct dd_port_it* it)
@@ -482,7 +522,8 @@ void dd_port_it_next(struct dd_port_it* it)
 		for (;;) {
 			struct dd_graph* g = it->_graph;
 			it->_index++;
-			if (it->_index >= g->n_port_nodes) {
+			int n_port_nodes = get_n_port_nodes(g);
+			if (it->_index >= n_port_nodes) {
 				it->valid = 0;
 				return;
 			}
