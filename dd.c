@@ -239,6 +239,7 @@ struct dd_node* dd_graph_new_node(struct dd_graph* dg, char* def)
 			}
 		}
 		nn.port.id = max_id + 1; // XXX check for overflow?
+		dg->n_port_nodes++;
 	}
 
 	return dya_bs_insert(&dg->nodes_dya, (void**)&dg->nodes, node_compar, &nn);
@@ -257,10 +258,14 @@ int dd_graph_delete_node(struct dd_graph* dg, u32 id)
 	int index = dya_bs_find(&dg->nodes_dya, (void**)&dg->nodes, node_compar, &key);
 	if (index >= 0) {
 		struct dd_node* delnode = &dg->nodes[index];
+		enum dd_nodetype dnt = delnode->type;
 		node_free(delnode);
 		int delnode_id = delnode->id;
 		dya_delete(&dg->nodes_dya, (void**)&dg->nodes, index);
 		dya_delete_scan(&dg->conns_dya, (void**)&dg->conns, conn_match_node_id, &delnode_id);
+		if (dnt == DD_IN_PORT || dnt == DD_OUT_PORT) {
+			dg->n_port_nodes--;
+		}
 		return 1;
 	} else {
 		return 0;
@@ -391,6 +396,8 @@ struct dd_port_it dd_node_port_it(struct dd_node* n, int in, int out)
 	struct dd_port_it it;
 	memset(&it, 0, sizeof(it));
 
+	it.valid = 1;
+
 	it._in = in;
 	it._out = out;
 
@@ -414,20 +421,19 @@ struct dd_port_it dd_node_port_it(struct dd_node* n, int in, int out)
 
 	if (it._static_portdef != NULL) {
 		it._use_static_portdef = 1;
-		it.valid = 1;
 		it._index = -1;
-		dd_port_it_next(&it);
-		return it;
-	}
-
-	// no static portdef, try other types
-	if (n->type == DD_EXPRESSION) {
-		assert(!"TODO expression"); // TODO
 	} else if (n->type > DD__CONTAINER_MIN && n->type < DD__CONTAINER_MAX) {
-		assert(!"TODO container"); // TODO
+		it._use_graph = 1;
+		it._index = -1;
+		it._graph = dd_node_get_graph(n);
+	} else if (n->type == DD_EXPRESSION) {
+		assert(!"TODO expression"); // TODO
 	} else {
 		assert(!"unhandled type");
 	}
+
+	dd_port_it_next(&it);
+	return it;
 }
 
 struct dd_port_it dd_node_inport_it(struct dd_node* n)
@@ -461,6 +467,23 @@ void dd_port_it_next(struct dd_port_it* it)
 				it->id = pd->id;
 				it->in = in;
 				it->multiple = (pd->type == N_IN || pd->type == N_OUT);
+				return;
+			}
+		}
+	} else if (it->_use_graph) {
+		for (;;) {
+			struct dd_graph* g = it->_graph;
+			it->_index++;
+			if (it->_index >= g->n_port_nodes) {
+				it->valid = 0;
+				return;
+			}
+			struct dd_node* pn = &g->nodes[it->_index];
+			if ((it->_in && pn->type == DD_IN_PORT) || (it->_out && pn->type == DD_OUT_PORT)) {
+				it->name = pn->def; // XXX it's a substring
+				it->id = pn->port.id;
+				it->in = pn->type == DD_IN_PORT;
+				it->multiple = 0;
 				return;
 			}
 		}

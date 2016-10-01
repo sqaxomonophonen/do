@@ -93,11 +93,13 @@ struct dd_port_it {
 	u8 _in:1;
 	u8 _out:1;
 	u8 _use_static_portdef:1;
+	u8 _use_graph:1;
 
 	u8 _index;
 
 	union {
 		struct dd__portdef* _static_portdef;
+		struct dd_graph* _graph;
 	};
 };
 

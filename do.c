@@ -124,7 +124,7 @@ static int winproc_graph(struct window* w)
 		lsl_set_type_index(type_index_subs);
 
 		lsl_set_color(lsl_white());
-		lsl_set_cursor(sx + 50, sy + 50);
+		lsl_set_cursor(sx + 20, sy + 50);
 		lsl_printf("%s\n", n->def);
 
 		lsl_set_color((union vec4) { .r = 1, .g = 1, .b = 0, .a = 1 });
@@ -242,6 +242,12 @@ int lsl_main(int argc, char** argv)
 		//dd_graph_connect(g, n2->id, 1, n3->id, 1);
 		dd_graph_connect(g, n1->id, 0, n2->id, 0);
 		dd_graph_connect(g, n2->id, 0, n3->id, 0);
+
+		struct dd_node* n4 = dd_graph_new_node(g, "[poly]32saw");
+		assert(n4 != NULL);
+		struct dd_graph* g2 = dd_node_get_graph(n4);
+		dd_graph_new_node(g2, "in-");
+		dd_graph_new_node(g2, "-out");
 	}
 
 	load_atlas("default.atls");
