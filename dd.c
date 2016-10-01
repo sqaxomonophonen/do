@@ -307,8 +307,6 @@ struct dd_node* dd_graph_find_node(struct dd_graph* dg, u32 id)
 
 static int is_valid_port_id(struct dd_node* node, u16 port_id, int in)
 {
-	if (port_id == 0) return 1;
-
 	for (struct dd_port_it it = (in ? dd_node_inport_it(node) : dd_node_outport_it(node)); it.valid; dd_port_it_next(&it)) {
 		assert(it.in == in);
 		if (it.multiple) return 1;
@@ -317,6 +315,11 @@ static int is_valid_port_id(struct dd_node* node, u16 port_id, int in)
 		}
 	}
 	return 0;
+}
+
+static int has_connection(struct dd_graph* dg, struct dd_conn* nc)
+{
+	return dya_bs_find(&dg->conns_dya, (void**)&dg->conns, conn_compar, nc) >= 0;
 }
 
 int dd_graph_connect(struct dd_graph* dg, u32 src_node_id, u16 src_port_id, u32 dst_node_id, u16 dst_port_id)
@@ -341,8 +344,7 @@ int dd_graph_connect(struct dd_graph* dg, u32 src_node_id, u16 src_port_id, u32 
 		 * */
 		return -1;
 	}
-	if (dya_bs_find(&dg->conns_dya, (void**)&dg->conns, conn_compar, &nc) >= 0) {
-		/* an identical connection exists */
+	if (has_connection(dg, &nc)) {
 		return -1;
 	}
 

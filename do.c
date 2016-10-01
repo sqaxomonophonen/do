@@ -43,6 +43,32 @@ struct window {
 	struct window* next;
 }* windows;
 
+static void box_calc(struct atls_cell_table* clt, struct dd_node* n, int* out_n_in, int* out_n_out, int* w, int* h, int* py0, int* py1)
+{
+	int n_in, n_out;
+	dd_node_nports(n, NULL, &n_in, &n_out);
+	if (out_n_in) *out_n_in = n_in;
+	if (out_n_out) *out_n_out = n_out;
+	int max_ports = n_in > n_out ? n_in : n_out;
+
+	int port_height = clt->heights[2];
+	int text_height = lsl_get_text_height();
+	int width = clt->widths[0] + lsl_get_text_width(n->def, strlen(n->def)) + clt->widths[2];
+	int height = clt->heights[0] + max_ports * port_height + clt->heights[3] + clt->heights[5] + text_height;
+
+	if (w) *w = width;
+	if (h) *h = height;
+
+	int h2 = clt->heights[0] + max_ports * port_height + clt->heights[3] + clt->heights[5] + text_height;
+	int h3 = h2 - (clt->heights[0] + clt->heights[3] + text_height + clt->heights[6]);
+	int y = clt->heights[0];
+	int port_y0 = y + (h3 - n_in*port_height)/2;
+	int port_y1 = y + (h3 - n_out*port_height)/2;
+
+	if (py0) *py0 = port_y0;
+	if (py1) *py1 = port_y1;
+}
+
 static int winproc_graph(struct window* w)
 {
 	lsl_set_color(background_color);
@@ -59,18 +85,40 @@ static int winproc_graph(struct window* w)
 		graph = next_graph;
 	}
 
+	struct atls_cell_table* clt = lsl_set_cell_table(builtin_ctbl, &builtin_palette);
+	int port_height = clt->heights[2];
+	lsl_set_type_index(type_index_subs);
+
 	// draw connections
 	for (int i = 0; i < graph->conns_dya.n; i++) {
 		struct dd_conn* c = &graph->conns[i];
-		struct dd_node* n0 = dd_graph_find_node(graph, c->src_node_id);
-		struct dd_node* n1 = dd_graph_find_node(graph, c->dst_node_id);
-		assert(n0 != NULL);
-		assert(n1 != NULL);
+		struct dd_node* src_node = dd_graph_find_node(graph, c->src_node_id);
+		struct dd_node* dst_node = dd_graph_find_node(graph, c->dst_node_id);
+		assert(src_node != NULL);
+		assert(dst_node != NULL);
 
-		s32 sx0 = n0->x - w->graph_px;
-		s32 sy0 = n0->y - w->graph_py;
-		s32 sx1 = n1->x - w->graph_px;
-		s32 sy1 = n1->y - w->graph_py;
+		int dy0 = 0;
+		for (struct dd_port_it it = dd_node_inport_it(dst_node); it.valid; dd_port_it_next(&it)) {
+			if (it.id == c->dst_port_id) break;
+			dy0++;
+		}
+		int dy1 = 0;
+		for (struct dd_port_it it = dd_node_outport_it(src_node); it.valid; dd_port_it_next(&it)) {
+			if (it.id == c->src_port_id) break;
+			dy1++;
+		}
+
+		int src_node_width, py0, py1;
+		box_calc(clt, src_node, NULL, NULL, &src_node_width, NULL, NULL, &py0);
+		box_calc(clt, dst_node, NULL, NULL, NULL,            NULL, &py1, NULL);
+
+		const int pcx = 3; // XXX metadata?
+		const int pcy = 5; // XXX metadata?
+
+		s32 sx0 = src_node->x - w->graph_px + src_node_width - pcx;
+		s32 sy0 = src_node->y - w->graph_py + pcy + py0 + dy1 * port_height;
+		s32 sx1 = dst_node->x - w->graph_px + pcx;
+		s32 sy1 = dst_node->y - w->graph_py + pcy + py1 + dy0 * port_height;
 
 		lsl_set_color(lsl_white());
 		lsl_line(
@@ -80,8 +128,6 @@ static int winproc_graph(struct window* w)
 		 * connections */
 	}
 
-	struct atls_cell_table* clt = lsl_set_cell_table(builtin_ctbl, &builtin_palette);
-
 	// draw nodes
 	for (int i = 0; i < graph->nodes_dya.n; i++) {
 		struct dd_node* n = &graph->nodes[i];
@@ -89,25 +135,16 @@ static int winproc_graph(struct window* w)
 		s32 sx = n->x - w->graph_px;
 		s32 sy = n->y - w->graph_py;
 
-		int n_in, n_out;
-		dd_node_nports(n, NULL, &n_in, &n_out);
-
-		lsl_set_type_index(type_index_subs);
-
-		int max_ports = n_in > n_out ? n_in : n_out;
-		int port_height = clt->heights[2];
-		int text_height = lsl_get_text_height();
-		int height = clt->heights[0] + max_ports * port_height + clt->heights[3] + clt->heights[5] + text_height;
-
-		int text_width = lsl_get_text_width(n->def, strlen(n->def));
-		int width = clt->widths[0] + text_width + clt->widths[2];
+		int n_in, n_out, width, height, port_y0, port_y1;
+		box_calc(clt, n, &n_in, &n_out, &width, &height, &port_y0, &port_y1);
 
 		struct rect r = (struct rect) {
 			.p0 = { .x = sx , .y = sy },
 			.dim = { .w = width, .h = height }
 		};
 
-		int port_y0[2];
+		int text_height = lsl_get_text_height();
+
 		for (int row = 0; row < 6; row++) {
 			for (int column = 0; column < 3; column++) {
 				int x;
@@ -148,15 +185,14 @@ static int winproc_graph(struct window* w)
 
 				if (row == 1 && (column == 0 || column == 2)) {
 					int n = column == 0 ? n_in : n_out;
-					int margin = (h - n*port_height)/2;
+					int y1 = column == 0 ? port_y0 : port_y1;
+					int margin = y1 - clt->heights[0];
 					lsl_cell_plot(column, crow, x, y, w, margin);
-					int y1 = y + margin;
-					port_y0[column == 0] = y1;
 					for (int i = 0; i < n; i++) {
-						lsl_cell_plot(column, 2, x, y1, w, port_height);
+						lsl_cell_plot(column, 2, x, sy + y1, w, port_height);
 						y1 += port_height;
 					}
-					lsl_cell_plot(column, crow, x, y1, w, h - (margin + port_height*n));
+					lsl_cell_plot(column, crow, x, sy + y1, w, h - (margin + port_height*n));
 				} else {
 					lsl_cell_plot(column, crow, x, y, w, h);
 				}
@@ -173,14 +209,14 @@ static int winproc_graph(struct window* w)
 		const int port_text_spacing = 3; // XXX use metadata?
 		const int port_text_dy = -2; // XXX use metadata?
 		for (struct dd_port_it it = dd_node_inport_it(n); it.valid; dd_port_it_next(&it)) {
-			lsl_set_cursor(sx + clt->widths[0] + port_text_spacing, port_y0[0] + i*port_height + text_height + port_text_dy);
+			lsl_set_cursor(sx + clt->widths[0] + port_text_spacing, sy + port_y0 + i*port_height + text_height + port_text_dy);
 			lsl_write(it.name, it.name_len);
 			i++;
 		}
 		i = 0;
 		for (struct dd_port_it it = dd_node_outport_it(n); it.valid; dd_port_it_next(&it)) {
 			int txtw = lsl_get_text_width(it.name, it.name_len);
-			lsl_set_cursor(sx + width - (clt->widths[0] + txtw + port_text_spacing) , port_y0[1] + i*port_height + text_height + port_text_dy);
+			lsl_set_cursor(sx + width - (clt->widths[0] + txtw + port_text_spacing), sy + port_y1 + i*port_height + text_height + port_text_dy);
 			lsl_write(it.name, it.name_len);
 			i++;
 		}
@@ -303,14 +339,16 @@ int lsl_main(int argc, char** argv)
 		assert(n3 != NULL);
 		//dd_graph_connect(g, n1->id, 1, n2->id, 1);
 		//dd_graph_connect(g, n2->id, 1, n3->id, 1);
-		dd_graph_connect(g, n1->id, 0, n2->id, 0);
-		dd_graph_connect(g, n2->id, 0, n3->id, 0);
+		dd_graph_connect(g, n1->id, 1, n2->id, 1);
+		dd_graph_connect(g, n2->id, 1, n3->id, 2);
 
 		struct dd_node* n4 = dd_graph_new_node(g, "[poly]32saw");
 		assert(n4 != NULL);
 		struct dd_graph* g2 = dd_node_get_graph(n4);
 		dd_graph_new_node(g2, "in-");
 		dd_graph_new_node(g2, "-out");
+
+		dd_graph_connect(g, n3->id, 1, n4->id, 1);
 	}
 
 	load_atlas("default.atls");
