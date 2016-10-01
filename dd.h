@@ -55,8 +55,6 @@ struct dd_nodedef {
 
 	char* ident;
 	size_t ident_len;
-
-	char* import;
 };
 
 struct dd_node {

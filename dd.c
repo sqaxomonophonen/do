@@ -142,8 +142,9 @@ static int parse_nodedef0(char* def, struct dd_nodedef* nd)
 			}
 			state = 1;
 		} else if (state == 0 && c0 == ':') {
-			nd->import = p+1;
 			nd->type = DD_IMPORT;
+			nd->ident = def+1;
+			nd->ident_len = deflen-1;
 			return 0;
 		} else if (state == 0) {
 			nd->ident = p;
