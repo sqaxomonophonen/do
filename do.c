@@ -18,6 +18,8 @@ struct atls_colorscheme* colorscheme;
 struct atls_colorscheme box_palette;
 int box2_cltidx;
 union vec4 background_color;
+int type_index_main;
+int type_index_subs;
 
 
 #define MODAL_NONE (0)
@@ -119,9 +121,20 @@ static int winproc_graph(struct window* w)
 			}
 		}
 
+		lsl_set_type_index(type_index_subs);
+
 		lsl_set_color(lsl_white());
-		lsl_set_cursor(sx, sy + 50);
-		lsl_printf("hello");
+		lsl_set_cursor(sx + 50, sy + 50);
+		lsl_printf("%s\n", n->def);
+
+		lsl_set_color((union vec4) { .r = 1, .g = 1, .b = 0, .a = 1 });
+		for (struct dd_port_it it = dd_node_inport_it(n); it.valid; dd_port_it_next(&it)) {
+			lsl_printf(" in: %s (%d)\n", it.name, it.id);
+		}
+		lsl_set_color((union vec4) { .r = 0, .g = 1, .b = 1, .a = 1 });
+		for (struct dd_port_it it = dd_node_outport_it(n); it.valid; dd_port_it_next(&it)) {
+			lsl_printf(" out: %s (%d)\n", it.name, it.id);
+		}
 
 		lsl_scope_push_data(&n->id, sizeof(n->id));
 		lsl_drag("node", &r, &n->x, &n->y, 1, 1);
@@ -198,7 +211,8 @@ static void load_atlas(char* path)
 	assert(atls != NULL);
 	lsl_set_atls(atls);
 
-	lsl_set_type_index(atls_get_glyph_table_index(atls, "main"));
+	assert((type_index_main = atls_get_glyph_table_index(atls, "main")) >= 0);
+	assert((type_index_subs = atls_get_glyph_table_index(atls, "subs")) >= 0);
 
 	box2_cltidx = atls_get_cell_table_index(atls, "box2");
 
@@ -218,11 +232,16 @@ int lsl_main(int argc, char** argv)
 	{
 		// XXX some debug graph
 		struct dd_graph* g = &state.dd.root;
-		struct dd_node* n1 = dd_graph_new_node(g, DD_FOO);
-		struct dd_node* n2 = dd_graph_new_node(g, DD_FOO);
-		struct dd_node* n3 = dd_graph_new_node(g, DD_FOO);
-		dd_graph_connect(g, n1->id, 1, n2->id, 1);
-		dd_graph_connect(g, n2->id, 1, n3->id, 1);
+		struct dd_node* n1 = dd_graph_new_node(g, "sin");
+		struct dd_node* n2 = dd_graph_new_node(g, "cos");
+		struct dd_node* n3 = dd_graph_new_node(g, "+");
+		assert(n1 != NULL);
+		assert(n2 != NULL);
+		assert(n3 != NULL);
+		//dd_graph_connect(g, n1->id, 1, n2->id, 1);
+		//dd_graph_connect(g, n2->id, 1, n3->id, 1);
+		dd_graph_connect(g, n1->id, 0, n2->id, 0);
+		dd_graph_connect(g, n2->id, 0, n3->id, 0);
 	}
 
 	load_atlas("default.atls");

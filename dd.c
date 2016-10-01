@@ -1,4 +1,6 @@
 #include <string.h>
+#include <stdlib.h>
+#include <assert.h>
 
 #include "dd.h"
 
@@ -7,6 +9,26 @@ u32 next_node_id;
 static u32 get_next_node_id()
 {
 	return ++next_node_id;
+}
+
+static inline int is_container(const struct dd_node* node)
+{
+	return node->type > DD__CONTAINER_MIN && node->type < DD__CONTAINER_MAX;
+}
+
+static inline int is_builtin(const struct dd_node* node)
+{
+	return node->type > DD__BUILTIN_MIN && node->type < DD__BUILTIN_MAX;
+}
+
+static inline int is_port_node(const struct dd_node* node)
+{
+	return node->type == DD_IN_PORT || node->type == DD_OUT_PORT;
+}
+
+static inline int is_inport_node(const struct dd_node* node)
+{
+	return node->type == DD_IN_PORT;
 }
 
 static void node_free(struct dd_node* n)
@@ -18,6 +40,25 @@ static int node_compar(const void* va, const void* vb)
 {
 	const struct dd_node* a = va;
 	const struct dd_node* b = vb;
+
+	int apn = is_port_node(a);
+	int bpn = is_port_node(b);
+	{
+		int d = bpn - apn;
+		if (d != 0) return d;
+	}
+	if (apn && bpn) {
+		// port nodes are ordered by (in/out, y)
+		int aipn = is_inport_node(a);
+		int bipn = is_inport_node(b);
+		{
+			int d = bipn - aipn;
+			if (d != 0) return d;
+		} {
+			int d = a->y - b->y;
+			if (d != 0) return d;
+		}
+	}
 	return a->id - b->id;
 }
 
@@ -26,17 +67,33 @@ static int conn_compar(const void* va, const void* vb)
 	const struct dd_conn* a = va;
 	const struct dd_conn* b = vb;
 
-	int d0 = a->src_node_id - b->src_node_id;
-	if (d0 != 0) return d0;
+	{
+		int d = a->dst_node_id - b->dst_node_id;
+		if (d != 0) return d;
+	} {
+		int d = a->dst_port_id - b->dst_port_id;
+		if (d != 0) return d;
+	} {
+		int d = a->src_node_id - b->src_node_id;
+		if (d != 0) return d;
+	} {
+		int d = a->src_port_id - b->src_port_id;
+		return d;
+	}
+}
 
-	int d1 = a->src_port - b->src_port;
-	if (d1 != 0) return d1;
+static int conn_dst_compar(const void* va, const void* vb)
+{
+	const struct dd_conn* a = va;
+	const struct dd_conn* b = vb;
 
-	int d2 = a->dst_node_id - b->dst_node_id;
-	if (d2 != 0) return d2;
-
-	int d3 = a->dst_port - b->dst_port;
-	return d3;
+	{
+		int d = a->dst_node_id - b->dst_node_id;
+		if (d != 0) return d;
+	} {
+		int d = a->dst_port_id - b->dst_port_id;
+		return d;
+	}
 }
 
 static void graph_init(struct dd_graph* dg)
@@ -46,12 +103,144 @@ static void graph_init(struct dd_graph* dg)
 	dya_init(&dg->conns_dya, (void**)&dg->conns, sizeof(*dg->conns), 0);
 }
 
-struct dd_node* dd_graph_new_node(struct dd_graph* dg, enum dd_node_type nt)
+static int parse_nodedef0(char* def, struct dd_nodedef* nd)
 {
+	assert(nd != NULL);
+	memset(nd, 0, sizeof(*nd));
+
+	size_t deflen = strlen(def);
+	if (deflen == 0) return -1;
+
+	char* p = def;
+	int state = 0;
+	for (;;) {
+		char c0 = *p;
+		if (c0 == 0) {
+			break;
+		} else if (state == 0 && c0 == '[') {
+			p++;
+			char* first = p;
+			for (;;) {
+				char c1 = *p;
+				if (c1 == ']') {
+					size_t n = p - first;
+					if (0) {}
+					#define DDEF(t,s) \
+						else if (n == strlen(s) && (n == 0 || memcmp(first, s, n) == 0)) { \
+							nd->type = t; \
+							break; \
+						}
+					DD__CONTAINER_LIST
+					#undef DDEF
+					else {
+						return -1;
+					}
+				} else if (c1 < 'a' || c1 > 'z') {
+					return -1;
+				}
+				p++;
+			}
+			state = 1;
+		} else if (state == 0 && c0 == ':') {
+			nd->import = p+1;
+			nd->type = DD_IMPORT;
+			return 0;
+		} else if (state == 0) {
+			nd->ident = p;
+			int n_dash = 0;
+			for (;;) {
+				char c1 = *p;
+				if (state == 0 && c1 == '-') n_dash++;
+				if (state == 0 && c1 == '=') {
+					state = 2;
+				} else if ((state == 0 && c1 == ':') || c1 == 0) {
+					nd->ident_len = p - nd->ident;
+
+					if (n_dash > 1) return -1;
+
+					if (state == 2) {
+						nd->type = DD_EXPRESSION;
+					} else if (nd->ident[0] == '-') {
+						nd->type = DD_OUT_PORT;
+					} else if (nd->ident[nd->ident_len-1] == '-') {
+						nd->type = DD_IN_PORT;
+					} else {
+						if (0) {}
+						#define DDEF(t,s,p) \
+							else if (strlen(s) == nd->ident_len && memcmp(s, nd->ident, nd->ident_len) == 0) { \
+								nd->type = t; \
+							}
+						DD__BUILTIN_LIST
+						#undef DDEF
+						else {
+							return -1;
+						}
+					}
+
+					if (c1 == 0) {
+						return 0;
+					} else {
+						state = 1;
+						p++;
+						break;
+					}
+				}
+				p++;
+			}
+		} else if (state == 1) {
+			nd->name = p;
+			for (;;) {
+				char c1 = *p;
+				if (c1 == 0) break;
+				/* TODO are there invalid characters in comment
+				field? */
+				p++;
+			}
+			nd->name_len = p - nd->name;
+			return 0;
+		}
+		p++;
+	}
+	return -1;
+}
+
+static int parse_nodedef(char* def, struct dd_nodedef* nd)
+{
+	if (parse_nodedef0(def, nd) == -1) return -1;
+	return 0;
+}
+
+struct dd_node* dd_graph_new_node(struct dd_graph* dg, char* def)
+{
+	struct dd_nodedef nd;
+	if (parse_nodedef(def, &nd) != 0) {
+		return NULL;
+	}
 	struct dd_node nn;
 	memset(&nn, 0, sizeof(nn));
 	nn.id = get_next_node_id();
-	nn.type = nt;
+	assert((nn.def = strdup(def)) != NULL);
+
+	nn.type = nd.type;
+
+	if (nn.type > DD__CONTAINER_MIN && nn.type < DD__CONTAINER_MAX) {
+		nn.container.graph = malloc(sizeof(*nn.container.graph));
+		assert(nn.container.graph != NULL);
+		graph_init(nn.container.graph);
+	}
+
+	if (nn.type == DD_IN_PORT || nn.type == DD_OUT_PORT) {
+		u32 max_id = 0;
+		for (int i = 0; i < dg->n_port_nodes; i++) {
+			struct dd_node* pn = &dg->nodes[i];
+			if (pn->type != nn.type) continue;
+			if (pn->port.id > max_id) {
+				max_id = pn->port.id;
+			}
+		}
+		nn.port.id = max_id + 1; // XXX check for overflow?
+	}
+
 	return dya_bs_insert(&dg->nodes_dya, (void**)&dg->nodes, node_compar, &nn);
 }
 
@@ -89,36 +278,74 @@ struct dd_node* dd_graph_find_node(struct dd_graph* dg, u32 id)
 	}
 }
 
-int dd_graph_connect(struct dd_graph* dg, u32 src_node_id, u32 src_port, u32 dst_node_id, u32 dst_port)
-{
-	struct dd_conn nc;
-	memset(&nc, 0, sizeof(nc));
-	nc.src_node_id = src_node_id;
-	nc.src_port = src_port;
-	nc.dst_node_id = dst_node_id;
-	nc.dst_port = dst_port;
 
-	if (dya_bs_find(&dg->conns_dya, (void**)&dg->conns, conn_compar, &nc) < 0) {
-		dya_bs_insert(&dg->conns_dya, (void**)&dg->conns, conn_compar, &nc);
-		return 1;
-	} else {
-		return 0;
+static int is_valid_port_id(struct dd_node* node, u16 port_id)
+{
+	/*
+	TODO: validate port ids.
+	 - if src_node and/or dst_node is a container, I need to iterate its
+	   ports to verify the id exists
+	 - if node is a builtin with static number of ports, then port id must
+	   lie within the range [1;n_ports].
+	 - if node is a builtin with a dynamic number of unnamed ports, then
+	   any id is acceptable?
+	*/
+
+	if (is_container(node)) {
+		struct dd_graph* dg = node->container.graph;
+		for (int i = 0; i < dg->n_port_nodes; i++) {
+			//assert(is_port_node(node));
+			// TODO
+		}
+	} else if (is_builtin(node)) {
 	}
+	return 1; // XXX
 }
 
-int dd_graph_disconnect(struct dd_graph* dg, u32 src_node_id, u32 src_port, u32 dst_node_id, u32 dst_port)
+int dd_graph_connect(struct dd_graph* dg, u32 src_node_id, u16 src_port_id, u32 dst_node_id, u16 dst_port_id)
+{
+	struct dd_node* src_node = dd_graph_find_node(dg, src_node_id);
+	if (src_node == NULL) return -1;
+	struct dd_node* dst_node = dd_graph_find_node(dg, dst_node_id);
+	if (dst_node == NULL) return -1;
+
+	if (!is_valid_port_id(src_node, src_port_id)) return -1;
+	if (!is_valid_port_id(dst_node, dst_port_id)) return -1;
+
+	struct dd_conn nc;
+	memset(&nc, 0, sizeof(nc));
+	nc.src_node_id = src_node_id;
+	nc.src_port_id = src_port_id;
+	nc.dst_node_id = dst_node_id;
+	nc.dst_port_id = dst_port_id;
+
+	if (dya_bs_find(&dg->conns_dya, (void**)&dg->conns, conn_dst_compar, &nc) >= 0) {
+		/* there's already a connection to dst port (can only have 1)
+		 * */
+		return -1;
+	}
+	if (dya_bs_find(&dg->conns_dya, (void**)&dg->conns, conn_compar, &nc) >= 0) {
+		/* an identical connection exists */
+		return -1;
+	}
+
+	dya_bs_insert(&dg->conns_dya, (void**)&dg->conns, conn_compar, &nc);
+	return 0;
+}
+
+int dd_graph_disconnect(struct dd_graph* dg, u32 src_node_id, u16 src_port_id, u32 dst_node_id, u16 dst_port_id)
 {
 	struct dd_conn nc;
 	memset(&nc, 0, sizeof(nc));
 	nc.src_node_id = src_node_id;
-	nc.src_port = src_port;
+	nc.src_port_id = src_port_id;
 	nc.dst_node_id = dst_node_id;
-	nc.dst_port = dst_port;
+	nc.dst_port_id = dst_port_id;
 
 	int index = dya_bs_find(&dg->conns_dya, (void**)&dg->conns, conn_compar, &nc);
-	if (index < 0) return 0;
+	if (index < 0) return -1;
 	dya_delete(&dg->conns_dya, (void**)&dg->conns, index);
-	return 1;
+	return 0;
 }
 
 void dd_init(struct dd* ds)
@@ -128,5 +355,125 @@ void dd_init(struct dd* ds)
 
 struct dd_graph* dd_node_get_graph(struct dd_node* n)
 {
-	return NULL; // XXX TODO return graph contained within node, if any
+	assert(is_container(n));
+	return n->container.graph;
+}
+
+struct dd__portdef {
+	char* name;
+	u16 id;
+	u8 type;
+};
+
+#define IN (1)
+#define OUT (0)
+#define N_IN (2)
+#define N_OUT (3)
+
+struct dd__portdef anon01[] = {
+	{"", 1, OUT},
+	{0}
+};
+struct dd__portdef anon10[] = {
+	{"", 1, IN},
+	{0}
+};
+struct dd__portdef anon11[] = {
+	{"", 1, IN},
+	{"", 1, OUT},
+	{0}
+};
+struct dd__portdef anonN1[] = {
+	{"", 0, N_IN},
+	{"", 1, OUT},
+	{0}
+};
+struct dd__portdef anon21[] = {
+	{"", 1, IN},
+	{"", 2, IN},
+	{"", 1, OUT},
+	{0}
+};
+
+struct dd_port_it dd_node_port_it(struct dd_node* n, int in, int out)
+{
+	struct dd_port_it it;
+	memset(&it, 0, sizeof(it));
+
+	it._in = in;
+	it._out = out;
+
+	// check if a static portdef array can be served
+	if (n->type == DD_IN_PORT) {
+		it._static_portdef = anon01;
+	} else if (n->type == DD_OUT_PORT) {
+		it._static_portdef = anon10;
+	} else if (n->type > DD__BUILTIN_MIN && n->type < DD__BUILTIN_MAX) {
+		switch (n->type) {
+		#define DDEF(t,s,ps) \
+		case t: \
+			it._static_portdef = ps; \
+			break;
+		DD__BUILTIN_LIST
+		#undef DDEF
+		default:
+			assert(!"unhandled builtin type");
+		}
+	}
+
+	if (it._static_portdef != NULL) {
+		it._use_static_portdef = 1;
+		it.valid = 1;
+		it._index = -1;
+		dd_port_it_next(&it);
+		return it;
+	}
+
+	// no static portdef, try other types
+	if (n->type == DD_EXPRESSION) {
+		assert(!"TODO expression"); // TODO
+	} else if (n->type > DD__CONTAINER_MIN && n->type < DD__CONTAINER_MAX) {
+		assert(!"TODO container"); // TODO
+	} else {
+		assert(!"unhandled type");
+	}
+}
+
+struct dd_port_it dd_node_inport_it(struct dd_node* n)
+{
+	return dd_node_port_it(n, 1, 0);
+}
+
+struct dd_port_it dd_node_outport_it(struct dd_node* n)
+{
+	return dd_node_port_it(n, 0, 1);
+}
+
+void dd_port_it_next(struct dd_port_it* it)
+{
+	assert(it->valid);
+
+	if (it->_use_static_portdef) {
+		for (;;) {
+			struct dd__portdef* pd = &it->_static_portdef[++it->_index];
+
+			if (!pd->name) {
+				it->valid = 0;
+				return;
+			}
+
+			int in = pd->type == IN || pd->type == N_IN;
+			int out = pd->type == OUT || pd->type == N_OUT;
+
+			if (in == it->_in || out == it->_out) {
+				it->name = pd->name;
+				it->id = pd->id;
+				it->in = in;
+				it->multiple = (pd->type == N_IN || pd->type == N_OUT);
+				return;
+			}
+		}
+	} else {
+		assert(!"unhandled iterator type");
+	}
 }
