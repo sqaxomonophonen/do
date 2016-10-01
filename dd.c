@@ -160,11 +160,11 @@ static int parse_nodedef0(char* def, struct dd_nodedef* nd)
 
 					if (state == 2) {
 						nd->type = DD_EXPRESSION;
-					} else if (nd->ident[0] == '-') {
+					} else if (nd->ident_len > 1 && nd->ident[0] == '-') {
 						nd->type = DD_OUT_PORT;
 						nd->ident++;
 						nd->ident_len--;
-					} else if (nd->ident[nd->ident_len-1] == '-') {
+					} else if (nd->ident_len > 1 && nd->ident[nd->ident_len-1] == '-') {
 						nd->type = DD_IN_PORT;
 						nd->ident_len--;
 					} else {

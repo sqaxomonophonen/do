@@ -236,7 +236,7 @@ int lsl_main(int argc, char** argv)
 		struct dd_graph* g = &state.dd.root;
 		struct dd_node* n1 = dd_graph_new_node(g, "sin");
 		struct dd_node* n2 = dd_graph_new_node(g, "cos");
-		struct dd_node* n3 = dd_graph_new_node(g, "+");
+		struct dd_node* n3 = dd_graph_new_node(g, "-");
 		assert(n1 != NULL);
 		assert(n2 != NULL);
 		assert(n3 != NULL);
