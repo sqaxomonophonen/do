@@ -15,9 +15,11 @@ enum window_type {
 };
 
 struct atls_colorscheme* colorscheme;
-struct atls_colorscheme box_palette;
-int box2_cltidx;
+struct atls_colorscheme builtin_palette;
+int builtin_ctbl;
 union vec4 background_color;
+union vec4 builtin_footer_text_color;
+union vec4 builtin_port_text_color;
 int type_index_main;
 int type_index_subs;
 
@@ -57,9 +59,6 @@ static int winproc_graph(struct window* w)
 		graph = next_graph;
 	}
 
-	const int XXXw = 120;
-	const int XXXh = 80;
-
 	// draw connections
 	for (int i = 0; i < graph->conns_dya.n; i++) {
 		struct dd_conn* c = &graph->conns[i];
@@ -68,10 +67,10 @@ static int winproc_graph(struct window* w)
 		assert(n0 != NULL);
 		assert(n1 != NULL);
 
-		s32 sx0 = n0->x - w->graph_px + XXXw/2;
-		s32 sy0 = n0->y - w->graph_py + XXXh/2;
-		s32 sx1 = n1->x - w->graph_px + XXXw/2;
-		s32 sy1 = n1->y - w->graph_py + XXXh/2;
+		s32 sx0 = n0->x - w->graph_px;
+		s32 sy0 = n0->y - w->graph_py;
+		s32 sx1 = n1->x - w->graph_px;
+		s32 sy1 = n1->y - w->graph_py;
 
 		lsl_set_color(lsl_white());
 		lsl_line(
@@ -81,7 +80,7 @@ static int winproc_graph(struct window* w)
 		 * connections */
 	}
 
-	struct atls_cell_table* clt = lsl_set_cell_table(box2_cltidx, &box_palette);
+	struct atls_cell_table* clt = lsl_set_cell_table(builtin_ctbl, &builtin_palette);
 
 	// draw nodes
 	for (int i = 0; i < graph->nodes_dya.n; i++) {
@@ -90,12 +89,26 @@ static int winproc_graph(struct window* w)
 		s32 sx = n->x - w->graph_px;
 		s32 sy = n->y - w->graph_py;
 
+		int n_in, n_out;
+		dd_node_nports(n, NULL, &n_in, &n_out);
+
+		lsl_set_type_index(type_index_subs);
+
+		int max_ports = n_in > n_out ? n_in : n_out;
+		int port_height = clt->heights[2];
+		int text_height = lsl_get_text_height();
+		int height = clt->heights[0] + max_ports * port_height + clt->heights[3] + clt->heights[5] + text_height;
+
+		int text_width = lsl_get_text_width(n->def, strlen(n->def));
+		int width = clt->widths[0] + text_width + clt->widths[2];
+
 		struct rect r = (struct rect) {
 			.p0 = { .x = sx , .y = sy },
-			.dim = { .w = XXXw, .h = XXXh }
+			.dim = { .w = width, .h = height }
 		};
 
-		for (int row = 0; row < 3; row++) {
+		int port_y0[2];
+		for (int row = 0; row < 6; row++) {
 			for (int column = 0; column < 3; column++) {
 				int x;
 				int y;
@@ -109,33 +122,67 @@ static int winproc_graph(struct window* w)
 				} else if (column == 2) {
 					x = sx + r.dim.w - clt->widths[2];
 				}
+
+				int crow;
 				if (row == 0) {
 					y = sy;
+					crow = 0;
 				} else if (row == 1) {
 					y = sy + clt->heights[0];
-					h = r.dim.h - (clt->heights[0] + clt->heights[2]);
+					h = r.dim.h - (clt->heights[0] + clt->heights[3] + text_height + clt->heights[6]);
+					crow = 1;
 				} else if (row == 2) {
-					y = sy + r.dim.h - clt->heights[2];
+					y = sy + r.dim.h - (clt->heights[3] + text_height + clt->heights[6]);
+					crow = 3;
+				} else if (row == 3) {
+					y = sy + r.dim.h - (text_height + clt->heights[6]);
+					h = text_height - clt->heights[5];
+					crow = 4;
+				} else if (row == 4) {
+					y = sy + r.dim.h - (clt->heights[5] + clt->heights[6]);
+					crow = 5;
+				} else if (row == 5) {
+					y = sy + r.dim.h - clt->heights[6];
+					crow = 6;
 				}
-				lsl_cell_plot(column, row, x, y, w, h);
+
+				if (row == 1 && (column == 0 || column == 2)) {
+					int n = column == 0 ? n_in : n_out;
+					int margin = (h - n*port_height)/2;
+					lsl_cell_plot(column, crow, x, y, w, margin);
+					int y1 = y + margin;
+					port_y0[column == 0] = y1;
+					for (int i = 0; i < n; i++) {
+						lsl_cell_plot(column, 2, x, y1, w, port_height);
+						y1 += port_height;
+					}
+					lsl_cell_plot(column, crow, x, y1, w, h - (margin + port_height*n));
+				} else {
+					lsl_cell_plot(column, crow, x, y, w, h);
+				}
 			}
 		}
 
-		lsl_set_type_index(type_index_subs);
 
-		lsl_set_color(lsl_white());
-		lsl_set_cursor(sx + 20, sy + 50);
-		lsl_printf("%s\n", n->def);
+		lsl_set_color(builtin_footer_text_color);
+		lsl_set_cursor(sx + clt->widths[0], sy + r.dim.h - (clt->heights[6]));
+		lsl_printf("%s", n->def);
 
-		lsl_set_color((union vec4) { .r = 1, .g = 1, .b = 0, .a = 1 });
+		lsl_set_color(builtin_port_text_color);
+		int i = 0;
+		const int port_text_spacing = 3; // XXX use metadata?
+		const int port_text_dy = -2; // XXX use metadata?
 		for (struct dd_port_it it = dd_node_inport_it(n); it.valid; dd_port_it_next(&it)) {
+			lsl_set_cursor(sx + clt->widths[0] + port_text_spacing, port_y0[0] + i*port_height + text_height + port_text_dy);
 			lsl_write(it.name, it.name_len);
-			lsl_printf(" (%d) [%d]\n", it.id, it.name_len);
+			i++;
 		}
-		lsl_set_color((union vec4) { .r = 0, .g = 1, .b = 1, .a = 1 });
+		i = 0;
 		for (struct dd_port_it it = dd_node_outport_it(n); it.valid; dd_port_it_next(&it)) {
+			int txtw = lsl_get_text_width(it.name, it.name_len);
+			lsl_set_cursor(sx + width - (clt->widths[0] + txtw + port_text_spacing) , port_y0[1] + i*port_height + text_height + port_text_dy);
 			lsl_write(it.name, it.name_len);
-			lsl_printf(" (%d) [%d]\n", it.id, it.name_len);
+			i++;
 		}
 
 		lsl_scope_push_data(&n->id, sizeof(n->id));
@@ -200,11 +247,23 @@ static union vec4 color_rgba(struct atls_color* color)
 	return c;
 }
 
-static union vec4 get_color(char* name)
+static union vec4 get_color(char* tag)
 {
 	struct atls_colorscheme cs;
-	assert(atls_colorscheme_tag_lookup(&cs, colorscheme, name));
+	assert(atls_colorscheme_tag_lookup(&cs, colorscheme, tag));
 	return color_rgba(&cs.colors[0]);
+}
+
+static union vec4 get_color2(char* tag, char* layer)
+{
+	struct atls_colorscheme cs;
+	assert(atls_colorscheme_tag_lookup(&cs, colorscheme, tag));
+	for (int i = 0; i < cs.n_colors; i++) {
+		if (strcmp(cs.colors[i].layer.cstr, layer) == 0) {
+			return color_rgba(&cs.colors[i]);
+		}
+	}
+	assert(!"color not found");
 }
 
 static void load_atlas(char* path)
@@ -216,15 +275,17 @@ static void load_atlas(char* path)
 	assert((type_index_main = atls_get_glyph_table_index(atls, "main")) >= 0);
 	assert((type_index_subs = atls_get_glyph_table_index(atls, "subs")) >= 0);
 
-	box2_cltidx = atls_get_cell_table_index(atls, "box2");
+	builtin_ctbl = atls_get_cell_table_index(atls, "builtin");
 
 	int cs_id = atls_get_colorscheme(atls, "default");
 	assert(cs_id >= 0);
 	colorscheme = &atls->colorschemes[cs_id];
 
-	assert(atls_colorscheme_tag_lookup(&box_palette, colorscheme, "box0"));
+	assert(atls_colorscheme_tag_lookup(&builtin_palette, colorscheme, "builtin"));
 
 	background_color = get_color("background");
+	builtin_footer_text_color = get_color2("builtin", "footer_text");
+	builtin_port_text_color = get_color2("builtin", "port_text");
 }
 
 int lsl_main(int argc, char** argv)

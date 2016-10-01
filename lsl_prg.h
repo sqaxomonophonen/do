@@ -32,6 +32,8 @@ int lsl_main(int argc, char** argv);
 
 void lsl_set_atls(struct atls*);
 void lsl_set_type_index(unsigned int index);
+int lsl_get_text_width(char* str, int n);
+int lsl_get_text_height();
 struct atls_cell_table* lsl_set_cell_table(unsigned int index, struct atls_colorscheme* palette);
 void lsl_cell_plot(int column, int row, int x, int y, int width, int height);
 void lsl_set_cursor(int x, int y);

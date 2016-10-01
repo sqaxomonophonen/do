@@ -163,7 +163,34 @@ int lsl_accept(int codepoint)
 	}
 }
 
+struct atls_glyph* get_codepoint_glyph(int codepoint)
+{
+	struct atls_glyph* glyph = atls_glyph_table_lookup(active_glyph_table, codepoint);
+	if (glyph == NULL) glyph = &active_glyph_table->glyphs[0];
+	return glyph;
+}
 
+int lsl_get_text_width(char* str, int n)
+{
+	if (active_glyph_table == NULL) return 0;
+
+	char* c = str;
+	int width = 0;
+	while (n > 0) {
+		int codepoint = utf8_decode(&c, &n);
+		if (codepoint == -1) return -1;
+		if (codepoint == '\n') return width;
+		struct atls_glyph* glyph = get_codepoint_glyph(codepoint);
+		width += (glyph->w - 1);
+	}
+	return width;
+}
+
+int lsl_get_text_height()
+{
+	assert(active_glyph_table != NULL);
+	return active_glyph_table->height;
+}
 
 static void draw_glyph(struct atls_glyph*);
 
@@ -177,8 +204,7 @@ void lsl_putch(int codepoint)
 		return;
 	}
 
-	struct atls_glyph* glyph = atls_glyph_table_lookup(active_glyph_table, codepoint);
-	if (glyph == NULL) glyph = &active_glyph_table->glyphs[0];
+	struct atls_glyph* glyph = get_codepoint_glyph(codepoint);
 	draw_glyph(glyph);
 	/* XXX is the "off-by-1" required due to padding in mkatls? if so, is
 	 * it that way by convention, or is it something I ought to throw into

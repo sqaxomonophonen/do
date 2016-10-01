@@ -1,3 +1,6 @@
 background - 10 30 80 255
-box0 border 255 255 0 128
-box0 main 0 0 0 192
+builtin main 0 0 0 255
+builtin footer 255 255 255 192
+builtin port 255 255 0 192
+builtin footer_text 0 0 0 255
+builtin port_text 255 255 0 255
