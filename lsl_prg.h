@@ -43,6 +43,7 @@ void lsl_putch(int codepoint);
 int lsl_write(char* buf, int n);
 int lsl_printf(const char* fmt, ...);
 void lsl_line(union vec2 p0, union vec2 p1);
+void lsl_bezier(union vec2 p0, union vec2 p1, union vec2 p2, union vec2 p3);
 void lsl_fill_rect(struct rect*);
 void lsl_clear();
 void lsl_win_open(const char* title, int(*proc)(void*), void* usr);
@@ -66,11 +67,6 @@ void lsl_set_pointer(int);
 #define LSL_DRAG_STOP (3)
 
 int lsl_drag(const char* id, struct rect* handle, int* x, int* y, int fx, int fy);
-
-
-// standard colors
-union vec4 lsl_white();
-union vec4 lsl_black();
 
 
 #define LSL_PRG_H

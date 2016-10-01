@@ -20,6 +20,7 @@ int builtin_ctbl;
 union vec4 background_color;
 union vec4 builtin_footer_text_color;
 union vec4 builtin_port_text_color;
+union vec4 connection_signal_color;
 int type_index_main;
 int type_index_subs;
 
@@ -120,12 +121,13 @@ static int winproc_graph(struct window* w)
 		s32 sx1 = dst_node->x - w->graph_px + pcx;
 		s32 sy1 = dst_node->y - w->graph_py + pcy + py1 + dy0 * port_height;
 
-		lsl_set_color(lsl_white());
-		lsl_line(
+		lsl_set_color(connection_signal_color);
+		const float tangent = 50.0f; // XXX metadata?
+		lsl_bezier(
 			(union vec2) { .x = sx0, .y = sy0 },
+			(union vec2) { .x = sx0 + tangent, .y = sy0 },
+			(union vec2) { .x = sx1 - tangent, .y = sy1 },
 			(union vec2) { .x = sx1, .y = sy1 });
-		/* TODO look at blender node editor for delicous curved
-		 * connections */
 	}
 
 	// draw nodes
@@ -322,6 +324,7 @@ static void load_atlas(char* path)
 	background_color = get_color("background");
 	builtin_footer_text_color = get_color2("builtin", "footer_text");
 	builtin_port_text_color = get_color2("builtin", "port_text");
+	connection_signal_color = get_color2("connection", "signal");
 }
 
 int lsl_main(int argc, char** argv)

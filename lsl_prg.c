@@ -381,14 +381,27 @@ void lsl_frame_pop()
 	assert_valid_frame_stack_top(--frame_stack_top_index);
 }
 
-union vec4 lsl_white()
+static inline float calc_bezier(float t, float x0, float x1, float x2, float x3)
 {
-	return (union vec4) { .r = 1, .g = 1, .b = 1, .a = 1 };
+	float t1 = 1-t;
+	return t1*t1*t1*x0 + 3*t*t1*t1*x1 + 3*t*t*t1*x2 + t*t*t*x3;
 }
 
-union vec4 lsl_black()
+void lsl_bezier(union vec2 p0, union vec2 p1, union vec2 p2, union vec2 p3)
 {
-	return (union vec4) { .r = 0, .g = 0, .b = 0, .a = 1 };
+	const int N = 50;
+	for (int i = 0; i < N; i++) {
+		float t0 = (float)i / (float)N;
+		float t1 = (float)(i+1) / (float)N;
+
+		float x0 = calc_bezier(t0, p0.x, p1.x, p2.x, p3.x);
+		float x1 = calc_bezier(t1, p0.x, p1.x, p2.x, p3.x);
+		float y0 = calc_bezier(t0, p0.y, p1.y, p2.y, p3.y);
+		float y1 = calc_bezier(t1, p0.y, p1.y, p2.y, p3.y);
+		lsl_line(
+			(union vec2) { .x = x0, .y = y0 },
+			(union vec2) { .x = x1, .y = y1 });
+	}
 }
 
 #ifdef USE_GLX11
