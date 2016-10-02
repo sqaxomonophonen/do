@@ -4,6 +4,7 @@
 
 #include "lsl_prg.h"
 #include "dd.h"
+#include "dya.h"
 
 struct {
 	struct dd dd;
@@ -14,6 +15,71 @@ enum window_type {
 	WINDOW_GRAPH
 };
 
+
+enum gsel_type {
+	GSEL_NONE = 0,
+	GSEL_NODE,
+	GSEL_CONN
+};
+struct gsel {
+	enum gsel_type type;
+	union {
+		u32 node_id;
+		struct dd_conn conn;
+	};
+};
+
+
+static inline struct gsel gsel_none()
+{
+	struct gsel s;
+	s.type = GSEL_NONE;
+	return s;
+}
+
+static inline struct gsel gsel_node(u32 node_id)
+{
+	struct gsel s;
+	s.type = GSEL_NODE;
+	s.node_id = node_id;
+	return s;
+}
+static inline struct gsel gsel_conn(struct dd_conn conn)
+{
+	struct gsel s;
+	s.type = GSEL_CONN;
+	s.conn = conn;
+	return s;
+}
+static int gsel_compar(const void* va, const void* vb)
+{
+	const struct gsel* a = va;
+	const struct gsel* b = vb;
+
+	int d0 = a->type - b->type;
+	if (d0 != 0) return d0;
+
+	if (a->type == GSEL_NODE) {
+		return a->node_id - b->node_id;
+	} else if (a->type == GSEL_CONN) {
+		int d1 = a->conn.src_node_id - b->conn.src_node_id;
+		if (d1 != 0) return d1;
+
+		int d2 = a->conn.dst_node_id - b->conn.dst_node_id;
+		if (d2 != 0) return d2;
+
+		int d3 = a->conn.src_port_id - b->conn.src_port_id;
+		if (d3 != 0) return d3;
+
+		int d4 = a->conn.dst_port_id - b->conn.dst_port_id;
+		return d4;
+
+	} else {
+		assert(!"invalid gsel_type");
+	}
+}
+
+
 struct atls_colorscheme* colorscheme;
 struct atls_colorscheme builtin_palette;
 int builtin_ctbl;
@@ -21,6 +87,7 @@ union vec4 background_color;
 union vec4 builtin_footer_text_color;
 union vec4 builtin_port_text_color;
 union vec4 connection_signal_color;
+union vec4 connection_selected_color;
 int type_index_main;
 int type_index_subs;
 
@@ -29,13 +96,20 @@ int type_index_subs;
 #define MODAL_NODEINSERT (1)
 
 
+struct graph_view {
+	u32 node_id;
+	s32 pan_x, pan_y;
+};
+
 struct window {
-	struct dya graph_stack_dya;
-	u32* graph_stack;
+	struct dya graph_view_stack_dya;
+	struct graph_view* graph_view_stack;
+	struct graph_view root_graph_view;
 
 	int modal;
 
-	s32 graph_px, graph_py;
+	struct dya gsel_dya;
+	struct gsel* gsel;
 
 	enum window_type type;
 	union {
@@ -43,6 +117,44 @@ struct window {
 	};
 	struct window* next;
 }* windows;
+
+static int window_graph_is_selected(struct window* w, struct gsel s)
+{
+	return dya_bs_find(&w->gsel_dya, (void**)&w->gsel, gsel_compar, &s) >= 0;
+}
+
+static int window_graph_select(struct window* w, struct gsel s)
+{
+	if (!window_graph_is_selected(w, s)) {
+		dya_bs_insert(&w->gsel_dya, (void**)&w->gsel, gsel_compar, &s);
+		return 1;
+	} else {
+		return 0;
+	}
+}
+
+static int window_graph_deselect(struct window* w, struct gsel s)
+{
+	if (window_graph_is_selected(w, s)) {
+		dya_bs_delete(&w->gsel_dya, (void**)&w->gsel, gsel_compar, &s);
+		return 1;
+	} else {
+		return 0;
+	}
+}
+
+#if 0
+static void window_graph_toggle(struct window* w, struct gsel s)
+{
+	if (!window_graph_select(w, s)) window_graph_deselect(w, s);
+}
+#endif
+
+
+static void window_graph_clear_selection(struct window* w)
+{
+	dya_clear(&w->gsel_dya, (void**)&w->gsel);
+}
 
 static void box_calc(struct atls_cell_table* clt, struct dd_node* n, int* out_n_in, int* out_n_out, int* w, int* h, int* py0, int* py1)
 {
@@ -72,70 +184,145 @@ static void box_calc(struct atls_cell_table* clt, struct dd_node* n, int* out_n_
 
 static int winproc_graph(struct window* w)
 {
+	struct lsl_frame* top = lsl_frame_top();
+
 	lsl_set_color(background_color);
 	lsl_clear();
 
 	// locate graph
 	struct dd_graph* graph = &state.dd.root;
-	for (int i = 0; i < w->graph_stack_dya.n; i++) {
-		u32 node_id = w->graph_stack[i];
-		struct dd_node* node = dd_graph_find_node(graph, node_id);
+	struct graph_view* view = &w->root_graph_view;
+	for (int i = 0; i < w->graph_view_stack_dya.n; i++) {
+		view = &w->graph_view_stack[i];
+		struct dd_node* node = dd_graph_find_node(graph, view->node_id);
 		if (node == NULL) break;
 		struct dd_graph* next_graph = dd_node_get_graph(node);
 		if (next_graph == NULL) break;
 		graph = next_graph;
 	}
 
+	int clicky = top->button[0] && top->button_cycles[0];
+	int shifty = top->mod & LSL_MOD_SHIFT;
+
 	struct atls_cell_table* clt = lsl_set_cell_table(builtin_ctbl, &builtin_palette);
 	int port_height = clt->heights[2];
 	lsl_set_type_index(type_index_subs);
 
-	// draw connections
-	for (int i = 0; i < graph->conns_dya.n; i++) {
-		struct dd_conn* c = &graph->conns[i];
-		struct dd_node* src_node = dd_graph_find_node(graph, c->src_node_id);
-		struct dd_node* dst_node = dd_graph_find_node(graph, c->dst_node_id);
-		assert(src_node != NULL);
-		assert(dst_node != NULL);
+	// handle connections
+	struct gsel nearest = gsel_none();
+	float nearest_distance = 0;
+	struct dd_conn* next_selection = NULL;
+	for (int pass = 0; pass < 2; pass++) {
+		int n_shifty_sel = 0;
+		int n_shifty_total = 0;
+		int grab_next = 0;
+		struct dd_conn* first = NULL;
 
-		int dy0 = 0;
-		for (struct dd_port_it it = dd_node_inport_it(dst_node); it.valid; dd_port_it_next(&it)) {
-			if (it.id == c->dst_port_id) break;
-			dy0++;
+		for (int i = 0; i < graph->conns_dya.n; i++) {
+			struct dd_conn* c = &graph->conns[i];
+			struct dd_node* src_node = dd_graph_find_node(graph, c->src_node_id);
+			struct dd_node* dst_node = dd_graph_find_node(graph, c->dst_node_id);
+			assert(src_node != NULL);
+			assert(dst_node != NULL);
+
+			int dy0 = 0;
+			for (struct dd_port_it it = dd_node_inport_it(dst_node); it.valid; dd_port_it_next(&it)) {
+				if (it.id == c->dst_port_id) break;
+				dy0++;
+			}
+			int dy1 = 0;
+			for (struct dd_port_it it = dd_node_outport_it(src_node); it.valid; dd_port_it_next(&it)) {
+				if (it.id == c->src_port_id) break;
+				dy1++;
+			}
+
+			int src_node_width, py0, py1;
+			box_calc(clt, src_node, NULL, NULL, &src_node_width, NULL, NULL, &py0);
+			box_calc(clt, dst_node, NULL, NULL, NULL,            NULL, &py1, NULL);
+
+			const int pcx = 3; // XXX metadata?
+			const int pcy = 5; // XXX metadata?
+
+			s32 sx0 = src_node->x - view->pan_x + src_node_width - pcx;
+			s32 sy0 = src_node->y - view->pan_y + pcy + py0 + dy1 * port_height;
+			s32 sx1 = dst_node->x - view->pan_x + pcx;
+			s32 sy1 = dst_node->y - view->pan_y + pcy + py1 + dy0 * port_height;
+
+			const float tangent = 50.0f; // XXX metadata?
+
+			union vec2 p0 = (union vec2) { .x = sx0, .y = sy0 };
+			union vec2 p1 = (union vec2) { .x = sx0 + tangent, .y = sy0 };
+			union vec2 p2 = (union vec2) { .x = sx1 - tangent, .y = sy1 };
+			union vec2 p3 = (union vec2) { .x = sx1, .y = sy1 };
+
+			float distance = bezier2_distance(top->mpos, p0, p1, p2, p3);
+			const float min_distance = 16.0; // XXX config?
+
+			struct gsel subject = gsel_conn(*c);
+
+			if (pass == 0) {
+				if (distance < min_distance) {
+					if (clicky && shifty) {
+						n_shifty_sel += window_graph_select(w, subject);
+						n_shifty_total++;
+					} else if (clicky && !shifty) {
+						if (first == NULL) first = c;
+						if (nearest.type == GSEL_NONE || distance < nearest_distance) {
+							nearest = subject;
+							nearest_distance = distance;
+						}
+						if (grab_next) {
+							next_selection = c;
+							grab_next = 0;
+						}
+						if (window_graph_is_selected(w, subject)) {
+							grab_next = 1;
+						}
+					}
+				}
+
+				if (window_graph_is_selected(w, subject)) {
+					lsl_set_color(connection_selected_color);
+				} else {
+					lsl_set_color(connection_signal_color);
+				}
+				lsl_bezier(p0, p1, p2, p3);
+			} else if (pass == 1) {
+				if (distance < min_distance) {
+					if (next_selection != NULL) {
+						if (next_selection == c) {
+							window_graph_select(w, subject);
+						} else {
+							window_graph_deselect(w, subject);
+						}
+					} else {
+						window_graph_deselect(w, subject);
+					}
+				}
+			}
 		}
-		int dy1 = 0;
-		for (struct dd_port_it it = dd_node_outport_it(src_node); it.valid; dd_port_it_next(&it)) {
-			if (it.id == c->src_port_id) break;
-			dy1++;
+
+		if (grab_next) next_selection = first;
+
+		if (clicky && !shifty) {
+			if (next_selection) {
+				continue;
+			} else {
+				window_graph_clear_selection(w);
+				window_graph_select(w, nearest);
+			}
+		} else if (clicky && shifty && n_shifty_sel == 0 && n_shifty_total > 0) {
+			continue;
 		}
-
-		int src_node_width, py0, py1;
-		box_calc(clt, src_node, NULL, NULL, &src_node_width, NULL, NULL, &py0);
-		box_calc(clt, dst_node, NULL, NULL, NULL,            NULL, &py1, NULL);
-
-		const int pcx = 3; // XXX metadata?
-		const int pcy = 5; // XXX metadata?
-
-		s32 sx0 = src_node->x - w->graph_px + src_node_width - pcx;
-		s32 sy0 = src_node->y - w->graph_py + pcy + py0 + dy1 * port_height;
-		s32 sx1 = dst_node->x - w->graph_px + pcx;
-		s32 sy1 = dst_node->y - w->graph_py + pcy + py1 + dy0 * port_height;
-
-		lsl_set_color(connection_signal_color);
-		const float tangent = 50.0f; // XXX metadata?
-		lsl_bezier(
-			(union vec2) { .x = sx0, .y = sy0 },
-			(union vec2) { .x = sx0 + tangent, .y = sy0 },
-			(union vec2) { .x = sx1 - tangent, .y = sy1 },
-			(union vec2) { .x = sx1, .y = sy1 });
+		break;
 	}
 
 	// draw nodes
 	for (int i = 0; i < graph->nodes_dya.n; i++) {
 		struct dd_node* n = &graph->nodes[i];
 
-		s32 sx = n->x - w->graph_px;
-		s32 sy = n->y - w->graph_py;
+		s32 sx = n->x - view->pan_x;
+		s32 sy = n->y - view->pan_y;
 
 		int n_in, n_out, width, height, port_y0, port_y1;
 		box_calc(clt, n, &n_in, &n_out, &width, &height, &port_y0, &port_y1);
@@ -229,14 +416,14 @@ static int winproc_graph(struct window* w)
 	}
 
 	// pan drag
-	lsl_drag("pan", NULL, &w->graph_px, &w->graph_py, -1, -1);
+	lsl_drag("pan", NULL, &view->pan_x, &view->pan_y, -1, -1);
 
 	if (w->modal == MODAL_NONE && lsl_accept(' ')) w->modal = MODAL_NODEINSERT;
 
 	if (w->modal == MODAL_NODEINSERT) {
 	}
 
-	return lsl_frame_top()->button[2];
+	return top->button[2];
 }
 
 static int winproc(void* usr)
@@ -263,15 +450,19 @@ static struct window* clone_win(struct window* ow)
 	if (ow == NULL) {
 		// new window
 		memset(w, 0, sizeof(*w));
-		dya_init(&w->graph_stack_dya, (void**)&w->graph_stack, sizeof(*w->graph_stack), 0);
+		dya_init(&w->graph_view_stack_dya, (void**)&w->graph_view_stack, sizeof(*w->graph_view_stack), 0);
 		w->type = WINDOW_GRAPH;
 	} else {
 		// clone window
 		memcpy(w, ow, sizeof(*w));
 		dya_clone(
-			&w->graph_stack_dya, (void**)&w->graph_stack,
-			&ow->graph_stack_dya, (void**)&ow->graph_stack);
+			&w->graph_view_stack_dya, (void**)&w->graph_view_stack,
+			&ow->graph_view_stack_dya, (void**)&ow->graph_view_stack);
 	}
+
+	// not ever copied
+	dya_init(&w->gsel_dya, (void**)&w->gsel, sizeof(*w->gsel), 0);
+
 	w->next = windows;
 	windows = w;
 	lsl_win_open("do", winproc, w);
@@ -325,6 +516,7 @@ static void load_atlas(char* path)
 	builtin_footer_text_color = get_color2("builtin", "footer_text");
 	builtin_port_text_color = get_color2("builtin", "port_text");
 	connection_signal_color = get_color2("connection", "signal");
+	connection_selected_color = get_color2("connection", "selected");
 }
 
 int lsl_main(int argc, char** argv)
@@ -340,8 +532,6 @@ int lsl_main(int argc, char** argv)
 		assert(n1 != NULL);
 		assert(n2 != NULL);
 		assert(n3 != NULL);
-		//dd_graph_connect(g, n1->id, 1, n2->id, 1);
-		//dd_graph_connect(g, n2->id, 1, n3->id, 1);
 		dd_graph_connect(g, n1->id, 1, n2->id, 1);
 		dd_graph_connect(g, n1->id, 1, n3->id, 1);
 		dd_graph_connect(g, n2->id, 1, n3->id, 2);

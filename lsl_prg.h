@@ -13,6 +13,8 @@
 #define LSL_MOD_LALT (1<<4)
 #define LSL_MOD_RALT (1<<5)
 
+#define LSL_MOD_SHIFT (LSL_MOD_LSHIFT | LSL_MOD_RSHIFT)
+
 struct lsl_frame {
 	struct rect rect;
 	int minside;

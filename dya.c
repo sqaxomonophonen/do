@@ -37,6 +37,12 @@ void dya_clone(struct dya* dst, void** dstptr, struct dya* src, void** srcptr)
 	memcpy(*dstptr, *srcptr, src->n * src->element_sz);
 }
 
+void dya_clear(struct dya* d, void** ptr)
+{
+	d->n = 0;
+	resize(d, ptr);
+}
+
 void* dya_append(struct dya* d, void** ptr, void* new_element)
 {
 	d->n++;
@@ -129,3 +135,8 @@ void* dya_bs_insert(struct dya* d, void** ptr, int (*compar)(const void *, const
 	return dya_insert(d, ptr, -index-1, new_element);
 }
 
+void dya_bs_delete(struct dya* d, void** ptr, int (*compar)(const void *, const void *), void* key)
+{
+	int index = dya_bs_find(d, ptr, compar, key);
+	if (index >= 0) dya_delete(d, ptr, index);
+}

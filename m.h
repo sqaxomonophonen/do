@@ -30,5 +30,11 @@ int rect_contains_point(struct rect* rect, union vec2 point);
 void rect_split_vertical(struct rect* r, float height, struct rect* a, struct rect* b);
 void rect_split_horizontal(struct rect* r, float width, struct rect* a, struct rect* b);
 
+float point_lineseg_distance(union vec2 o, union vec2 p0, union vec2 p1);
+
+float bezier1(float t, float x0, float x1, float x2, float x3);
+union vec2 bezier2(float t, union vec2 p0, union vec2 p1, union vec2 p2, union vec2 p3);
+float bezier2_distance(union vec2 o, union vec2 p0, union vec2 p1, union vec2 p2, union vec2 p3);
+
 #define M_H
 #endif
