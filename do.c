@@ -217,6 +217,7 @@ static int winproc_graph(struct window* w)
 		int n_shifty_total = 0;
 		int grab_next = 0;
 		struct dd_conn* first = NULL;
+		int n_subjects = 0;
 
 		for (int i = 0; i < graph->conns_dya.n; i++) {
 			struct dd_conn* c = &graph->conns[i];
@@ -267,6 +268,7 @@ static int winproc_graph(struct window* w)
 						n_shifty_total++;
 					} else if (clicky && !shifty) {
 						if (first == NULL) first = c;
+						n_subjects++;
 						if (nearest.type == GSEL_NONE || distance < nearest_distance) {
 							nearest = subject;
 							nearest_distance = distance;
@@ -306,7 +308,11 @@ static int winproc_graph(struct window* w)
 
 		if (clicky && !shifty) {
 			if (next_selection) {
-				continue;
+				if (n_subjects == 1) {
+					window_graph_deselect(w, gsel_conn(*next_selection));
+				} else {
+					continue;
+				}
 			} else {
 				window_graph_clear_selection(w);
 				window_graph_select(w, nearest);
