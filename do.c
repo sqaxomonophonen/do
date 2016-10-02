@@ -343,6 +343,7 @@ int lsl_main(int argc, char** argv)
 		//dd_graph_connect(g, n1->id, 1, n2->id, 1);
 		//dd_graph_connect(g, n2->id, 1, n3->id, 1);
 		dd_graph_connect(g, n1->id, 1, n2->id, 1);
+		dd_graph_connect(g, n1->id, 1, n3->id, 1);
 		dd_graph_connect(g, n2->id, 1, n3->id, 2);
 
 		struct dd_node* n4 = dd_graph_new_node(g, "[poly]32saw");

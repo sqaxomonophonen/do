@@ -415,30 +415,52 @@ void lsl_cell_plot(int column, int row, int x, int y, int width, int height)
 
 void lsl_line(union vec2 p0, union vec2 p1)
 {
-	// TODO fake antialiasing?
-
 	struct rect fr = lsl_frame_top()->rect;
 
 	p0 = vec2_add(p0, fr.p0);
 	p1 = vec2_add(p1, fr.p0);
 
-	const float thickness = 1;
-	union vec2 d = vec2_scale(vec2_unit(vec2_normal(vec2_sub(p1, p0))), thickness/2);
+	const float thickness = 0.1;
+	for (int i = 0; i < 3; i++) {
+		union vec2 d = vec2_unit(vec2_normal(vec2_sub(p1, p0)));
 
-	union vec2 v0 = vec2_add(p0, d);
-	union vec2 v1 = vec2_add(p1, d);
-	union vec2 v2 = vec2_sub(p1, d);
-	union vec2 v3 = vec2_sub(p0, d);
+		union vec4 transparent = (union vec4) { .r=0, .g=0, .b=0, .a=0 };
 
-	struct draw_vertex vs[4] = {
-		{ .position = v0, .uv = dotuv, .color = draw_color0 },
-		{ .position = v1, .uv = dotuv, .color = draw_color1 },
-		{ .position = v2, .uv = dotuv, .color = draw_color1 },
-		{ .position = v3, .uv = dotuv, .color = draw_color0 }
-	};
-	GLushort es[6] = {0,1,2,0,2,3};
+		float s0,s1;
+		union vec4 c0, c1, c2, c3;
+		if (i == 0) {
+			s0 = -thickness - 1;
+			s1 = -thickness;
+			c0 = c1 = transparent;
+			c2 = draw_color1;
+			c3 = draw_color0;
+		} else if (i == 1) {
+			s0 = -thickness;
+			s1 = thickness;
+			c0 = c3 = draw_color0;
+			c1 = c2 = draw_color1;
+		} else if (i == 2) {
+			s0 = thickness;
+			s1 = thickness + 1;
+			c0 = draw_color0;
+			c1 = draw_color1;
+			c2 = c3 = transparent;
+		}
 
-	draw_append(4, 6, vs, es);
+		union vec2 v0 = vec2_add(p0, vec2_scale(d,s0));
+		union vec2 v1 = vec2_add(p1, vec2_scale(d,s0));
+		union vec2 v2 = vec2_add(p1, vec2_scale(d,s1));
+		union vec2 v3 = vec2_add(p0, vec2_scale(d,s1));
+
+		struct draw_vertex vs[4] = {
+			{ .position = v0, .uv = dotuv, .color = c0 },
+			{ .position = v1, .uv = dotuv, .color = c1 },
+			{ .position = v2, .uv = dotuv, .color = c2 },
+			{ .position = v3, .uv = dotuv, .color = c3 }
+		};
+		GLushort es[6] = {0,1,2,0,2,3};
+		draw_append(4, 6, vs, es);
+	}
 }
 
 void lsl_fill_rect(struct rect* r)
