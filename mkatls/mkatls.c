@@ -12,6 +12,10 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
+#include "atlsvm.h"
+#include "dya.h"
+
+
 struct glyph {
 	struct stbrp_rect rect;
 	int all_rects_index;
@@ -30,6 +34,13 @@ struct glyph_table {
 	int is_dummy;
 };
 
+struct layer {
+	char* path;
+	char* program;
+	int program_id;
+	struct layer* next;
+};
+
 struct cell {
 	struct stbrp_rect* rects;
 	int all_rects_index;
@@ -43,7 +54,7 @@ struct cell_table {
 	int *vertical;
 	int *horizontal;
 	int n_layers;
-	int* layer_names_sid;
+	struct layer* layers;
 	stbi_uc** layer_bitmaps;
 	int width;
 	int height;
@@ -263,6 +274,12 @@ void encode_u32(unsigned int v, unsigned char* out)
 	out[3] = (v>>24) & 255;
 }
 
+void encode_u16(unsigned int v, unsigned char* out)
+{
+	out[0] = v & 255;
+	out[1] = (v>>8) & 255;
+}
+
 void blk_finalize(struct blk* b, FILE* f)
 {
 	fwrite(&b->type, sizeof(b->type), 1, f);
@@ -276,6 +293,14 @@ void blk_finalize(struct blk* b, FILE* f)
 	free(b);
 }
 
+void blk_u16(struct blk* b, unsigned int v)
+{
+	unsigned char c16[2];
+	encode_u16(v, c16);
+	blk_append(b, c16, sizeof(c16));
+}
+
+
 void blk_u32(struct blk* b, unsigned int v)
 {
 	unsigned char c32[4];
@@ -288,6 +313,17 @@ void blk_s32(struct blk* b, int v)
 	blk_u32(b, (unsigned int)v);
 }
 
+void blk_f32(struct blk* b, float v)
+{
+	union {
+		unsigned int u;
+		float f;
+	} both;
+	both.f = v;
+	blk_u32(b, both.u);
+}
+
+
 struct strtbl {
 	struct blk* strings;
 };
@@ -297,20 +333,34 @@ void strtbl_init(struct strtbl* t)
 	t->strings = blk_new("STRI");
 }
 
-unsigned int strtbl_add(struct strtbl* t, char* str)
+unsigned int strtbl_addn(struct strtbl* t, char* str, int n)
 {
 	int cursor = 0;
 	while (cursor < t->strings->data_sz) {
 		char* s = t->strings->data + cursor;
-		if (strcmp(s, str) == 0) {
+		size_t sn = strlen(s);
+		if (sn == n && memcmp(s, str, sn) == 0) {
 			return cursor;
 		}
-		cursor += strlen(s)+1;
+		cursor += sn+1;
 	}
-
 	int p = t->strings->data_sz;
-	blk_append(t->strings, (unsigned char*)str, strlen(str)+1);
+	blk_append(t->strings, (unsigned char*)str, n);
+	unsigned char nullterm = 0;
+	blk_append(t->strings, &nullterm, 1);
 	return p;
+}
+
+unsigned int strtbl_add(struct strtbl* t, char* str)
+{
+	return strtbl_addn(t, str, strlen(str));
+}
+
+
+char* strtbl_get(struct strtbl* t, unsigned int id)
+{
+	assert(id < t->strings->data_sz);
+	return t->strings->data + id;
 }
 
 void strtbl_finalize(struct strtbl* t, FILE* f)
@@ -340,13 +390,6 @@ static char* penultimate(char* name)
 	return retval;
 }
 
-struct userblk {
-	int type_sid;
-	int name_sid;
-	char* srcpath;
-	struct userblk* next;
-};
-
 static int atoi8(char* s)
 {
 	int v = atoi(s);
@@ -355,18 +398,1000 @@ static int atoi8(char* s)
 	return v;
 }
 
-static int decode_s32(const char* v)
+enum token_type {
+	T_FLOAT = 1,
+	T_RGBA,
+
+	T_IDENT, // "foo"
+	T_IDENT_CTX_VAR, // "$foo"
+	T_IDENT_COLOR_NAME, // "@foo"
+
+	T_PLUS,
+	T_MINUS,
+	T_MUL,
+	T_DIV,
+	T_MOD,
+
+	T_EQ,
+	T_NEQ,
+	T_LT,
+	T_LE,
+	T_GT,
+	T_GE,
+	T_AND,
+	T_OR,
+	T_NOT,
+
+	T_LPAREN,
+	T_RPAREN,
+
+	T_COMMA,
+
+	T_WHITESPACE,
+
+	T_EOF
+};
+
+struct token {
+	enum token_type type;
+	int pos, len;
+};
+
+struct lexer;
+
+// (returns lexer_state_fn* but I can't do recursive typedefs :-/ )
+typedef void* (*lexer_state_fn)(struct lexer*);
+
+struct lexer {
+	char* src;
+	int src_len, pos, start;
+	struct token token, previous_token;
+	int has_token;
+	lexer_state_fn state_fn;
+};
+
+static void* lex_main(struct lexer* l);
+
+static void lexer_init(struct lexer* l, char* src)
 {
-	return v[0] + (v[1]<<8) + (v[2]<<16) + (v[3]<<24);
+	memset(l, 0, sizeof(*l));
+	l->src = src;
+	l->src_len = strlen(src);
+	l->state_fn = lex_main;
 }
 
-static int col_compar(const void* va, const void* vb)
-{
-	int d0 = decode_s32(va) - decode_s32(vb);
-	if (d0 != 0) return d0;
 
-	int d1 = decode_s32(va+4) - decode_s32(vb+4);
-	return d1;
+static int lexer_ch(struct lexer* l)
+{
+	if (l->pos >= l->src_len) {
+		l->pos++;
+		return -1;
+	}
+	int ch = l->src[l->pos];
+	l->pos++;
+	return ch;
+}
+
+static void lexer_backup(struct lexer* l)
+{
+	l->pos--;
+}
+
+static int lexer_accept_char(struct lexer* l, char valid)
+{
+	int ch = lexer_ch(l);
+	if (ch == valid) return 1;
+	lexer_backup(l);
+	return 0;
+}
+
+static int char_in(char ch, const char* valid)
+{
+	size_t valid_length = strlen(valid);
+	for (int i = 0; i < valid_length; i++) if (valid[i] == ch) return 1;
+	return 0;
+}
+
+static int lexer_accept(struct lexer* l, const char* valid)
+{
+	int ch = lexer_ch(l);
+	if (char_in(ch, valid)) return 1;
+	lexer_backup(l);
+	return 0;
+}
+
+static int lexer_accept_fn(struct lexer* l, int(*fn)(int))
+{
+	int ch = lexer_ch(l);
+	if (fn(ch)) return 1;
+	lexer_backup(l);
+	return 0;
+}
+
+
+static int lexer_accept_run(struct lexer* l, const char* valid)
+{
+	int i = 0;
+	while (lexer_accept(l, valid)) i++;
+	return i;
+}
+
+static void lexer_accept_run_fn(struct lexer* l, int(*fn)(int))
+{
+	while (lexer_accept_fn(l, fn)) {}
+}
+
+static void lexer_eat(struct lexer* l)
+{
+	l->start = l->pos;
+}
+
+static void lexer_emit(struct lexer* l, enum token_type type)
+{
+	l->token.type = type;
+	l->token.pos = l->start;
+	l->token.len = l->pos - l->start;
+
+	l->has_token = 1;
+
+	lexer_eat(l);
+}
+
+static void* lex_eof(struct lexer* l) {
+	lexer_eat(l);
+	lexer_emit(l, T_EOF);
+	return lex_eof;
+}
+
+static void* lex_float(struct lexer* l)
+{
+	lexer_accept_char(l, '-');
+	const char* digits = "0123456789";
+	lexer_accept_run(l, digits);
+	if (lexer_accept_char(l, '.')) {
+		lexer_accept_run(l, digits);
+	}
+	if (lexer_accept(l, "eE")) {
+		lexer_accept(l, "+-");
+		lexer_accept_run(l, digits);
+	}
+	lexer_emit(l, T_FLOAT);
+	return lex_main;
+}
+
+static void* lex_rgba(struct lexer* l)
+{
+	if (lexer_accept_run(l, "0123456789ABCDEFabcdef") == 8) {
+		lexer_emit(l, T_RGBA);
+		return lex_main;
+	} else {
+		return NULL;
+	}
+}
+
+static int is_alpha(int ch)
+{
+	return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_';
+}
+
+static int is_num(int ch)
+{
+	return ch >= '0' && ch <= '9';
+}
+
+static int is_identifier(int ch)
+{
+	return is_alpha(ch) || is_num(ch) || ch == '.';
+}
+
+static void* lex_ident_ctx_var(struct lexer* l)
+{
+	lexer_accept_run_fn(l, is_identifier);
+	lexer_emit(l, T_IDENT_CTX_VAR);
+	return lex_main;
+}
+
+static void* lex_ident_color_name(struct lexer* l)
+{
+	lexer_accept_run_fn(l, is_identifier);
+	lexer_emit(l, T_IDENT_COLOR_NAME);
+	return lex_main;
+}
+
+static void* lex_ident(struct lexer* l)
+{
+	lexer_accept_run_fn(l, is_identifier);
+	lexer_emit(l, T_IDENT);
+	return lex_main;
+}
+
+static void* lex_main(struct lexer* l)
+{
+	if (lexer_ch(l) == -1) return lex_eof;
+	lexer_backup(l);
+
+	const char* ws = " \t";
+	if (lexer_accept_run(l, ws)) {
+		lexer_emit(l, T_WHITESPACE);
+		return lex_main;
+	}
+
+	// multi-character ops
+	{
+		struct {
+			const char* str;
+			enum token_type tt;
+		} pnct[] = {
+			{"==", T_EQ},
+			{"!=", T_NEQ},
+			{">=", T_GE},
+			{"<=", T_LE},
+			{"&&", T_AND},
+			{"||", T_OR},
+			{NULL}
+		};
+		for (int i = 0; pnct[i].str; i++) {
+			const char* str = pnct[i].str;
+			enum token_type tt = pnct[i].tt;
+			size_t len = strlen(str);
+			int n;
+			for (n = 0; n < len; n++) {
+				if (!lexer_accept_char(l, str[n])) {
+					break;
+				}
+			}
+			if (n == len) {
+				lexer_emit(l, tt);
+				return lex_main;
+			}
+			for (int j = 0; j < n; j++) lexer_backup(l);
+		}
+	}
+
+	// single-character ops
+	{
+		struct {
+			char ch;
+			enum token_type tt;
+		} pnct[] = {
+			{'+', T_PLUS},
+			{'-', T_MINUS},
+			{'*', T_MUL},
+			{'/', T_DIV},
+			{'%', T_MOD},
+			{'(', T_LPAREN},
+			{')', T_RPAREN},
+			{'!', T_NOT},
+			{',', T_COMMA},
+			{0}
+		};
+		for (int i = 0; pnct[i].ch; i++) {
+			char ch = pnct[i].ch;
+			enum token_type tt = pnct[i].tt;
+			if (lexer_accept_char(l, ch)) {
+				lexer_emit(l, tt);
+				return lex_main;
+			}
+		}
+	}
+
+	// literals
+	if (lexer_accept(l, ".-0123456789")) {
+		lexer_backup(l);
+		return lex_float;
+	}
+	if (lexer_accept_char(l, '#')) {
+		return lex_rgba;
+	}
+
+	// identifiers
+	if (lexer_accept_char(l, '$')) {
+		return lex_ident_ctx_var;
+	}
+	if (lexer_accept_char(l, '@')) {
+		return lex_ident_color_name;
+	}
+	if (lexer_accept_fn(l, is_identifier)) {
+		lexer_backup(l);
+		return lex_ident;
+	}
+
+	return NULL;
+}
+
+static struct token lexer_next(struct lexer* l)
+{
+	for (;;) {
+		assert(l->state_fn != NULL);
+		l->state_fn = l->state_fn(l);
+		if (l->state_fn == NULL) {
+			assert(!"lexer error"); // TODO show error
+		}
+		if (l->has_token) {
+			if (l->token.type == T_WHITESPACE) continue;
+			l->has_token = 0;
+			l->previous_token = l->token;
+			return l->token;
+		}
+	}
+}
+
+#define SEXPR_TYPE_ATOM (0)
+#define SEXPR_TYPE_LIST (1)
+
+struct sexpr {
+	int type;
+	union {
+		struct token atom;
+		struct sexpr* list;
+	};
+	struct sexpr* next;
+};
+
+
+static inline int sexpr_is_atom(struct sexpr* e)
+{
+	return e->type == SEXPR_TYPE_ATOM;
+}
+
+static inline int sexpr_is_list(struct sexpr* e)
+{
+	return e->type == SEXPR_TYPE_LIST;
+}
+
+static struct sexpr* _sexpr_new()
+{
+	struct sexpr* e = calloc(1, sizeof(*e));
+	assert(e != NULL);
+	return e;
+}
+
+static inline struct sexpr* sexpr_index(struct sexpr* e, int index)
+{
+	if (e == NULL || e->list == NULL) return NULL;
+	struct sexpr* o = e->list;
+	for (int i = 0; i < index; i++) {
+		o = o->next;
+		if (o == NULL) break;
+	}
+	return o;
+}
+
+static struct sexpr* sexpr_new_atom(struct token atom)
+{
+	struct sexpr* e = _sexpr_new();
+	e->type = SEXPR_TYPE_ATOM;
+	e->atom = atom;
+	return e;
+}
+
+static struct sexpr* sexpr_new_list(struct sexpr* head, ...)
+{
+	struct sexpr* e = _sexpr_new();
+	e->type = SEXPR_TYPE_LIST;
+	e->list = head;
+
+	if (head != NULL) {
+		struct sexpr* cur = head;
+		va_list args;
+		va_start(args, head);
+		for (;;) {
+			struct sexpr* arg = va_arg(args, struct sexpr*);
+			if (arg == NULL) break;
+			cur->next = arg;
+			cur = cur->next;
+		}
+		va_end(args);
+	}
+
+	return e;
+}
+
+static struct sexpr** sexpr_get_append_cursor(struct sexpr* e)
+{
+	assert(sexpr_is_list(e));
+	struct sexpr** cursor = &e->list;
+	while (*cursor != NULL) cursor = &((*cursor)->next);
+	return cursor;
+}
+
+static void sexpr_append(struct sexpr*** append_cursor, struct sexpr* e)
+{
+	assert(e->next == NULL);
+	assert(**append_cursor == NULL);
+	**append_cursor = e;
+	*append_cursor = &e->next;
+}
+
+
+struct parser {
+	struct lexer lexer;
+	struct token current_token, next_token, stashed_token;
+	int can_rewind, has_stashed_token;
+};
+
+static inline struct token parser_next_token(struct parser* p)
+{
+	p->current_token = p->next_token;
+	if (p->has_stashed_token) {
+		p->next_token = p->stashed_token;
+		p->has_stashed_token = 0;
+	} else {
+		p->next_token = lexer_next(&p->lexer);
+	}
+	p->can_rewind = 1;
+	return p->current_token;
+}
+
+static void parser_init(struct parser* p, char* src)
+{
+	memset(p, 0, sizeof(*p));
+	lexer_init(&p->lexer, src);
+	parser_next_token(p);
+}
+
+static inline void parser_rewind(struct parser* p)
+{
+	assert(p->can_rewind);
+	p->stashed_token = p->next_token;
+	p->next_token = p->current_token;
+	p->can_rewind = 0;
+	p->has_stashed_token = 1;
+	memset(&p->current_token, 0, sizeof(p->current_token));
+}
+
+static inline int parser_accept_and_get(struct parser* p, enum token_type tt, struct token* tp)
+{
+	struct token t = parser_next_token(p);
+	if (t.type != tt) {
+		parser_rewind(p);
+		return 0;
+	} else {
+		if (tp != NULL) *tp = t;
+		return 1;
+	}
+}
+
+static inline int parser_accept(struct parser* p, enum token_type tt)
+{
+	return parser_accept_and_get(p, tt, NULL);
+}
+
+static inline int parser_expect(struct parser* p, enum token_type tt)
+{
+	if (!parser_accept(p, tt)) {
+		fprintf(stderr, "expected token %d\n", tt);
+		abort();
+	}
+	return 1;
+}
+
+
+static inline int prefix_bp(enum token_type tt)
+{
+	switch (tt) {
+		case T_LPAREN:
+			return 1;
+		case T_NOT:
+			return 100; // XXX?
+		case T_PLUS:
+		case T_MINUS:
+			return 100;
+		default:
+			return -1;
+	}
+}
+
+static inline int infix_bp(enum token_type tt)
+{
+	switch (tt) {
+		// expression terminators
+		case T_EOF:
+		case T_RPAREN:
+			return 0;
+		case T_PLUS:
+		case T_MINUS:
+			return 40;
+		case T_MUL:
+		case T_DIV:
+		case T_MOD:
+			return 50;
+		case T_OR:
+		case T_EQ:
+		case T_NEQ:
+		case T_GT:
+		case T_GE:
+		case T_LT:
+		case T_LE:
+			return 70; // XXX?
+		case T_LPAREN:
+			return 100;
+		default:
+			return -1;
+	}
+}
+
+static inline int is_unary_op(enum token_type tt) {
+	switch (tt) {
+		case T_PLUS:
+		case T_MINUS:
+			return 1;
+		default:
+			return 0;
+	}
+}
+
+static inline int is_binary_op(enum token_type tt) {
+	switch (tt) {
+		case T_PLUS:
+		case T_MINUS:
+		case T_MUL:
+		case T_DIV:
+		case T_MOD:
+		case T_AND:
+		case T_OR:
+		case T_EQ:
+		case T_NEQ:
+		case T_GT:
+		case T_GE:
+		case T_LT:
+		case T_LE:
+			return 1;
+		default:
+			return 0;
+	}
+}
+
+static inline int is_binary_op_right_associcative(enum token_type tt)
+{
+	return 0;
+}
+
+static struct sexpr* parse_expr_rec(struct parser* p, int rbp, int depth)
+{
+	if (depth >= 1024) {
+		assert(!"maximum expression recursion depth exceeded");
+	}
+
+	struct token t = parser_next_token(p);
+	enum token_type tt = t.type;
+
+	// null denotation
+	struct sexpr* left = NULL;
+	{
+		int bp;
+		if (tt == T_FLOAT || tt == T_RGBA || tt == T_IDENT || tt == T_IDENT_CTX_VAR || tt == T_IDENT_COLOR_NAME) {
+			left = sexpr_new_atom(t);
+		} else if ((bp = prefix_bp(tt)) != -1) {
+			struct sexpr* operand = parse_expr_rec(p, bp, depth+1);
+			if (operand == NULL) return NULL;
+			if (is_unary_op(tt)) {
+				left = sexpr_new_list(sexpr_new_atom(t), operand, NULL);
+			} else if (tt == T_LPAREN) {
+				left = operand;
+				if (!parser_expect(p, T_RPAREN)) return NULL;
+			} else {
+				fprintf(stderr, "unexpected token %d\n", tt);
+				abort();
+			}
+		} else {
+			fprintf(stderr, "unexpected token %d\n", tt);
+			abort();
+		}
+	}
+
+	for (;;) {
+		int lbp = infix_bp(p->next_token.type);
+		if (lbp == -1) {
+			fprintf(stderr, "unexpected token %d\n", tt);
+			abort();
+		}
+		if (rbp >= lbp) break;
+
+		// left denotation
+		t = parser_next_token(p);
+		tt = t.type;
+		if (is_binary_op(tt)) { // parse binary op
+			int bp = lbp;
+			if (is_binary_op_right_associcative(tt)) bp--;
+			struct sexpr* right = parse_expr_rec(p, bp, depth+1);
+			if (right == NULL) return NULL;
+			left = sexpr_new_list(sexpr_new_atom(t), left, right, NULL);
+		} else if (tt == T_LPAREN) { // parse call
+			left = sexpr_new_list(left, NULL);
+			struct sexpr** cursor = sexpr_get_append_cursor(left);
+			int more = !parser_accept(p, T_RPAREN);
+			while (more) {
+				struct sexpr* a = parse_expr_rec(p, 0, depth+1);
+				if (a == NULL) return NULL;
+				sexpr_append(&cursor, a);
+
+				if (p->next_token.type != T_RPAREN && p->next_token.type != T_COMMA) {
+					fprintf(stderr, "unexpected token %d\n", tt);
+					abort();
+				}
+				more = p->next_token.type == T_COMMA;
+				parser_next_token(p);
+			}
+		} else {
+			fprintf(stderr, "unexpected token %d\n", tt);
+			abort();
+		}
+	}
+
+	return left;
+}
+
+static struct sexpr* parse_expr(struct parser* p)
+{
+	return parse_expr_rec(p, 0, 0);
+}
+
+struct prgs {
+	int n_programs;
+	struct strtbl* strtbl;
+	/*
+	struct blk* sexprs;
+	struct blk* constants;
+	struct blk* ctx_keys;
+	struct blk* color_keys;
+	struct blk* program_keys;
+	struct blk* program_offsets;
+	struct blk* code;
+	*/
+
+
+	struct dya sexprs_dya;
+	struct sexpr** sexprs;
+
+	struct dya constants_dya;
+	float* constants;
+
+	struct dya ctx_keys_dya;
+	unsigned int* ctx_keys;
+
+	struct dya color_keys_dya;
+	unsigned int* color_keys;
+
+	struct dya program_keys_dya;
+	unsigned int* program_keys;
+
+	struct dya program_offsets_dya;
+	unsigned int* program_offsets;
+
+	struct dya code_dya;
+	unsigned short* code;
+
+};
+
+static struct prgs* prgs_new(struct strtbl* strtbl)
+{
+	struct prgs* prgs = calloc(1, sizeof(*prgs));
+	assert(prgs != NULL);
+	prgs->strtbl = strtbl;
+
+	dya_init(&prgs->sexprs_dya, (void**)&prgs->sexprs, sizeof(*prgs->sexprs), 0);
+	dya_init(&prgs->constants_dya, (void**)&prgs->constants, sizeof(*prgs->constants), 0);
+	dya_init(&prgs->ctx_keys_dya, (void**)&prgs->ctx_keys, sizeof(*prgs->ctx_keys), 0);
+	dya_init(&prgs->color_keys_dya, (void**)&prgs->color_keys, sizeof(*prgs->color_keys), 0);
+	dya_init(&prgs->program_keys_dya, (void**)&prgs->program_keys, sizeof(*prgs->program_keys), 0);
+	dya_init(&prgs->program_offsets_dya, (void**)&prgs->program_offsets, sizeof(*prgs->program_offsets), 0);
+	dya_init(&prgs->code_dya, (void**)&prgs->code, sizeof(*prgs->code), 0);
+
+	return prgs;
+}
+
+static double nobs_atoi(char* str, int n)
+{
+	if (n <= 0) return 0.0;
+	double val = 0.0;
+	double mult = 1.0;
+	for (int i = (n-1); i >= 0; i--) {
+		val += (str[i]-'0') * mult;
+		mult *= 10.0;
+	}
+	return val;
+}
+
+static float nobs_atof(char* str, int n)
+{
+	assert(n > 0);
+
+	double sgn = 1.0;
+
+	char* p = str;
+
+	if (p[0] == '-') {
+		sgn = -1.0;
+		p++; n--;
+		assert(n > 0);
+	}
+
+	char* p00 = p;
+	while (n > 0 && *p != '.' && *p != 'e' && *p != 'E') { p++; n--; }
+	char* p01 = p;
+
+	double prepoint = nobs_atoi(p00, p01-p00);
+	double exponent = 0.0;
+	double exponent_sgn = 1.0;
+	double postpoint = 0.0;
+
+	for (;;) {
+		if (n <= 0) {
+			break;
+		} else if (*p == '.') {
+			p++; n--;
+			double mult = 0.1;
+			while (n > 0 && *p != 'e' && *p != 'E') {
+				postpoint += (*p-'0') * mult;
+				mult *= 0.1;
+				p++; n--;
+			}
+		} else if (*p == 'e' || *p == 'E') {
+			p++; n--;
+			assert(n > 0);
+			if (*p == '-') {
+				exponent_sgn = -1.0;
+				p++; n--;
+				assert(n > 0);
+			}
+			char* p20 = p;
+			while (n > 0) { p++; n--; }
+			char* p21 = p;
+			exponent = nobs_atoi(p20, p21-p20);
+		} else {
+			assert(!"what?");
+		}
+	}
+
+	double val = (sgn*prepoint + postpoint) * pow(10.0, exponent_sgn*exponent);
+
+	return val;
+}
+
+static unsigned int prgs_add_float(struct prgs* prgs, float v)
+{
+	unsigned int n = prgs->constants_dya.n;
+	for (unsigned int i = 0; i < n; i++) {
+		if (v == prgs->constants[i]) return i;
+	}
+	dya_append(&prgs->constants_dya, (void**)&prgs->constants, &v);
+	return n;
+}
+
+static unsigned int prgs_add_float4(struct prgs* prgs, float* v4)
+{
+	unsigned int n = prgs->constants_dya.n;
+	for (unsigned int i = 0; i < n; i++) {
+		for (int j = 0; j < 4; j++) {
+			int k = i+j;
+			if (k >= n) break;
+			float ex = prgs->constants[i+j];
+			if (v4[j] != ex) break;
+			if (j == 3) return i;
+		}
+	}
+	for (int i = 0; i < 4; i++) dya_append(&prgs->constants_dya, (void**)&prgs->constants, &v4[i]);
+	return n;
+}
+
+static int hexdigit(char h)
+{
+	if (h >= '0' && h <= '9') return h-'0';
+	if (h >= 'a' && h <= 'f') return 10+(h-'a');
+	if (h >= 'A' && h <= 'F') return 10+(h-'A');
+	assert(!"invalid hex digit");
+}
+
+static int prgs_emit(struct prgs* prgs, char* src, struct sexpr* e)
+{
+	int top = prgs->code_dya.n;
+	if (e->type == SEXPR_TYPE_ATOM) {
+		enum token_type tt = e->atom.type;
+		char* base = src + e->atom.pos;
+		if (tt == T_FLOAT) {
+			float v = nobs_atof(base, e->atom.len);
+			unsigned int const_id = prgs_add_float(prgs, v);
+			assert(const_id < (1<<14));
+			unsigned short op = 1 | (const_id << 2);
+			dya_append(&prgs->code_dya, (void**)&prgs->code, &op);
+		} else if (tt == T_RGBA) {
+			assert(e->atom.len == 8);
+			float rgba[4];
+			for (int i = 0; i < 4; i++) {
+				int b = (hexdigit(base[i*2])<<4) + hexdigit(base[i*2+1]);
+				rgba[i] = (float)b / (float)0xff;
+			}
+			unsigned int const_id = prgs_add_float4(prgs, rgba);
+			assert(const_id <= ((1<<14)-4));
+			unsigned short op = 3 | (const_id << 2);
+			dya_append(&prgs->code_dya, (void**)&prgs->code, &op);
+		} else if (tt == T_IDENT_CTX_VAR || tt == T_IDENT_COLOR_NAME) {
+			int str_id = strtbl_addn(prgs->strtbl, base+1, e->atom.len-1);
+
+			struct dya* idtbl_dya = tt == T_IDENT_CTX_VAR ? &prgs->ctx_keys_dya : tt == T_IDENT_COLOR_NAME ? &prgs->color_keys_dya : NULL;
+			assert(idtbl_dya != NULL);
+			unsigned int** idtbl = tt == T_IDENT_CTX_VAR ? &prgs->ctx_keys : tt == T_IDENT_COLOR_NAME ? &prgs->color_keys : NULL;
+			assert(idtbl != NULL);
+
+			int n = idtbl_dya->n;
+			int idid = -1;
+			for (int i = 0; i < n; i++) {
+				int str_id = (*idtbl)[i];
+				char* key = strtbl_get(prgs->strtbl, str_id);
+				size_t keyn = strlen(key);
+				if (keyn != (e->atom.len-1)) continue;
+				if (memcmp(base+1, key, keyn) != 0) continue;
+				idid = i;
+				break;
+			}
+			if (idid == -1) {
+				idid = n;
+				dya_append(idtbl_dya, (void**)idtbl, &str_id);
+			}
+			assert(idid < (1<<13));
+			int magic = tt == T_IDENT_CTX_VAR ? 2 : tt == T_IDENT_COLOR_NAME ? 6 : -1;
+			assert(magic >= 0);
+			unsigned short op = magic | (idid << 3);
+			dya_append(&prgs->code_dya, (void**)&prgs->code, &op);
+		} else if (tt == T_IDENT) {
+			int found = 0;
+			for (int i = 0; i < prgs->n_programs; i++) {
+				int str_id = prgs->program_keys[i];
+				char* c = strtbl_get(prgs->strtbl, str_id);
+				size_t cn = strlen(c);
+				if (cn != e->atom.len) continue;
+				if (memcmp(base, c, cn) != 0) continue;
+				found = 1;
+				prgs_emit(prgs, src, prgs->sexprs[i]);
+			}
+			if (!found) {
+				fprintf(stderr, "T_IDENT not found: ");
+				fwrite(base, e->atom.len, 1, stderr);
+				fprintf(stderr, "\n");
+				abort();
+			}
+		} else {
+			assert(!"what token type?");
+		}
+	} else if (e->type == SEXPR_TYPE_LIST) {
+		struct sexpr* s = e->list;
+		assert(s != NULL);
+		assert(s->type == SEXPR_TYPE_ATOM);
+		enum token_type tt = s->atom.type;
+		enum atlsvm_fcode fc = ATLSVM__ZERO;
+		switch (tt) {
+		case T_IDENT:
+			break;
+		case T_PLUS:  fc = ATLSVM_ADD; break;
+		case T_MINUS: fc = ATLSVM_SUB; break; // XXX might be ATLSVM_NEG?
+		case T_MUL:   fc = ATLSVM_MUL; break;
+		case T_DIV:   fc = ATLSVM_DIV; break;
+		case T_MOD:   fc = ATLSVM_MOD; break;
+		case T_EQ:    fc = ATLSVM_EQ;  break;
+		case T_NEQ:   fc = ATLSVM_NEQ; break;
+		case T_LT:    fc = ATLSVM_LT;  break;
+		case T_LE:    fc = ATLSVM_LE;  break;
+		case T_GT:    fc = ATLSVM_GT;  break;
+		case T_GE:    fc = ATLSVM_GE;  break;
+		case T_AND:   fc = ATLSVM_AND; break;
+		case T_OR:    fc = ATLSVM_OR;  break;
+		case T_NOT:   fc = ATLSVM_NOT; break;
+
+		default:
+			assert(!"unexpected atom token type");
+		}
+
+		int is_select = 0;
+		if (fc == ATLSVM__ZERO) {
+			assert(tt == T_IDENT);
+			#define MATCH(str) (strlen(str) == s->atom.len && memcmp(str, src+s->atom.pos, s->atom.len))
+			if (MATCH("select")) {
+				is_select = 1;
+			}
+			else if (MATCH("sin"))   { fc = ATLSVM_SIN; }
+			else if (MATCH("cos"))   { fc = ATLSVM_COS; }
+			else if (MATCH("atan"))  { fc = ATLSVM_ATAN; }
+			else if (MATCH("sqrt"))  { fc = ATLSVM_SQRT; }
+			else if (MATCH("exp"))   { fc = ATLSVM_EXP; }
+			else if (MATCH("pow"))   { fc = ATLSVM_POW; }
+			else if (MATCH("floor")) { fc = ATLSVM_FLOOR; }
+			else if (MATCH("ceil"))  { fc = ATLSVM_CEIL; }
+			else if (MATCH("round")) { fc = ATLSVM_ROUND; }
+			else if (MATCH("lerp"))  { fc = ATLSVM_LERP; }
+			else {
+				fprintf(stderr, "unhandled function: '");
+				fwrite(src + s->atom.pos, s->atom.len, 1, stderr);
+				fprintf(stderr, "'\n");
+				abort();
+			}
+			#undef MATCH
+		}
+
+		if (is_select) {
+			assert(!"TODO"); // XXX TODO
+		} else {
+			assert(fc != ATLSVM__ZERO);
+			int n_operands_expected = 0;
+			char* opname = "?!";
+			switch (fc) {
+			#define ATLSVM_DEF(t,n,fn) case t: n_operands_expected = n; opname = #t; break;
+			ATLSVM_FCODE_LST
+			#undef ATLSVM_DEF
+			default:
+				assert(!"unexpected fc value");
+			}
+
+			int n_operands_actual = 0;
+			for (struct sexpr* o = s->next; o != NULL; o = o->next) n_operands_actual++;
+
+			if (n_operands_expected != n_operands_actual) {
+				fprintf(stderr, "number of %s operands expected to be %d, but was %d\n", opname, n_operands_expected, n_operands_actual);
+				abort();
+			}
+
+			struct sexpr* o = s->next;
+			for (int i = 0; i < n_operands_actual; i++) {
+				assert(o != NULL);
+				prgs_emit(prgs, src, o);
+				o = o->next;
+			}
+		}
+	} else {
+		assert(!"what sexpr type?");
+	}
+	return top;
+}
+
+static unsigned int prgs_compile(struct prgs* prgs, char* key, char* src)
+{
+	struct parser parser;
+	parser_init(&parser, src);
+	struct sexpr* se = parse_expr(&parser);
+	assert(se != NULL);
+
+	dya_append(&prgs->sexprs_dya, (void**)&prgs->sexprs, &se);
+	unsigned int program_key = strtbl_add(prgs->strtbl, key);
+	dya_append(&prgs->program_keys_dya, (void**)&prgs->program_keys, &program_key);
+	unsigned int offset = prgs->code_dya.n;
+	dya_append(&prgs->program_offsets_dya, (void**)&prgs->program_offsets, &offset);
+
+	prgs_emit(prgs, src, se);
+
+	prgs->n_programs++;
+
+	return offset;
+}
+
+struct color {
+	char* name;
+	unsigned char rgba[4];
+};
+
+struct cols {
+	char* name;
+	struct dya colors_dya;
+	struct color* colors;
+};
+
+static struct cols* cols_new(char* name)
+{
+	struct cols* cols = calloc(1, sizeof(*cols));
+	assert(cols != NULL);
+	cols->name = strdup(name);
+	dya_init(&cols->colors_dya, (void**)&cols->colors, sizeof(*cols->colors), 0);
+	return cols;
+}
+
+static void cols_add(struct cols* cols, char* name, unsigned char r, unsigned char g, unsigned char b, unsigned char a)
+{
+	struct color c;
+	c.name = strdup(name);
+	c.rgba[0] = r;
+	c.rgba[1] = g;
+	c.rgba[2] = b;
+	c.rgba[3] = a;
+	dya_append(&cols->colors_dya, (void**)&cols->colors, &c);
 }
 
 static int try_sz(int sz, char* outfile, int n, char** filenames)
@@ -384,38 +1409,19 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 
 	int n_total_rects = 0;
 
-	struct userblk* userblks = NULL;
-	struct userblk** userblk_cursor = &userblks;
-
-	struct blk* xblks = NULL;
-	struct blk** xblk_cursor = &xblks;
-
 	struct strtbl strtbl;
 	strtbl_init(&strtbl);
+
+	struct prgs* prgs = prgs_new(&strtbl);
+	struct dya cols_array_dya;
+	struct cols** cols_array;
+	dya_init(&cols_array_dya, (void**)&cols_array, sizeof(*cols_array), 0);
 
 	for (int i = 0; i < n; i++) {
 		char* filename = filenames[i];
 
 		char* name = strdup(filename);
 		assert(name != NULL);
-
-		int is_user = 0;
-		char* user_type = NULL;
-		if (name[0] == '@') {
-			is_user = 1;
-			size_t len = strlen(name);
-			for (int o = 0; o < len; o++) {
-				char ch = name[o];
-				if (ch == ':') {
-					name[o] = 0;
-					user_type = &name[1];
-					name = &name[o+1];
-					filename = name;
-					break;
-				}
-			}
-			assert("USER arg contains :-delimiter" && user_type != NULL);
-		}
 
 		{
 			int get_name_from_filename = 1;
@@ -435,21 +1441,10 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 			}
 		}
 
-		if (is_user) {
-			struct userblk* u = calloc(1, sizeof(*u));
-			assert(u != NULL);
-			u->type_sid = strtbl_add(&strtbl, user_type);
-			u->name_sid = strtbl_add(&strtbl, name);
-			u->srcpath = filename;
-			*userblk_cursor = u;
-			userblk_cursor = &u->next;
-		} else if (endswith(filename, ".atls")) {
-			assert(!"TODO merge with .atls file");
-		} else if (endswith(filename, ".tbl")) {
+		if (endswith(filename, ".tbl")) {
 			struct table* tbl = table_alloc(TT_CELL, strtbl_add(&strtbl, name));
 			struct cell_table* clt = &tbl->cell;
-
-			char** layer_names = NULL;
+			struct layer** layer_cursor = &clt->layers;
 			FILE* f = fopen(filename, "r");
 			for (;;) {
 				fread_line(f, line, sizeof(line));
@@ -458,9 +1453,16 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 				char* tail;
 				split2(line, &tail);
 
-				if (strcmp(line, "LAYERS") == 0) {
-					assert(layer_names == NULL);
-					layer_names = explode_strings(tail, &clt->n_layers);
+				if (strcmp(line, "LAYER") == 0) {
+					char* program;
+					split2(tail, &program);
+					struct layer* layer = calloc(1, sizeof(*layer));
+					layer->path = strdup(tail);
+					layer->program = strdup(program);
+					layer->program_id = prgs_compile(prgs, "", program);
+					*layer_cursor = layer;
+					layer_cursor = &layer->next;
+					clt->n_layers++;
 				} else if (strcmp(line, "VERTICAL") == 0) {
 					assert(clt->vertical == NULL);
 					clt->vertical = explode_integers(tail, &clt->n_columns);
@@ -472,22 +1474,22 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 				}
 			}
 			fclose(f);
-			assert(layer_names != NULL);
+			assert(clt->n_layers > 0);
 
 			clt->layer_bitmaps = calloc(clt->n_layers, sizeof(*clt->layer_bitmaps));
 			assert(clt->layer_bitmaps != NULL);
 
+			struct layer* layer = clt->layers;
 			for (int j = 0; j < clt->n_layers; j++) {
+				assert(layer != NULL);
 				int comp = 4;
-				clt->layer_bitmaps[j] = stbi_load(layer_names[j], &clt->width, &clt->height, &comp, comp);
-				assert(clt->layer_bitmaps[j] != NULL);
+				clt->layer_bitmaps[j] = stbi_load(layer->path, &clt->width, &clt->height, &comp, comp);
+				if (clt->layer_bitmaps[j] == NULL) {
+					fprintf(stderr, "stbi_load failed for %s\n", layer->path);
+					exit(EXIT_FAILURE);
+				}
 				assert("image is RGBA" && comp == 4);
-			}
-
-			clt->layer_names_sid = calloc(clt->n_layers, sizeof(*clt->layer_names_sid));
-			assert(clt->layer_names_sid != NULL);
-			for (int j = 0; j < clt->n_layers; j++) {
-				clt->layer_names_sid[j] = strtbl_add(&strtbl, penultimate(layer_names[j]));
+				layer = layer->next;
 			}
 
 			int n_cells = clt->n_columns * clt->n_rows;
@@ -665,47 +1667,38 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 			}
 
 			fclose(f);
+		} else if (endswith(filename, ".progs")) {
+			FILE* f = fopen(filename, "r");
+			assert(f);
+			while (!feof(f)) {
+				fread_line(f, line, sizeof(line));
+				char* code;
+				if (!split2(line, &code)) continue;
+				prgs_compile(prgs, line, code);
+			}
+			fclose(f);
 		} else if (endswith(filename, ".cols")) {
 			FILE* f = fopen(filename, "r");
 			assert(f);
 
-			struct blk* cb = blk_new("COLS");
-			blk_u32(cb, strtbl_add(&strtbl, name));
+			struct cols* cols = cols_new(name);
 
-			int i0 = cb->data_sz;
-
-			int n = 0;
 			while (!feof(f)) {
 				fread_line(f, line, sizeof(line));
-				char* layer;
 				char* red;
 				char* green;
 				char* blue;
 				char* alpha;
 				if (
-					!split2(line, &layer) ||
-					!split2(layer, &red) ||
+					!split2(line, &red) ||
 					!split2(red, &green) ||
 					!split2(green, &blue) ||
 					!split2(blue, &alpha)) continue;
 
-				blk_u32(cb, strtbl_add(&strtbl, line)); // name
-				blk_u32(cb, strtbl_add(&strtbl, layer)); // layer name
-				blk_u32(cb, // rgba
-					atoi8(red) |
-					(atoi8(green)<<8) |
-					(atoi8(blue)<<16) |
-					(atoi8(alpha)<<24));
-				n++;
+				cols_add(cols, line, atoi8(red), atoi8(green), atoi8(blue), atoi8(alpha));
 			}
 
-			int sz = cb->data_sz - i0;
-			if (sz > 0) {
-				qsort(cb->data + i0, n, 12, col_compar);
-				*xblk_cursor = cb;
-				xblk_cursor = &cb->next;
-			}
-
+			dya_append(&cols_array_dya, (void**)&cols_array, &cols);
 			fclose(f);
 		} else {
 			fprintf(stderr, "unknown extension in '%s'\n", filename);
@@ -866,7 +1859,67 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 
 		{
 			struct blk* b = blk_new("ATLS");
-			blk_u32(b, 3); // version
+			blk_u32(b, 5); // version
+
+			blk_finalize(b, f);
+		}
+
+		{
+			struct blk* b = blk_new("PROG");
+
+			int n_programs = prgs->n_programs;
+			blk_u32(b, n_programs);
+
+			int n_constants = prgs->constants_dya.n;
+			blk_u32(b, n_constants);
+
+			int n_ctx_keys = prgs->ctx_keys_dya.n;
+			blk_u32(b, n_ctx_keys);
+
+			int n_colors_per_colorscheme = prgs->color_keys_dya.n;
+			blk_u32(b, n_colors_per_colorscheme);
+
+			for (int i = 0; i < n_programs; i++) {
+				blk_u32(b, prgs->program_keys[i]);
+				blk_u32(b, prgs->program_offsets[i]);
+			}
+
+			for (int i = 0; i < n_constants; i++) {
+				blk_f32(b, prgs->constants[i]);
+			}
+
+			for (int i = 0; i < n_ctx_keys; i++) {
+				blk_u32(b, prgs->ctx_keys[i]);
+			}
+
+			for (int i = 0; i < n_colors_per_colorscheme; i++) {
+				blk_u32(b, prgs->color_keys[i]);
+			}
+
+			for (int i = 0; i < prgs->code_dya.n; i++) {
+				blk_u16(b, prgs->code[i]);
+			}
+
+			blk_finalize(b, f);
+		}
+
+		for (int i = 0; i < cols_array_dya.n; i++) {
+			struct cols* cols = cols_array[i];
+			struct blk* b = blk_new("COLS");
+			blk_u32(b, strtbl_add(&strtbl, cols->name));
+			for (int i = 0; i < prgs->color_keys_dya.n; i++) {
+				unsigned int rgba = 0x00ffffff;
+				char* n0 = strtbl_get(&strtbl, prgs->color_keys[i]);
+				for (int j = 0; j < cols->colors_dya.n; j++) {
+					struct color* color = &cols->colors[j];
+					char* n1 = color->name;
+					if (strcmp(n0, n1) == 0) {
+						rgba = (color->rgba[0]) | (color->rgba[1]<<8) | (color->rgba[2]<<16) | (color->rgba[3]<<24);
+						break;
+					}
+				}
+				blk_u32(b, rgba);
+			}
 			blk_finalize(b, f);
 		}
 
@@ -903,8 +1956,11 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 				blk_u32(b, clt->n_rows);
 				blk_u32(b, clt->n_layers);
 
+				struct layer* layer = clt->layers;
 				for (int j = 0; j < clt->n_layers; j++) {
-					blk_u32(b, clt->layer_names_sid[j]);
+					assert(layer != NULL);
+					blk_u32(b, layer->program_id);
+					layer = layer->next;
 				}
 				for (int j = 0; j < clt->n_columns; j++) {
 					blk_u32(b, clt->vertical[j]);
@@ -943,23 +1999,6 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 			blk_u32(b, atlas_height);
 			blk_u32(b, 1); // uncompressed
 			blk_append(b, bitmap, atlas_width*atlas_height);
-			blk_finalize(b, f);
-		}
-
-		for (struct blk* xb = xblks; xb != NULL; xb = xb->next) blk_finalize(xb, f);
-
-		for (struct userblk* ub = userblks; ub != NULL; ub = ub->next) {
-			struct blk* b = blk_new("USER");
-			blk_u32(b, ub->type_sid);
-			blk_u32(b, ub->name_sid);
-			unsigned char buffer[65536];
-			FILE* sf = fopen(ub->srcpath, "r");
-			assert(sf != NULL);
-			while (!feof(sf)) {
-				size_t read = fread(buffer, 1, sizeof(buffer), sf);
-				blk_append(b, buffer, read);
-			}
-			fclose(sf);
 			blk_finalize(b, f);
 		}
 

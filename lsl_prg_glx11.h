@@ -396,12 +396,10 @@ void lsl_cell_plot(int column, int row, int x, int y, int width, int height)
 	int cell_height = active_cell_table->heights[row];
 	if (height == 0) height = cell_height;
 
-	assert(active_cell_table->n_layers < MAX_PALETTE_LENGTH);
-
 	for (int i = 0; i < active_cell_table->n_layers; i++) {
 		struct atls_cell* cell = atls_cell_table_lookup(active_cell_table, column, row, i);
 		if (cell == NULL) continue;
-		union vec4 col = cell_table_palette[i];
+		union vec4 col = lsl_eval(active_cell_table->layer_prg_ids[i]);
 		draw_rect_2col(
 			(struct rect) {
 				.p0 = { .x = x, .y = y },

@@ -1,0 +1,4 @@
+background @background
+builtin.footer_text @builtin.footer_text
+builtin.port_text @builtin.port_text
+connection.signal @connection.signal

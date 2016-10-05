@@ -1,10 +1,24 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include <stdio.h>
 
 #include "lsl_prg.h"
 #include "dd.h"
 #include "dya.h"
+
+struct atls* atls;
+
+int builtin_ctbl;
+
+int colorpid_background;
+int colorpid_builtin_footer_text;
+int colorpid_builtin_port_text;
+int colorpid_connection_signal;
+
+int type_index_main;
+int type_index_subs;
+
 
 struct {
 	struct dd dd;
@@ -78,19 +92,6 @@ static int gsel_compar(const void* va, const void* vb)
 		assert(!"invalid gsel_type");
 	}
 }
-
-
-struct atls_colorscheme* colorscheme;
-struct atls_colorscheme builtin_palette;
-int builtin_ctbl;
-union vec4 background_color;
-union vec4 builtin_footer_text_color;
-union vec4 builtin_port_text_color;
-union vec4 connection_signal_color;
-union vec4 connection_selected_color;
-int type_index_main;
-int type_index_subs;
-
 
 #define MODAL_NONE (0)
 #define MODAL_NODEINSERT (1)
@@ -186,7 +187,7 @@ static int winproc_graph(struct window* w)
 {
 	struct lsl_frame* top = lsl_frame_top();
 
-	lsl_set_color(background_color);
+	lsl_set_color(lsl_eval(colorpid_background));
 	lsl_clear();
 
 	// locate graph
@@ -204,7 +205,7 @@ static int winproc_graph(struct window* w)
 	int clicky = top->button[0] && top->button_cycles[0];
 	int shifty = top->mod & LSL_MOD_SHIFT;
 
-	struct atls_cell_table* clt = lsl_set_cell_table(builtin_ctbl, &builtin_palette);
+	struct atls_cell_table* clt = lsl_set_cell_table(builtin_ctbl);
 	int port_height = clt->heights[2];
 	lsl_set_type_index(type_index_subs);
 
@@ -284,10 +285,9 @@ static int winproc_graph(struct window* w)
 				}
 
 				if (window_graph_is_selected(w, subject)) {
-					lsl_set_color(connection_selected_color);
-				} else {
-					lsl_set_color(connection_signal_color);
+					// TODO set ctxvar!
 				}
+				lsl_set_color(lsl_eval(colorpid_connection_signal));
 				lsl_bezier(p0, p1, p2, p3);
 			} else if (pass == 1) {
 				if (distance < min_distance) {
@@ -395,11 +395,11 @@ static int winproc_graph(struct window* w)
 		}
 
 
-		lsl_set_color(builtin_footer_text_color);
+		lsl_set_color(lsl_eval(colorpid_builtin_footer_text));
 		lsl_set_cursor(sx + clt->widths[0], sy + r.dim.h - (clt->heights[6]));
 		lsl_printf("%s", n->def);
 
-		lsl_set_color(builtin_port_text_color);
+		lsl_set_color(lsl_eval(colorpid_builtin_port_text));
 		int i = 0;
 		const int port_text_spacing = 3; // XXX use metadata?
 		const int port_text_dy = -2; // XXX use metadata?
@@ -475,54 +475,29 @@ static struct window* clone_win(struct window* ow)
 	return w;
 }
 
-static union vec4 color_rgba(struct atls_color* color)
-{
-	union vec4 c;
-	atls_color_rgba(color, &c.r, &c.g, &c.b, &c.a);
-	return c;
-}
-
-static union vec4 get_color(char* tag)
-{
-	struct atls_colorscheme cs;
-	assert(atls_colorscheme_tag_lookup(&cs, colorscheme, tag));
-	return color_rgba(&cs.colors[0]);
-}
-
-static union vec4 get_color2(char* tag, char* layer)
-{
-	struct atls_colorscheme cs;
-	assert(atls_colorscheme_tag_lookup(&cs, colorscheme, tag));
-	for (int i = 0; i < cs.n_colors; i++) {
-		if (strcmp(cs.colors[i].layer.cstr, layer) == 0) {
-			return color_rgba(&cs.colors[i]);
-		}
-	}
-	assert(!"color not found");
-}
-
-static void load_atlas(char* path)
+static struct atls* load_atlas(char* path)
 {
 	struct atls* atls = atls_load_from_file("default.atls");
-	assert(atls != NULL);
+	if (atls == NULL) {
+		fprintf(stderr, "%s\n", atls_get_error());
+		assert(!"atls_load_from_file");
+	}
 	lsl_set_atls(atls);
+
+	atls_use_colorscheme(atls, "default");
+	assert(atls->active_colorscheme != NULL);
 
 	assert((type_index_main = atls_get_glyph_table_index(atls, "main")) >= 0);
 	assert((type_index_subs = atls_get_glyph_table_index(atls, "subs")) >= 0);
 
 	builtin_ctbl = atls_get_cell_table_index(atls, "builtin");
 
-	int cs_id = atls_get_colorscheme(atls, "default");
-	assert(cs_id >= 0);
-	colorscheme = &atls->colorschemes[cs_id];
+	colorpid_background = atls_get_prg_id(atls, "background");
+	colorpid_builtin_footer_text = atls_get_prg_id(atls, "builtin.footer_text");
+	colorpid_builtin_port_text = atls_get_prg_id(atls, "builtin.port_text");
+	colorpid_connection_signal = atls_get_prg_id(atls, "connection.signal"); // XXX is type a ctxvar?
 
-	assert(atls_colorscheme_tag_lookup(&builtin_palette, colorscheme, "builtin"));
-
-	background_color = get_color("background");
-	builtin_footer_text_color = get_color2("builtin", "footer_text");
-	builtin_port_text_color = get_color2("builtin", "port_text");
-	connection_signal_color = get_color2("connection", "signal");
-	connection_selected_color = get_color2("connection", "selected");
+	return atls;
 }
 
 int lsl_main(int argc, char** argv)
@@ -551,7 +526,7 @@ int lsl_main(int argc, char** argv)
 		dd_graph_connect(g, n3->id, 1, n4->id, 1);
 	}
 
-	load_atlas("default.atls");
+	atls = load_atlas("default.atls");
 
 	clone_win(NULL);
 	lsl_main_loop();

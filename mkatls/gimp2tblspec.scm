@@ -56,9 +56,9 @@
 (define (get-guides image-id ori-filter) (qsort (get-guides-raw image-id ori-filter 0)))
 
 (define (slice_rec total last lst)
-  	(if (null? lst)
-	  (if (= total 0) () (cons total ()))
-	  (let ((sz (- (car lst) last))) (cons sz (slice_rec (- total sz) (car lst) (cdr lst))))))
+  (if (null? lst)
+    (if (= total 0) () (cons total ()))
+    (let ((sz (- (car lst) last))) (cons sz (slice_rec (- total sz) (car lst) (cdr lst))))))
 
 (define (slice total lst) (slice_rec total 0 lst))
 
@@ -79,24 +79,24 @@
          (layer-array (cadr layer-list))
          (name (extract-name image-name))
          (i (- num-layers 1))
+         (layer-index 1)
          (tbl "")
        )
 
-    (set! tbl (string-append tbl "LAYERS"))
     (while (>= i 0)
            (let* (
                   (layer-id (aref layer-array i))
                   (layer-name (car (gimp-layer-get-name layer-id)))
-                  (comb-name (string-append name "." layer-name))
+                  (comb-name (string-append name ".layer" (number->string layer-index)))
                   (file-name (string-append comb-name ".png"))
                   )
                 (display (string-append "writing " file-name "...\n"))
-                (set! tbl (string-append tbl " " file-name))
+                (set! tbl (string-append tbl "LAYER " file-name " " layer-name "\n"))
                 (file-png-save-defaults RUN-NONINTERACTIVE image-id layer-id file-name file-name)
                 (set! i (- i 1))
+                (set! layer-index (+ layer-index 1))
            )
     )
-    (set! tbl (string-append tbl "\n"))
 
     (set! tbl (string-append
                 tbl

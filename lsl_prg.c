@@ -21,9 +21,7 @@ struct atls* active_atls;
 struct atls_glyph_table* active_glyph_table;
 struct atls_cell_table* active_cell_table;
 struct atls_glyph* rgly_dot;
-#define MAX_PALETTE_LENGTH (256)
-union vec4 cell_table_palette[MAX_PALETTE_LENGTH];
-int cell_table_palette_length;
+
 int cursor_x;
 int cursor_x0;
 int cursor_y;
@@ -238,24 +236,11 @@ void lsl_set_type_index(unsigned int index)
 	active_glyph_table = &active_atls->glyph_tables[index];
 }
 
-struct atls_cell_table* lsl_set_cell_table(unsigned int index, struct atls_colorscheme* palette)
+struct atls_cell_table* lsl_set_cell_table(unsigned int index)
 {
 	assert(index >= 0);
 	assert(index < active_atls->n_cell_tables);
 	active_cell_table = &active_atls->cell_tables[index];
-
-	for (int i = 0; i < active_cell_table->n_layers && i < MAX_PALETTE_LENGTH; i++) {
-		struct atls_color* color = atls_colorscheme_layer_lookup(palette, active_cell_table->layer_names[i].id);
-		if (color == NULL) {
-			cell_table_palette[i] = (union vec4) { .r=1, .g=0, .b=1, .a=1 };
-		} else {
-			atls_color_rgba(color,
-				&cell_table_palette[i].r,
-				&cell_table_palette[i].g,
-				&cell_table_palette[i].b,
-				&cell_table_palette[i].a);
-		}
-	}
 
 	return active_cell_table;
 }
@@ -265,6 +250,18 @@ void lsl_set_cursor(int x, int y)
 	cursor_x = cursor_x0 = x;
 	cursor_y = y;
 }
+
+union vec4 lsl_eval(int atls_prg_id)
+{
+	float out[4];
+	if (atls_prg_id >= 0 && atls_eval(active_atls, atls_prg_id, out) >= 0) {
+		return (union vec4) { .r = out[0], .g = out[1], .b = out[2], .a = out[3]};
+	} else {
+		return (union vec4) { .r = 1, .g = 0, .b = 1, .a = 1};
+	}
+}
+
+
 
 void lsl_set_gradient(union vec4 color0, union vec4 color1)
 {
