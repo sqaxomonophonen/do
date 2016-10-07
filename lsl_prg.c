@@ -378,13 +378,14 @@ void lsl_frame_pop()
 	assert_valid_frame_stack_top(--frame_stack_top_index);
 }
 
-void lsl_bezier(union vec2 p0, union vec2 p1, union vec2 p2, union vec2 p3)
+void lsl_bezier(float thickness, union vec2 p0, union vec2 p1, union vec2 p2, union vec2 p3)
 {
 	const int N = 50;
 	for (int i = 0; i < N; i++) {
 		float t0 = (float)i / (float)N;
 		float t1 = (float)(i+1) / (float)N;
 		lsl_line(
+			thickness,
 			bezier2(t0, p0, p1, p2, p3),
 			bezier2(t1, p0, p1, p2, p3));
 	}

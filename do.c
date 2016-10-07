@@ -16,6 +16,8 @@ int colorpid_builtin_footer_text;
 int colorpid_builtin_port_text;
 int colorpid_connection_signal;
 
+int cvi_selected;
+
 int type_index_main;
 int type_index_subs;
 
@@ -284,11 +286,13 @@ static int winproc_graph(struct window* w)
 					}
 				}
 
-				if (window_graph_is_selected(w, subject)) {
-					// TODO set ctxvar!
-				}
+				atls_ctx_set(atls, cvi_selected, window_graph_is_selected(w, subject));
+
+				lsl_set_color((union vec4) { .r=0, .g=0, .b=0, .a=1 }); // TODO colorpid_something
+				lsl_bezier(1.2f, p0, p1, p2, p3); // TODO thicknesses -> eval'd?
+
 				lsl_set_color(lsl_eval(colorpid_connection_signal));
-				lsl_bezier(p0, p1, p2, p3);
+				lsl_bezier(0.1f, p0, p1, p2, p3);
 			} else if (pass == 1) {
 				if (distance < min_distance) {
 					if (next_selection != NULL) {
@@ -434,6 +438,8 @@ static int winproc_graph(struct window* w)
 
 static int winproc(void* usr)
 {
+	atls_enter_ctx(atls);
+
 	struct window* win = (struct window*) usr;
 	//struct lsl_frame* f = lsl_frame_top();
 
@@ -445,6 +451,8 @@ static int winproc(void* usr)
 		retval = winproc_graph(win);
 		break;
 	}
+
+	atls_leave_ctx(atls);
 
 	return retval;
 }
@@ -496,6 +504,8 @@ static struct atls* load_atlas(char* path)
 	colorpid_builtin_footer_text = atls_get_prg_id(atls, "builtin.footer_text");
 	colorpid_builtin_port_text = atls_get_prg_id(atls, "builtin.port_text");
 	colorpid_connection_signal = atls_get_prg_id(atls, "connection.signal"); // XXX is type a ctxvar?
+
+	cvi_selected = atls_get_ctxkey_id(atls, "selected");
 
 	return atls;
 }

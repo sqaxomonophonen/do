@@ -1,3 +1,8 @@
+/*
+XXX leaks memory, dies on errors, drowns kittens; don't use this in Do code
+without cleaning it up first
+*/
+
 #include <assert.h>
 #include <string.h>
 #include <stdlib.h>
@@ -1330,17 +1335,62 @@ static int prgs_emit(struct prgs* prgs, char* src, struct sexpr* e)
 				abort();
 			}
 
+			unsigned short op = fc << 3;
+			dya_append(&prgs->code_dya, (void**)&prgs->code, &op);
+
 			struct sexpr* o = s->next;
 			for (int i = 0; i < n_operands_actual; i++) {
 				assert(o != NULL);
 				prgs_emit(prgs, src, o);
 				o = o->next;
 			}
+			assert(o == NULL);
 		}
 	} else {
 		assert(!"what sexpr type?");
 	}
 	return top;
+}
+
+static void wrstr(char** d, const char* s)
+{
+	strcpy(*d, s);
+	*d += strlen(s);
+}
+
+static void sexpr_str_rec(char* src, struct sexpr* e, char** sp)
+{
+	if (e == NULL) {
+		wrstr(sp, "NULL");
+	} else if (sexpr_is_atom(e)) {
+		if (e->atom.len > 0) {
+			memcpy(*sp, src + e->atom.pos, e->atom.len);
+			*sp += e->atom.len;
+		} else {
+			assert(!"invalid atom");
+		}
+	} else if (sexpr_is_list(e)) {
+		wrstr(sp, "(");
+		int first = 1;
+		for (struct sexpr* i = e->list; i; i = i->next) {
+			if (!first) wrstr(sp, " ");
+			sexpr_str_rec(src, i, sp);
+			first = 0;
+		}
+		wrstr(sp, ")");
+	} else {
+		assert(!"not atom or list?!");
+	}
+}
+
+char tmpstr[65536];
+static char* sexpr_str(char* src, struct sexpr* e)
+{
+	char* s = tmpstr;
+	char* cpy = s;
+	sexpr_str_rec(src, e, &cpy);
+	*cpy = 0;
+	return s;
 }
 
 static unsigned int prgs_compile(struct prgs* prgs, char* key, char* src)
@@ -1349,6 +1399,8 @@ static unsigned int prgs_compile(struct prgs* prgs, char* key, char* src)
 	parser_init(&parser, src);
 	struct sexpr* se = parse_expr(&parser);
 	assert(se != NULL);
+
+	int c0 = prgs->code_dya.n;
 
 	dya_append(&prgs->sexprs_dya, (void**)&prgs->sexprs, &se);
 	unsigned int program_key = strtbl_add(prgs->strtbl, key);
@@ -1360,6 +1412,12 @@ static unsigned int prgs_compile(struct prgs* prgs, char* key, char* src)
 
 	prgs->n_programs++;
 
+	int nops = prgs->code_dya.n - c0;
+
+	printf("  C  %s: '%s' => %s (%d ops)\n", key, src, sexpr_str(src, se), nops);
+	for (int i = 0; i < nops; i++) {
+		printf("       %04x\n", prgs->code[c0 + i]);
+	}
 	return offset;
 }
 

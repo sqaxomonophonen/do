@@ -31,11 +31,6 @@ struct atls_colorscheme {
 	unsigned int* colors;
 };
 
-struct atls_ctx {
-	int* bitmask; // 1 means value has been set, 0 means get value from parent ctx
-	float* values;
-};
-
 typedef unsigned short atls_op;
 
 struct atls {
@@ -71,7 +66,8 @@ struct atls {
 	// vvv state
 
 	int n_contexts;
-	struct atls_ctx* contexts;
+	int* _ctx_bitmask;
+	float* _ctx_value;
 
 	struct atls_colorscheme* active_colorscheme;
 };
@@ -86,9 +82,9 @@ int atls_use_colorscheme(struct atls*, char* name);
 int atls_get_ctxkey_id(struct atls*, char* key);
 int atls_get_prg_id(struct atls*, char* prg);
 
-struct atls_ctx atls_enter_ctx(struct atls*);
+void atls_enter_ctx(struct atls*);
 void atls_leave_ctx(struct atls*);
-void atls_ctx_set(struct atls_ctx*, int ctxkey_id, float value);
+void atls_ctx_set(struct atls*, int ctxkey_id, float value);
 
 int atls_glyph_table_index(struct atls_glyph_table*, int codepoint);
 struct atls_glyph* atls_glyph_table_lookup(struct atls_glyph_table*, int codepoint);

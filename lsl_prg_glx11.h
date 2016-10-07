@@ -411,14 +411,13 @@ void lsl_cell_plot(int column, int row, int x, int y, int width, int height)
 	}
 }
 
-void lsl_line(union vec2 p0, union vec2 p1)
+void lsl_line(float thickness, union vec2 p0, union vec2 p1)
 {
 	struct rect fr = lsl_frame_top()->rect;
 
 	p0 = vec2_add(p0, fr.p0);
 	p1 = vec2_add(p1, fr.p0);
 
-	const float thickness = 0.1;
 	for (int i = 0; i < 3; i++) {
 		union vec2 d = vec2_unit(vec2_normal(vec2_sub(p1, p0)));
 

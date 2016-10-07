@@ -41,5 +41,17 @@ enum atlsvm_fcode {
 	ATLSVM__MAX
 };
 
+static inline char* atlsvm_fcode_str(enum atlsvm_fcode fc)
+{
+	switch (fc) {
+	#define ATLSVM_DEF(t,n,fn) case t: return #t;
+	ATLSVM_FCODE_LST
+	#undef ATLSVM_DEF
+	default:
+		return "????";
+	}
+}
+
+
 #define ATLSVM
 #endif

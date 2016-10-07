@@ -135,6 +135,12 @@ struct atls* atls_load_from_file(char* file)
 				return NULL;
 			}
 
+			// reserve space for contexts
+			int ctx_storage = MAX_CONTEXTS * n_ctx_keys;
+			n_floats += ctx_storage;
+			int ctx_bitmask_storage = (ctx_storage+31) >> 5;
+			n_ints += ctx_bitmask_storage;
+
 			size_t sz = 0;
 			size_t offset_atls = reserve(&sz, 1, sizeof(struct atls));
 			size_t offset_glt = reserve(&sz, n_glyph_tables, sizeof(struct atls_glyph_table));
@@ -148,7 +154,6 @@ struct atls* atls_load_from_file(char* file)
 			size_t offset_colorschemes = reserve(&sz, n_colorschemes, sizeof(struct atls_colorscheme));
 			size_t offset_btmp = reserve(&sz, atlas_width * atlas_height, 1);
 			size_t offset_strlst = reserve(&sz, strlst_sz, 1);
-			size_t offset_contexts = reserve(&sz, MAX_CONTEXTS, sizeof(struct atls_ctx));
 
 			void* data = calloc(1, sz);
 			assert(data != NULL);
@@ -201,7 +206,10 @@ struct atls* atls_load_from_file(char* file)
 			r_atls->atlas_bitmap = data + offset_btmp;
 
 			r_atls->n_contexts = 0;
-			r_atls->contexts = data + offset_contexts;
+			r_atls->_ctx_bitmask = r_ints + i_int;
+			i_int += ctx_bitmask_storage;
+			r_atls->_ctx_value = r_floats + i_float;
+			i_float += ctx_storage;
 		}
 
 		int state = 0;
@@ -462,6 +470,14 @@ int atls_use_colorscheme(struct atls* a, char* name)
 	return -1;
 }
 
+int atls_get_ctxkey_id(struct atls* a, char* key)
+{
+	for (int i = 0; i < a->n_ctx_keys; i++) {
+		if (strcmp(a->ctx_keys[i], key) == 0) return i;
+	}
+	return -1;
+}
+
 int atls_get_prg_id(struct atls* a, char* prg)
 {
 	for (int i = 0; i < a->n_programs; i++) {
@@ -470,21 +486,62 @@ int atls_get_prg_id(struct atls* a, char* prg)
 	return -1;
 }
 
-
-static float ctx_get(struct atls* a, int index)
+void atls_enter_ctx(struct atls* a)
 {
-	assert(index >= 0);
-	assert(index < a->n_ctx_keys);
-	int ctxid = a->n_contexts - 1;
-	assert(ctxid < MAX_CONTEXTS);
-	int bi0 = index>>5;
-	int bi1 = index&0x20;
-	while (ctxid >= 0) {
-		struct atls_ctx* c = &a->contexts[ctxid];
-		if ((c->bitmask[bi0] >> bi1) & 1) return c->values[index];
-		ctxid--;
+	assert(a->n_contexts >= 0);
+	a->n_contexts++;
+	assert(a->n_contexts <= MAX_CONTEXTS);
+
+	int i0 = (a->n_contexts-1) * a->n_ctx_keys;
+	int i1 = a->n_contexts * a->n_ctx_keys;
+	for (int i = i0; i < i1; i++) {
+		int bi0 = i>>5;
+		int bi1 = i&31;
+		a->_ctx_bitmask[bi0] &= ~(1<<bi1);
 	}
-	return 0;
+}
+
+void atls_leave_ctx(struct atls* a)
+{
+	a->n_contexts--;
+	assert(a->n_contexts >= 0);
+}
+
+void atls_ctx_set(struct atls* a, int ctxkey_id, float value)
+{
+	if (ctxkey_id < 0) return; // no assert; -1 means key not found
+	assert(ctxkey_id < a->n_ctx_keys);
+	assert(a->n_contexts > 0);
+	assert(a->n_contexts <= MAX_CONTEXTS);
+
+	int i = (a->n_contexts-1) * a->n_ctx_keys + ctxkey_id;
+	a->_ctx_value[i] = value;
+
+	// flag bit
+	int bi0 = i>>5;
+	int bi1 = i&31;
+	a->_ctx_bitmask[bi0] |= (1<<bi1);
+}
+
+static float ctx_get(struct atls* a, int ctxkey_id)
+{
+	assert(ctxkey_id >= 0);
+	assert(ctxkey_id < a->n_ctx_keys);
+
+	if (a->n_contexts <= 0) return 0.0f;
+	assert(a->n_contexts <= MAX_CONTEXTS);
+
+	int ci = a->n_contexts-1;
+	while (ci >= 0) {
+		int i = ci * a->n_ctx_keys + ctxkey_id;
+		int bi0 = i>>5;
+		int bi1 = i&31;
+		if ((a->_ctx_bitmask[bi0] >> bi1) & 1) {
+			return a->_ctx_value[i];
+		}
+		ci--;
+	}
+	return 0.0f;
 }
 
 static void cols_get(struct atls* a, int index, float* out)
@@ -501,27 +558,51 @@ static float fcf_lerp(float t, float a, float b)
 	return a + (b-a) * t;
 }
 
+////#define EVAL_TRACE
+#ifdef EVAL_TRACE
+static char* indent(int n)
+{
+	char* spaaace = "                                                                          ";
+	size_t m = strlen(spaaace);
+	if (n > m) {
+		return spaaace;
+	} else {
+		return spaaace+m-n;
+	}
+}
+#endif
+
 static int eval(struct atls* a, int opi, int depth, float* output)
 {
 	if (depth > 2048) return -1;
 
 	assert(opi >= 0);
-	if (opi >= a->program_storage) return -1;
+	if (opi >= a->program_storage) return -2;
 	atls_op op = a->programs[opi];
+
+	#ifdef EVAL_TRACE
+	printf("%s (opi=%d / op=%d) ", indent(depth), opi, op);
+	#endif
 
 	if (op & 1) {
 		// load constant
 		int constant_index = op >> 2;
-		if (constant_index < 0) return -1;
+		if (constant_index < 0) return -3;
 		if (op & 2) {
+			// load vec4 constant
+			if (constant_index > (a->n_constants - 4)) return -5;
+			for (int i = 0; i < 4; i++) output[i] = a->constants[constant_index + i];
+			#ifdef EVAL_TRACE
+			printf("LOAD VEC4 CONST (%.3f, %.3f, %.3f, %.3f)\n", output[0], output[1], output[2], output[3]);
+			#endif
+		} else {
 			// load float constant
-			if (constant_index >= a->n_constants) return -1;
+			if (constant_index >= a->n_constants) return -4;
 			float v = a->constants[constant_index];
 			for (int i = 0; i < 4; i++) output[i] = v;
-		} else {
-			// load vec4 constant
-			if (constant_index > (a->n_constants - 4)) return -1;
-			for (int i = 0; i < 4; i++) output[i] = a->constants[constant_index + i];
+			#ifdef EVAL_TRACE
+			printf("LOAD FLOAT CONST %.3f\n", v);
+			#endif
 		}
 		return opi + 1;
 	} else if ((op & 3) == 2) {
@@ -529,37 +610,48 @@ static int eval(struct atls* a, int opi, int depth, float* output)
 		int var_index = op >> 3;
 		if (op & 4) {
 			// load colorscheme value
-			if (var_index < 0 || var_index >= a->n_colors_per_colorscheme) return -1;
+			if (var_index < 0 || var_index >= a->n_colors_per_colorscheme) return -6;
 			cols_get(a, var_index, output);
+			#ifdef EVAL_TRACE
+			printf("LOAD COLS (%.3f, %.3f, %.3f, %.3f)\n", output[0], output[1], output[2], output[3]);
+			#endif
 		} else {
 			// load ctx var
-			if (var_index < 0 || var_index >= a->n_ctx_keys) return -1;
+			if (var_index < 0 || var_index >= a->n_ctx_keys) return -7;
 			float v = ctx_get(a, var_index);
 			for (int i = 0; i < 4; i++) output[i] = v;
+			#ifdef EVAL_TRACE
+			printf("LOAD CTX VAR %.3f\n", v);
+			#endif
 		}
 		return opi + 1;
 	} else if ((op & 63) == 4) {
 		// select
 		int n_val_exprs = op >> 6;
-		(opi)++;
+		opi++;
 		atls_op* jmptbl = &a->programs[opi];
-		(opi) += n_val_exprs + 1;
+		opi += n_val_exprs + 1;
 		int jmpbase = opi;
 
 		float selector[4];
-		if (eval(a, opi, depth+1, selector) < 0) return -1;
+		if (eval(a, opi, depth+1, selector) < 0) return -8;
 
 		int selector_index = (int)selector[0];
 		if (selector_index < 0 || selector_index >= n_val_exprs) {
 			for (int i = 0; i < 4; i++) output[i] = 0;
 		} else {
 			int new_opi = jmpbase + jmptbl[selector_index];
-			if (eval(a, new_opi, depth+1, output) < 0) return -1;
+			if (eval(a, new_opi, depth+1, output) < 0) return -9;
 		}
 		return jmpbase + jmptbl[n_val_exprs];
-	} else {
+	} else if ((op & 7) == 0) {
 		// op/function
 		enum atlsvm_fcode fc = op >> 3;
+
+		#ifdef EVAL_TRACE
+		printf("OP %s\n", atlsvm_fcode_str(fc));
+		#endif
+		opi++;
 
 		// determine operand count
 		int n_operands = 0;
@@ -568,14 +660,14 @@ static int eval(struct atls* a, int opi, int depth, float* output)
 		ATLSVM_FCODE_LST
 		#undef ATLSVM_DEF
 		default:
-			return -1;
+			return -10;
 		}
 
 		// eval args
 		float values[3*4];
 		for (int i = 0; i < n_operands; i++) {
 			opi = eval(a, opi, depth+1, values + i*4);
-			if (opi < 0) return -1;
+			if (opi < 0) return opi;
 		}
 
 		// execute function with args
@@ -599,7 +691,7 @@ static int eval(struct atls* a, int opi, int depth, float* output)
 		#undef ATLSVM_DEF
 
 		default:
-			return -1;
+			return -12;
 
 		#undef ATLSVM_FN3
 		#undef ATLSVM_FN2
@@ -610,13 +702,21 @@ static int eval(struct atls* a, int opi, int depth, float* output)
 		}
 
 		return opi;
+	} else {
+		return -13;
 	}
 }
 
 int atls_eval(struct atls* a, int prg_id, float* output)
 {
+	/* TODO cache results? */
+	#ifdef EVAL_TRACE
+	printf("EVAL\n");
+	#endif
 	assert(prg_id >= 0 && prg_id < a->program_storage);
-	return eval(a, prg_id, 0, output);
+	int r = eval(a, prg_id, 0, output);
+	if (r < 0) printf("%d\n", r);
+	return r;
 }
 
 int atls_glyph_table_index(struct atls_glyph_table* t, int codepoint)
