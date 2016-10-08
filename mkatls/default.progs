@@ -1,4 +1,4 @@
 background @background
 builtin.footer_text @builtin.footer_text
 builtin.port_text @builtin.port_text
-connection.signal @connection.signal + 0.8*$selected
+connection.signal select($selected, @connection.signal, @connection.selected)

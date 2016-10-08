@@ -893,6 +893,7 @@ static inline int infix_bp(enum token_type tt)
 		// expression terminators
 		case T_EOF:
 		case T_RPAREN:
+		case T_COMMA:
 			return 0;
 		case T_PLUS:
 		case T_MINUS:
@@ -976,11 +977,11 @@ static struct sexpr* parse_expr_rec(struct parser* p, int rbp, int depth)
 				left = operand;
 				if (!parser_expect(p, T_RPAREN)) return NULL;
 			} else {
-				fprintf(stderr, "unexpected token %d\n", tt);
+				fprintf(stderr, "unexpected token (1) %d\n", tt);
 				abort();
 			}
 		} else {
-			fprintf(stderr, "unexpected token %d\n", tt);
+			fprintf(stderr, "unexpected token (2) %d\n", tt);
 			abort();
 		}
 	}
@@ -988,7 +989,7 @@ static struct sexpr* parse_expr_rec(struct parser* p, int rbp, int depth)
 	for (;;) {
 		int lbp = infix_bp(p->next_token.type);
 		if (lbp == -1) {
-			fprintf(stderr, "unexpected token %d\n", tt);
+			fprintf(stderr, "unexpected token (3) %d\n", tt);
 			abort();
 		}
 		if (rbp >= lbp) break;
@@ -1012,14 +1013,14 @@ static struct sexpr* parse_expr_rec(struct parser* p, int rbp, int depth)
 				sexpr_append(&cursor, a);
 
 				if (p->next_token.type != T_RPAREN && p->next_token.type != T_COMMA) {
-					fprintf(stderr, "unexpected token %d\n", tt);
+					fprintf(stderr, "unexpected token (4) %d\n", tt);
 					abort();
 				}
 				more = p->next_token.type == T_COMMA;
 				parser_next_token(p);
 			}
 		} else {
-			fprintf(stderr, "unexpected token %d\n", tt);
+			fprintf(stderr, "unexpected token (5) %d\n", tt);
 			abort();
 		}
 	}
@@ -1290,7 +1291,7 @@ static int prgs_emit(struct prgs* prgs, char* src, struct sexpr* e)
 		int is_select = 0;
 		if (fc == ATLSVM__ZERO) {
 			assert(tt == T_IDENT);
-			#define MATCH(str) (strlen(str) == s->atom.len && memcmp(str, src+s->atom.pos, s->atom.len))
+			#define MATCH(str) (strlen(str) == s->atom.len && memcmp(str, src+s->atom.pos, s->atom.len) == 0)
 			if (MATCH("select")) {
 				is_select = 1;
 			}
@@ -1314,7 +1315,38 @@ static int prgs_emit(struct prgs* prgs, char* src, struct sexpr* e)
 		}
 
 		if (is_select) {
-			assert(!"TODO"); // XXX TODO
+			struct sexpr* condition = s->next;
+			assert(condition != NULL);
+
+			struct sexpr* args = condition->next;
+			int n_args = 0;
+			for (struct sexpr* i = args; i != NULL; i = i->next) {
+				n_args++;
+			}
+			assert(n_args < (1<<10));
+
+			unsigned short op = 4 | (n_args << 6);
+			dya_append(&prgs->code_dya, (void**)&prgs->code, &op);
+
+			int offset_tbl_begin = prgs->code_dya.n;
+			for (int i = 0; i <= n_args; i++) {
+				unsigned short offset_tbl_placeholder = 0xCAFE;
+				dya_append(&prgs->code_dya, (void**)&prgs->code, &offset_tbl_placeholder);
+			}
+
+			// emit condition code
+			int code_offset = prgs->code_dya.n;
+			prgs_emit(prgs, src, condition);
+
+			struct sexpr* o = args;
+			for (int i = 0; i <= n_args; i++) {
+				prgs->code[offset_tbl_begin + i] = prgs->code_dya.n - code_offset;
+				if (i < n_args) {
+					prgs_emit(prgs, src, o);
+					o = o->next;
+				}
+			}
+			assert(o == NULL);
 		} else {
 			assert(fc != ATLSVM__ZERO);
 			int n_operands_expected = 0;
@@ -1408,6 +1440,7 @@ static unsigned int prgs_compile(struct prgs* prgs, char* key, char* src)
 	unsigned int offset = prgs->code_dya.n;
 	dya_append(&prgs->program_offsets_dya, (void**)&prgs->program_offsets, &offset);
 
+	// TODO sexpr transforms? e.g. if(c,t,f) => select(c,f,t)
 	prgs_emit(prgs, src, se);
 
 	prgs->n_programs++;
