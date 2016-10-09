@@ -61,6 +61,7 @@ Cursor cursor_default;
 Cursor cursor_horiz;
 Cursor cursor_vert;
 Cursor cursor_cross;
+Cursor cursor_touch;
 
 Cursor current_cursor;
 Cursor last_cursor;
@@ -486,6 +487,9 @@ void lsl_set_pointer(int id)
 		case LSL_POINTER_4WAY:
 			c = cursor_cross;
 			break;
+		case LSL_POINTER_TOUCH:
+			c = cursor_touch;
+			break;
 	}
 	current_cursor = c;
 }
@@ -857,10 +861,12 @@ int main(int argc, char** argv)
 		XSetErrorHandler(old_handler);
 	}
 
+	/* https://tronche.com/gui/x/xlib/appendix/b/ */
 	cursor_default = XCreateFontCursor(dpy, XC_left_ptr);
 	cursor_horiz = XCreateFontCursor(dpy, XC_sb_h_double_arrow);
 	cursor_vert = XCreateFontCursor(dpy, XC_sb_v_double_arrow);
 	cursor_cross = XCreateFontCursor(dpy, XC_fleur);
+	cursor_touch = XCreateFontCursor(dpy, XC_hand1);
 
 	int exit_status = lsl_main(argc, argv);
 

@@ -61,15 +61,15 @@ void lsl_scope_pop();
 
 #define LSL_POINTER_HORIZONTAL (1)
 #define LSL_POINTER_VERTICAL (2)
-#define LSL_POINTER_4WAY (4)
+#define LSL_POINTER_4WAY (3)
+#define LSL_POINTER_TOUCH (4)
 void lsl_set_pointer(int);
 
 
 #define LSL_DRAG_START (1)
 #define LSL_DRAG_CONT (2)
 #define LSL_DRAG_STOP (3)
-
-int lsl_drag(const char* id, struct rect* handle, int* x, int* y, int fx, int fy);
+int lsl_drag(const char* id, int can_begin_drag, int pointer, int* x, int* y, int fx, int fy);
 
 
 #define LSL_PRG_H

@@ -1,4 +1,5 @@
 background @background
 builtin.footer_text @builtin.footer_text
 builtin.port_text @builtin.port_text
+connection.shadow @connection.shadow
 connection.signal select($selected, @connection.signal, @connection.selected)

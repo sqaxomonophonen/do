@@ -297,25 +297,13 @@ int lsl_printf(const char* fmt, ...)
 	return lsl_write(buf, n);
 }
 
-static void set_vh_pointer(int xp, int yp)
-{
-	if (xp && !yp) {
-		lsl_set_pointer(LSL_POINTER_HORIZONTAL);
-	} else if (!xp && yp) {
-		lsl_set_pointer(LSL_POINTER_VERTICAL);
-	} else if (xp && yp) {
-		lsl_set_pointer(LSL_POINTER_4WAY);
-	}
-}
-
 u64 drag_active_id;
 int drag_active;
 int drag_initial_x;
 int drag_initial_y;
 int drag_initial_mx;
 int drag_initial_my;
-
-int lsl_drag(const char* id, struct rect* r, int* x, int* y, int fx, int fy)
+int lsl_drag(const char* id, int can_begin_drag, int pointer, int* x, int* y, int fx, int fy)
 {
 	if (x == NULL && y == NULL) return 0;
 
@@ -329,7 +317,7 @@ int lsl_drag(const char* id, struct rect* r, int* x, int* y, int fx, int fy)
 	if (drag_active) {
 		if (drag_active_id != drag_id) return 0;
 
-		set_vh_pointer(x != NULL, y != NULL);
+		lsl_set_pointer(pointer);
 
 		retval = LSL_DRAG_CONT;
 		if (!btn) {
@@ -339,8 +327,8 @@ int lsl_drag(const char* id, struct rect* r, int* x, int* y, int fx, int fy)
 		}
 		if (x != NULL) *x = drag_initial_x + (f->mpos.x - drag_initial_mx) * fx;
 		if (y != NULL) *y = drag_initial_y + (f->mpos.y - drag_initial_my) * fy;
-	} else if (r == NULL || rect_contains_point(r, f->mpos)) {
-		if (r != NULL) set_vh_pointer(x != NULL, y != NULL);
+	} else if (can_begin_drag) {
+		if (pointer != 0) lsl_set_pointer(pointer);
 
 		if (btn) {
 			drag_active_id = drag_id;
