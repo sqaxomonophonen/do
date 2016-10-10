@@ -116,6 +116,8 @@ void dd_commit(struct dd*);
 struct dd_node* dd_graph_new_node(struct dd_graph*, char* def);
 int dd_graph_delete_node(struct dd_graph*, u32 id);
 struct dd_node* dd_graph_find_node(struct dd_graph*, u32 id);
+
+int dd_graph_can_connect(struct dd_graph*, u32 src_node_id, u16 src_port_id, u32 dst_node_id, u16 dst_port_id);
 int dd_graph_connect(struct dd_graph*, u32 src_node_id, u16 src_port_id, u32 dst_node_id, u16 dst_port_id);
 int dd_graph_disconnect(struct dd_graph*, u32 src_node_id, u16 src_port_id, u32 dst_node_id, u16 dst_port_id);
 

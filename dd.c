@@ -4,10 +4,9 @@
 
 #include "dd.h"
 
-u32 next_node_id;
-
 static u32 get_next_node_id()
 {
+	static u32 next_node_id;
 	return ++next_node_id;
 }
 
@@ -322,15 +321,21 @@ static int has_connection(struct dd_graph* dg, struct dd_conn* nc)
 	return dya_bs_find(&dg->conns_dya, (void**)&dg->conns, conn_compar, nc) >= 0;
 }
 
-int dd_graph_connect(struct dd_graph* dg, u32 src_node_id, u16 src_port_id, u32 dst_node_id, u16 dst_port_id)
+static int has_connection_dst(struct dd_graph* dg, struct dd_conn* nc)
 {
-	struct dd_node* src_node = dd_graph_find_node(dg, src_node_id);
-	if (src_node == NULL) return -1;
-	struct dd_node* dst_node = dd_graph_find_node(dg, dst_node_id);
-	if (dst_node == NULL) return -1;
+	return dya_bs_find(&dg->conns_dya, (void**)&dg->conns, conn_dst_compar, nc) >= 0;
+}
 
-	if (!is_valid_port_id(src_node, src_port_id, 0)) return -1;
-	if (!is_valid_port_id(dst_node, dst_port_id, 1)) return -1;
+int dd_graph_can_connect(struct dd_graph* dg, u32 src_node_id, u16 src_port_id, u32 dst_node_id, u16 dst_port_id)
+{
+	struct dd_node* src_node = NULL;
+	struct dd_node* dst_node = NULL;
+
+	if (src_node_id > 0) {
+		src_node = dd_graph_find_node(dg, src_node_id);
+		if (src_node == NULL) return 0;
+		if (!is_valid_port_id(src_node, src_port_id, 0)) return 0;
+	}
 
 	struct dd_conn nc;
 	memset(&nc, 0, sizeof(nc));
@@ -339,14 +344,41 @@ int dd_graph_connect(struct dd_graph* dg, u32 src_node_id, u16 src_port_id, u32 
 	nc.dst_node_id = dst_node_id;
 	nc.dst_port_id = dst_port_id;
 
-	if (dya_bs_find(&dg->conns_dya, (void**)&dg->conns, conn_dst_compar, &nc) >= 0) {
-		/* there's already a connection to dst port (can only have 1)
-		 * */
-		return -1;
+	if (dst_node_id > 0) {
+		dst_node = dd_graph_find_node(dg, dst_node_id);
+		if (dst_node == NULL) return 0;
+		if (!is_valid_port_id(dst_node, dst_port_id, 1)) return 0;
+		if (has_connection_dst(dg, &nc)) return 0;
 	}
-	if (has_connection(dg, &nc)) {
-		return -1;
+
+	if (src_node != NULL && dst_node != NULL && has_connection(dg, &nc)) {
+		return 0;
 	}
+
+	/*
+	TODO "type check"; assert port types are "compatible"
+	TODO assert there are no graph cycles (or that cycles are "legal",
+	however that's going to play out)
+	*/
+
+	return 1;
+}
+
+int dd_graph_connect(struct dd_graph* dg, u32 src_node_id, u16 src_port_id, u32 dst_node_id, u16 dst_port_id)
+{
+	struct dd_node* src_node = dd_graph_find_node(dg, src_node_id);
+	if (src_node == NULL) return -1;
+	struct dd_node* dst_node = dd_graph_find_node(dg, dst_node_id);
+	if (dst_node == NULL) return -1;
+
+	if (!dd_graph_can_connect(dg, src_node_id, src_port_id, dst_node_id, dst_port_id)) return -1;
+
+	struct dd_conn nc;
+	memset(&nc, 0, sizeof(nc));
+	nc.src_node_id = src_node_id;
+	nc.src_port_id = src_port_id;
+	nc.dst_node_id = dst_node_id;
+	nc.dst_port_id = dst_port_id;
 
 	dya_bs_insert(&dg->conns_dya, (void**)&dg->conns, conn_compar, &nc);
 	return 0;

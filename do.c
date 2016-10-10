@@ -17,7 +17,7 @@ int colorpid_builtin_port_text;
 int colorpid_connection_shadow;
 int colorpid_connection_signal;
 
-int cvi_selected;
+int cvi_modifier;
 
 int type_index_main;
 int type_index_subs;
@@ -110,8 +110,11 @@ struct window {
 	struct graph_view* graph_view_stack;
 	struct graph_view graph_view_root;
 
-	struct dd_node* graph_tmp_conn_node;
-	int graph_tmp_conn_index;
+	struct {
+		struct dd_node* node;
+		int pos;
+		u16 port_id;
+	} graph_tmp_conn;
 
 	int modal;
 
@@ -199,9 +202,9 @@ static float connection_distance(union vec2 p0, union vec2 p1, union vec2 p)
 	return bezier2_distance(p, p0, c0, c1, p1);
 }
 
-static void draw_connection(union vec2 p0, union vec2 p1, int is_selected)
+static void draw_connection(union vec2 p0, union vec2 p1, int modifier)
 {
-	atls_ctx_set(atls, cvi_selected, is_selected);
+	atls_ctx_set(atls, cvi_modifier, modifier);
 
 	union vec2 tangent = connection_tangent();
 	union vec2 c0 = vec2_add(p0, tangent);
@@ -212,6 +215,29 @@ static void draw_connection(union vec2 p0, union vec2 p1, int is_selected)
 
 	lsl_set_color(lsl_eval(colorpid_connection_signal));
 	lsl_bezier(0.1f, p0, c0, c1, p1);
+}
+
+static inline int encode_pos(int side, int index)
+{
+	return side == 0 ? index+1 : -index-1;
+}
+
+static inline void decode_pos(int pos, int* side, int* index)
+{
+	if (side) *side = pos < 0;
+	if (index) *index = pos > 0 ? pos-1 : -pos-1;
+}
+
+static u16 port_id_at(struct dd_node* node, int pos)
+{
+	int side, index;
+	decode_pos(pos, &side, &index);
+	struct dd_port_it it = side == 0 ? dd_node_inport_it(node) : dd_node_outport_it(node);
+	for (; it.valid; dd_port_it_next(&it)) {
+		if (index == 0) return it.id;
+		index--;
+	}
+	assert(!"not found");
 }
 
 static int winproc_graph(struct window* w)
@@ -243,11 +269,13 @@ static int winproc_graph(struct window* w)
 
 	// node/port interaction
 	int input_stolen = 0;
-	int port_nearest_d2 = -1;
-	int port_nearest_i = -1;
-	int port_nearest_s = -1;
-	union vec2 port_nearest_p;
-	struct dd_node* port_nearest_node = NULL;
+
+	struct {
+		int r2;
+		int pos;
+		struct dd_node* node;
+	} nearport = { .r2 = -1 };
+
 	for (int i = graph->nodes_dya.n-1; i >= 0; i--) {
 		struct dd_node* node = &graph->nodes[i];
 
@@ -259,27 +287,22 @@ static int winproc_graph(struct window* w)
 
 		int max_n = n_in > n_out ? n_in : n_out;
 		for (int i = 0; i < max_n; i++) {
-			for (int s = 0; s < 2; s++) {
-				if ((s == 0 && i >= n_in) || (s == 1 && i >= n_out)) continue;
-				int cx = s == 0 ? (clt->widths[0]/2) : (width - clt->widths[2]/2);
-				int cy = (s == 0 ? port_y0 : port_y1) + i*port_height + port_height/2;
+			for (int side = 0; side < 2; side++) {
+				if ((side == 0 && i >= n_in) || (side == 1 && i >= n_out)) continue;
+				int cx = side == 0 ? (clt->widths[0]/2) : (width - clt->widths[2]/2);
+				int cy = (side == 0 ? port_y0 : port_y1) + i*port_height + port_height/2;
 
 				int dx = cx - rx;
 				int dy = cy - ry;
 
-				int d2 = dx*dx + dy*dy;
-				if (d2 < 50) { // XXX meta?
+				int r2 = dx*dx + dy*dy;
+				if (r2 < 50) { // XXX meta?
 					lsl_set_pointer(LSL_POINTER_TOUCH);
 					input_stolen |= 2;
-					if (port_nearest_d2 < 0 || d2 < port_nearest_d2) {
-						port_nearest_d2 = d2;
-						port_nearest_node = node;
-						port_nearest_i = i;
-						port_nearest_s = s;
-						port_nearest_p = (union vec2) {
-							.x = (node->x - view->pan_x) + cx,
-							.y = (node->y - view->pan_y) + cy
-						};
+					if (nearport.r2 < 0 || r2 < nearport.r2) {
+						nearport.r2 = r2;
+						nearport.node = node;
+						nearport.pos = encode_pos(side, i);
 					}
 				}
 			}
@@ -294,64 +317,110 @@ static int winproc_graph(struct window* w)
 				.p0 = { .x = node->x - view->pan_x , .y = node->y - view->pan_y },
 				.dim = { .w = width, .h = height }
 			};
-			int mpos_in_area = rect_contains_point(&nr, top->mpos) && !(input_stolen&2) && w->graph_tmp_conn_node == NULL;
+			int mpos_in_area = rect_contains_point(&nr, top->mpos) && !(input_stolen&2) && w->graph_tmp_conn.node == NULL;
 			lsl_scope_push_data(&node->id, sizeof(node->id));
 			lsl_drag("node", mpos_in_area, LSL_POINTER_4WAY, &node->x, &node->y, 1, 1);
 			lsl_scope_pop();
 		}
 	}
 
-	if (clicky && port_nearest_d2 >= 0) {
-		assert(port_nearest_node != NULL);
-		w->graph_tmp_conn_node = port_nearest_node;
-		w->graph_tmp_conn_index = port_nearest_s == 0 ? (port_nearest_i+1) : (-port_nearest_i-1);
+	if (clicky && nearport.r2 >= 0) {
+		assert(nearport.node != NULL);
+
+		u16 port_id = port_id_at(nearport.node, nearport.pos);
+
+		int side,index;
+		decode_pos(nearport.pos, &side, &index);
+		int valid = 0;
+		valid |= side == 0 && dd_graph_can_connect(graph, 0, 0, nearport.node->id, port_id);
+		valid |= side == 1 && dd_graph_can_connect(graph, nearport.node->id, port_id, 0, 0);
+
+		if (valid) {
+			w->graph_tmp_conn.node = nearport.node;
+			w->graph_tmp_conn.pos = nearport.pos;
+			w->graph_tmp_conn.port_id = port_id;
+		}
 	}
 
-	if (w->graph_tmp_conn_node != NULL) {
-		#if 0
-		struct dd_port_it it;
-		if (w->graph_tmp_conn_index > 0) {
-			int remaining = w->graph_tmp_conn_index-1;
-			for (it = dd_node_inport_it(w->graph_tmp_conn_node); it.valid; dd_port_it_next(&it)) {
-				if (remaining == 0) break;
-				remaining--;
+	if (w->graph_tmp_conn.node != NULL) {
+		union vec2 ps[2];
+		for (int i = 0; i < 2; i++) {
+			struct dd_node* node = NULL;
+			int pos;
+			if (i == 0) {
+				node = w->graph_tmp_conn.node;
+				pos = w->graph_tmp_conn.pos;
+			} else {
+				node = nearport.node;
+				pos = nearport.pos;
 			}
-		} else {
-			int remaining = -w->graph_tmp_conn_index-1;
-			for (it = dd_node_outport_it(w->graph_tmp_conn_node); it.valid; dd_port_it_next(&it)) {
-				if (remaining == 0) break;
-				remaining--;
-			}
-		}
-		#endif
+			if (node == NULL) continue;
 
-		int n_in, n_out, width, height, port_y0, port_y1;
-		node_box_calc(clt, w->graph_tmp_conn_node, &n_in, &n_out, &width, &height, &port_y0, &port_y1);
-		int cx, cy;
-		if (w->graph_tmp_conn_index > 0) {
-			cx = clt->widths[0]/2;
-			cy = port_y0 + (w->graph_tmp_conn_index-1)*port_height + port_height/2;
-		} else {
-			cx = width - clt->widths[2]/2;
-			cy = port_y1 + (-w->graph_tmp_conn_index-1)*port_height + port_height/2;
+			int side, index;
+			decode_pos(pos, &side, &index);
+
+			int n_in, n_out, width, height, port_y0, port_y1;
+			node_box_calc(clt, node, &n_in, &n_out, &width, &height, &port_y0, &port_y1);
+			if (side == 0) {
+				ps[i].x = node->x + clt->widths[0]/2;
+				ps[i].y = node->y + port_y0 + index*port_height + port_height/2;
+			} else {
+				ps[i].x = node->x + width - clt->widths[2]/2;
+				ps[i].y = node->y + port_y1 + index*port_height + port_height/2;
+			}
 		}
-		union vec2 cp = {
-			.x = w->graph_tmp_conn_node->x - view->pan_x + cx,
-			.y = w->graph_tmp_conn_node->y - view->pan_y + cy
+
+		int can_connect = 0;
+		u32 src_node_id;
+		u16 src_port_id;
+		u32 dst_node_id;
+		u16 dst_port_id;
+		if (nearport.node != NULL) {
+			int side0, index0, side1, index1;
+			decode_pos(w->graph_tmp_conn.pos, &side0, &index0);
+			decode_pos(nearport.pos, &side1, &index1);
+			if (side0 != side1) {
+				u32 n0 = w->graph_tmp_conn.node->id;
+				u16 p0 = w->graph_tmp_conn.port_id;
+				u32 n1 = nearport.node->id;
+				u16 p1 = port_id_at(nearport.node, nearport.pos);
+				if (side0 == 0) {
+					src_node_id = n1;
+					src_port_id = p1;
+					dst_node_id = n0;
+					dst_port_id = p0;
+				} else {
+					src_node_id = n0;
+					src_port_id = p0;
+					dst_node_id = n1;
+					dst_port_id = p1;
+				}
+				can_connect = dd_graph_can_connect(graph, src_node_id, src_port_id, dst_node_id, dst_port_id);
+			}
+		}
+
+		union vec2 pan = {
+			.x = -view->pan_x,
+			.y = -view->pan_y
 		};
 
-		union vec2 ep = port_nearest_node != NULL ? port_nearest_p : top->mpos;
+		union vec2 cp = vec2_add(pan, ps[0]);
+		union vec2 ep = can_connect ? vec2_add(pan, ps[1]) : top->mpos;
 
-		if (w->graph_tmp_conn_index > 0) {
-			draw_connection(ep, cp, 0);
+		int modifier = can_connect ? 3 : 2;
+		if (w->graph_tmp_conn.pos > 0) {
+			draw_connection(ep, cp, modifier);
 		} else {
-			draw_connection(cp, ep, 0);
+			draw_connection(cp, ep, modifier);
 		}
 
 		if (top->button[0]) {
 			input_stolen |= 4;
 		} else {
-			w->graph_tmp_conn_node = NULL;
+			w->graph_tmp_conn.node = NULL;
+			if (can_connect) {
+				dd_graph_connect(graph, src_node_id, src_port_id, dst_node_id, dst_port_id);
+			}
 		}
 	}
 
@@ -640,7 +709,7 @@ static struct atls* load_atlas(char* path)
 	colorpid_connection_shadow = atls_get_prg_id(atls, "connection.shadow");
 	colorpid_connection_signal = atls_get_prg_id(atls, "connection.signal"); // XXX is type a ctxvar?
 
-	cvi_selected = atls_get_ctxkey_id(atls, "selected");
+	cvi_modifier = atls_get_ctxkey_id(atls, "modifier");
 
 	return atls;
 }

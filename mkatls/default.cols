@@ -2,6 +2,8 @@ background 10 30 80 255
 connection.shadow 0 0 0 192
 connection.signal 0 255 255 255
 connection.selected 255 255 0 255
+connection.tmp0 0 128 128 128
+connection.tmp1 200 255 255 255
 builtin.main 0 0 0 255
 builtin.footer 255 255 255 192
 builtin.port 255 255 0 192
