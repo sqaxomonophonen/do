@@ -114,6 +114,7 @@ struct window {
 		struct dd_node* node;
 		int pos;
 		u16 port_id;
+		int drag_state;
 	} graph_tmp_conn;
 
 	int modal;
@@ -259,21 +260,15 @@ static int winproc_graph(struct window* w)
 		graph = next_graph;
 	}
 
-	int clicky = top->button[0] && top->button_cycles[0];
-	int shifty = top->mod & LSL_MOD_SHIFT;
-
 	struct atls_cell_table* clt = lsl_set_cell_table(builtin_ctbl);
 	int port_height = clt->heights[2];
 	lsl_set_type_index(type_index_subs);
-
-
-	// node/port interaction
-	int input_stolen = 0;
 
 	struct {
 		int r2;
 		int pos;
 		struct dd_node* node;
+		int is_near;
 	} nearport = { .r2 = -1 };
 
 	// XXX meta?
@@ -306,126 +301,118 @@ static int winproc_graph(struct window* w)
 						nearport.node = node;
 						nearport.pos = encode_pos(side, i);
 					}
-					if (r2 < port_near_r2) {
-						lsl_set_pointer(LSL_POINTER_TOUCH);
-						input_stolen |= 2;
-					}
 				}
 			}
 		}
-
-		if (rx >= 0 && rx < width && ry >= 0 && ry < height) {
-			input_stolen |= 1;
-		}
+		nearport.is_near = nearport.node != NULL && nearport.r2 < port_near_r2;
 
 		{
 			struct rect nr = (struct rect) {
 				.p0 = { .x = node->x - view->pan_x , .y = node->y - view->pan_y },
 				.dim = { .w = width, .h = height }
 			};
-			int mpos_in_area = rect_contains_point(&nr, top->mpos) && !(input_stolen&2) && w->graph_tmp_conn.node == NULL;
+			int mpos_in_area = rect_contains_point(&nr, top->mpos) && !nearport.is_near && w->graph_tmp_conn.node == NULL;
 			lsl_scope_push_data(&node->id, sizeof(node->id));
-			lsl_drag("node", mpos_in_area, LSL_POINTER_4WAY, &node->x, &node->y, 1, 1);
+			lsl_drag_pos("node", mpos_in_area, LSL_POINTER_4WAY, &node->x, &node->y, 1, 1);
 			lsl_scope_pop();
 		}
 	}
 
-	if (clicky && nearport.r2 >= 0 && nearport.r2 < port_near_r2) {
-		assert(nearport.node != NULL);
-
-		u16 port_id = port_id_at(nearport.node, nearport.pos);
-
-		int side;
-		decode_pos(nearport.pos, &side, NULL);
-		int valid = 0;
-		valid |= side == 0 && dd_graph_can_connect(graph, 0, 0, nearport.node->id, port_id);
-		valid |= side == 1 && dd_graph_can_connect(graph, nearport.node->id, port_id, 0, 0);
-
-		if (valid) {
-			w->graph_tmp_conn.node = nearport.node;
-			w->graph_tmp_conn.pos = nearport.pos;
-			w->graph_tmp_conn.port_id = port_id;
+	{
+		int can_init_tmp_conn = nearport.node != NULL;
+		if (can_init_tmp_conn && !w->graph_tmp_conn.drag_state) {
+			u16 port_id = port_id_at(nearport.node, nearport.pos);
+			int side;
+			decode_pos(nearport.pos, &side, NULL);
+			int valid = 0;
+			valid |= side == 0 && dd_graph_can_connect(graph, 0, 0, nearport.node->id, port_id);
+			valid |= side == 1 && dd_graph_can_connect(graph, nearport.node->id, port_id, 0, 0);
+			if (!valid) can_init_tmp_conn = 0;
 		}
-	}
-
-	if (w->graph_tmp_conn.node != NULL) {
-		union vec2 ps[2];
-		for (int i = 0; i < 2; i++) {
-			struct dd_node* node = NULL;
-			int pos;
-			if (i == 0) {
-				node = w->graph_tmp_conn.node;
-				pos = w->graph_tmp_conn.pos;
-			} else {
-				node = nearport.node;
-				pos = nearport.pos;
+		if ((w->graph_tmp_conn.drag_state = lsl_drag("tmpcon", can_init_tmp_conn, LSL_POINTER_TOUCH)) != 0) {
+			if (w->graph_tmp_conn.drag_state == LSL_DRAG_START) {
+				w->graph_tmp_conn.node = nearport.node;
+				w->graph_tmp_conn.pos = nearport.pos;
+				w->graph_tmp_conn.port_id = port_id_at(nearport.node, nearport.pos);
 			}
-			if (node == NULL) continue;
 
-			int side, index;
-			decode_pos(pos, &side, &index);
-
-			int n_in, n_out, width, height, port_y0, port_y1;
-			node_box_calc(clt, node, &n_in, &n_out, &width, &height, &port_y0, &port_y1);
-			if (side == 0) {
-				ps[i].x = node->x + clt->widths[0]/2;
-				ps[i].y = node->y + port_y0 + index*port_height + port_height/2;
-			} else {
-				ps[i].x = node->x + width - clt->widths[2]/2;
-				ps[i].y = node->y + port_y1 + index*port_height + port_height/2;
-			}
-		}
-
-		int can_connect = 0;
-		u32 src_node_id;
-		u16 src_port_id;
-		u32 dst_node_id;
-		u16 dst_port_id;
-		if (nearport.node != NULL) {
-			int side0, index0, side1, index1;
-			decode_pos(w->graph_tmp_conn.pos, &side0, &index0);
-			decode_pos(nearport.pos, &side1, &index1);
-			if (side0 != side1) {
-				u32 n0 = w->graph_tmp_conn.node->id;
-				u16 p0 = w->graph_tmp_conn.port_id;
-				u32 n1 = nearport.node->id;
-				u16 p1 = port_id_at(nearport.node, nearport.pos);
-				if (side0 == 0) {
-					src_node_id = n1;
-					src_port_id = p1;
-					dst_node_id = n0;
-					dst_port_id = p0;
+			assert(w->graph_tmp_conn.node != NULL);
+			union vec2 ps[2];
+			for (int i = 0; i < 2; i++) {
+				struct dd_node* node = NULL;
+				int pos;
+				if (i == 0) {
+					node = w->graph_tmp_conn.node;
+					pos = w->graph_tmp_conn.pos;
 				} else {
-					src_node_id = n0;
-					src_port_id = p0;
-					dst_node_id = n1;
-					dst_port_id = p1;
+					node = nearport.node;
+					pos = nearport.pos;
 				}
-				can_connect = dd_graph_can_connect(graph, src_node_id, src_port_id, dst_node_id, dst_port_id);
+				if (node == NULL) continue;
+
+				int side, index;
+				decode_pos(pos, &side, &index);
+
+				int n_in, n_out, width, height, port_y0, port_y1;
+				node_box_calc(clt, node, &n_in, &n_out, &width, &height, &port_y0, &port_y1);
+				if (side == 0) {
+					ps[i].x = node->x + clt->widths[0]/2;
+					ps[i].y = node->y + port_y0 + index*port_height + port_height/2;
+				} else {
+					ps[i].x = node->x + width - clt->widths[2]/2;
+					ps[i].y = node->y + port_y1 + index*port_height + port_height/2;
+				}
 			}
-		}
 
-		union vec2 pan = {
-			.x = -view->pan_x,
-			.y = -view->pan_y
-		};
+			int can_connect = 0;
+			u32 src_node_id;
+			u16 src_port_id;
+			u32 dst_node_id;
+			u16 dst_port_id;
+			if (nearport.node != NULL) {
+				int side0, index0, side1, index1;
+				decode_pos(w->graph_tmp_conn.pos, &side0, &index0);
+				decode_pos(nearport.pos, &side1, &index1);
+				if (side0 != side1) {
+					u32 n0 = w->graph_tmp_conn.node->id;
+					u16 p0 = w->graph_tmp_conn.port_id;
+					u32 n1 = nearport.node->id;
+					u16 p1 = port_id_at(nearport.node, nearport.pos);
+					if (side0 == 0) {
+						src_node_id = n1;
+						src_port_id = p1;
+						dst_node_id = n0;
+						dst_port_id = p0;
+					} else {
+						src_node_id = n0;
+						src_port_id = p0;
+						dst_node_id = n1;
+						dst_port_id = p1;
+					}
+					can_connect = dd_graph_can_connect(graph, src_node_id, src_port_id, dst_node_id, dst_port_id);
+				}
+			}
 
-		union vec2 cp = vec2_add(pan, ps[0]);
-		union vec2 ep = can_connect ? vec2_add(pan, ps[1]) : top->mpos;
+			union vec2 pan = {
+				.x = -view->pan_x,
+				.y = -view->pan_y
+			};
 
-		int modifier = can_connect ? 3 : 2;
-		if (w->graph_tmp_conn.pos > 0) {
-			draw_connection(ep, cp, modifier);
-		} else {
-			draw_connection(cp, ep, modifier);
-		}
+			union vec2 cp = vec2_add(pan, ps[0]);
+			union vec2 ep = can_connect ? vec2_add(pan, ps[1]) : top->mpos;
 
-		if (top->button[0]) {
-			input_stolen |= 4;
-		} else {
-			w->graph_tmp_conn.node = NULL;
-			if (can_connect) {
-				dd_graph_connect(graph, src_node_id, src_port_id, dst_node_id, dst_port_id);
+			int modifier = can_connect ? 3 : 2;
+			if (w->graph_tmp_conn.pos > 0) {
+				draw_connection(ep, cp, modifier);
+			} else {
+				draw_connection(cp, ep, modifier);
+			}
+
+			if (w->graph_tmp_conn.drag_state == LSL_DRAG_STOP) {
+				w->graph_tmp_conn.node = NULL;
+				if (can_connect) {
+					dd_graph_connect(graph, src_node_id, src_port_id, dst_node_id, dst_port_id);
+				}
 			}
 		}
 	}
@@ -480,11 +467,11 @@ static int winproc_graph(struct window* w)
 			struct gsel subject = gsel_conn(*c);
 
 			if (pass == 0) {
-				if (!input_stolen && distance < min_distance) {
-					if (clicky && shifty) {
+				if (distance < min_distance) {
+					if (lsl_shift_click()) {
 						n_shifty_sel += window_graph_select(w, subject);
 						n_shifty_total++;
-					} else if (clicky && !shifty) {
+					} else if (lsl_click()) {
 						if (first == NULL) first = c;
 						n_subjects++;
 						if (nearest.type == GSEL_NONE || distance < nearest_distance) {
@@ -503,7 +490,7 @@ static int winproc_graph(struct window* w)
 
 				draw_connection(p0, p1, window_graph_is_selected(w, subject));
 			} else if (pass == 1) {
-				if (!input_stolen && distance < min_distance) {
+				if (distance < min_distance) {
 					if (next_selection != NULL) {
 						if (next_selection == c) {
 							window_graph_select(w, subject);
@@ -519,21 +506,19 @@ static int winproc_graph(struct window* w)
 
 		if (grab_next) next_selection = first;
 
-		if (!input_stolen) {
-			if (clicky && !shifty) {
-				if (next_selection) {
-					if (n_subjects == 1) {
-						window_graph_deselect(w, gsel_conn(*next_selection));
-					} else {
-						continue;
-					}
+		if (lsl_click()) {
+			if (next_selection) {
+				if (n_subjects == 1) {
+					window_graph_deselect(w, gsel_conn(*next_selection));
 				} else {
-					window_graph_clear_selection(w);
-					window_graph_select(w, nearest);
+					continue;
 				}
-			} else if (clicky && shifty && n_shifty_sel == 0 && n_shifty_total > 0) {
-				continue;
+			} else {
+				window_graph_clear_selection(w);
+				window_graph_select(w, nearest);
 			}
+		} else if (lsl_shift_click() && n_shifty_sel == 0 && n_shifty_total > 0) {
+			continue;
 		}
 		break;
 	}
@@ -632,10 +617,8 @@ static int winproc_graph(struct window* w)
 		}
 	}
 
-	if (!input_stolen) {
-		// pan drag
-		lsl_drag("pan", 1, 0, &view->pan_x, &view->pan_y, -1, -1);
-	}
+	// pan drag
+	lsl_drag_pos("pan", 1, 0, &view->pan_x, &view->pan_y, -1, -1);
 
 	if (lsl_accept('\x7f')) { // 127=DEL
 		for (int i = 0; i < w->gsel_dya.n; i++) {

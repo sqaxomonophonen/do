@@ -69,7 +69,10 @@ void lsl_set_pointer(int);
 #define LSL_DRAG_START (1)
 #define LSL_DRAG_CONT (2)
 #define LSL_DRAG_STOP (3)
-int lsl_drag(const char* id, int can_begin_drag, int pointer, int* x, int* y, int fx, int fy);
+int lsl_drag_pos(const char* id, int can_begin_drag, int pointer, int* x, int* y, int fx, int fy);
+int lsl_drag(const char* id, int can_begin_drag, int pointer);
+int lsl_shift_click();
+int lsl_click();
 
 
 #define LSL_PRG_H

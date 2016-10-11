@@ -303,19 +303,15 @@ int drag_initial_x;
 int drag_initial_y;
 int drag_initial_mx;
 int drag_initial_my;
-int lsl_drag(const char* id, int can_begin_drag, int pointer, int* x, int* y, int fx, int fy)
+int lsl_drag_pos(const char* id, int can_begin_drag, int pointer, int* x, int* y, int fx, int fy)
 {
-	if (x == NULL && y == NULL) return 0;
-
-	u64 drag_id = get_scope_id(id);
-
 	struct lsl_frame* f = lsl_frame_top();
 
 	int btn = f->button[0];
 	int retval = 0;
 
 	if (drag_active) {
-		if (drag_active_id != drag_id) return 0;
+		if (drag_active_id != get_scope_id(id)) return 0;
 
 		lsl_set_pointer(pointer);
 
@@ -331,16 +327,46 @@ int lsl_drag(const char* id, int can_begin_drag, int pointer, int* x, int* y, in
 		if (pointer != 0) lsl_set_pointer(pointer);
 
 		if (btn) {
-			drag_active_id = drag_id;
+			drag_active_id = get_scope_id(id);
 			drag_active = 1;
 			retval = LSL_DRAG_START;
-			if (x != NULL) drag_initial_x = *x;
-			if (y != NULL) drag_initial_y = *y;
-			drag_initial_mx = f->mpos.x;
-			drag_initial_my = f->mpos.y;
+			if (x != NULL) {
+				drag_initial_x = *x;
+				drag_initial_mx = f->mpos.x;
+			}
+			if (y != NULL) {
+				drag_initial_y = *y;
+				drag_initial_my = f->mpos.y;
+			}
 		}
 	}
 	return retval;
+}
+
+int lsl_drag(const char* id, int can_begin_drag, int pointer)
+{
+	return lsl_drag_pos(id, can_begin_drag, pointer, NULL, NULL, 0, 0);
+}
+
+static void clicky_shifty(int* clicky, int* shifty)
+{
+	struct lsl_frame* top = lsl_frame_top();
+	if (clicky) *clicky = !top->button[0] && top->button_cycles[0];
+	if (shifty) *shifty = top->mod & LSL_MOD_SHIFT;
+}
+
+int lsl_shift_click()
+{
+	int clicky, shifty;
+	clicky_shifty(&clicky, &shifty);
+	return clicky && shifty;
+}
+
+int lsl_click()
+{
+	int clicky, shifty;
+	clicky_shifty(&clicky, &shifty);
+	return clicky && !shifty;
 }
 
 void lsl_frame_push_clip(struct rect* r)
