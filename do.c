@@ -276,6 +276,10 @@ static int winproc_graph(struct window* w)
 		struct dd_node* node;
 	} nearport = { .r2 = -1 };
 
+	// XXX meta?
+	const int port_near_r2 = 50;
+	const int port_far_r2 = 250;
+
 	for (int i = graph->nodes_dya.n-1; i >= 0; i--) {
 		struct dd_node* node = &graph->nodes[i];
 
@@ -296,13 +300,15 @@ static int winproc_graph(struct window* w)
 				int dy = cy - ry;
 
 				int r2 = dx*dx + dy*dy;
-				if (r2 < 50) { // XXX meta?
-					lsl_set_pointer(LSL_POINTER_TOUCH);
-					input_stolen |= 2;
+				if (r2 < port_far_r2) {
 					if (nearport.r2 < 0 || r2 < nearport.r2) {
 						nearport.r2 = r2;
 						nearport.node = node;
 						nearport.pos = encode_pos(side, i);
+					}
+					if (r2 < port_near_r2) {
+						lsl_set_pointer(LSL_POINTER_TOUCH);
+						input_stolen |= 2;
 					}
 				}
 			}
@@ -324,7 +330,7 @@ static int winproc_graph(struct window* w)
 		}
 	}
 
-	if (clicky && nearport.r2 >= 0) {
+	if (clicky && nearport.r2 >= 0 && nearport.r2 < port_near_r2) {
 		assert(nearport.node != NULL);
 
 		u16 port_id = port_id_at(nearport.node, nearport.pos);
