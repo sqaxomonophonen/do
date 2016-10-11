@@ -335,8 +335,8 @@ static int winproc_graph(struct window* w)
 
 		u16 port_id = port_id_at(nearport.node, nearport.pos);
 
-		int side,index;
-		decode_pos(nearport.pos, &side, &index);
+		int side;
+		decode_pos(nearport.pos, &side, NULL);
 		int valid = 0;
 		valid |= side == 0 && dd_graph_can_connect(graph, 0, 0, nearport.node->id, port_id);
 		valid |= side == 1 && dd_graph_can_connect(graph, nearport.node->id, port_id, 0, 0);
