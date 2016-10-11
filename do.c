@@ -637,6 +637,25 @@ static int winproc_graph(struct window* w)
 		lsl_drag("pan", 1, 0, &view->pan_x, &view->pan_y, -1, -1);
 	}
 
+	if (lsl_accept('\x7f')) { // 127=DEL
+		for (int i = 0; i < w->gsel_dya.n; i++) {
+			struct gsel s = w->gsel[i];
+			switch (s.type) {
+			case GSEL_NONE:
+				break;
+			case GSEL_NODE:
+				dd_graph_delete_node(graph, s.node_id);
+				break;
+			case GSEL_CONN:
+				dd_graph_disconnect(graph,
+					s.conn.src_node_id, s.conn.src_port_id,
+					s.conn.dst_node_id, s.conn.dst_port_id);
+				break;
+			}
+		}
+		window_graph_clear_selection(w);
+	}
+
 	if (w->modal == MODAL_NONE && lsl_accept(' ')) w->modal = MODAL_NODEINSERT;
 
 	if (w->modal == MODAL_NODEINSERT) {
