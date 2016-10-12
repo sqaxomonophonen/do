@@ -15,19 +15,6 @@
 
 #define LSL_MOD_SHIFT (LSL_MOD_LSHIFT | LSL_MOD_RSHIFT)
 
-struct lsl_frame {
-	struct rect rect;
-	int minside;
-	union vec2 mpos;
-	int button[LSL_MAX_BUTTONS];
-	int button_cycles[LSL_MAX_BUTTONS];
-	int mod;
-	int text_length;
-	char text[LSL_MAX_TEXT_LENGTH + 1]; /* UTF-8 */
-};
-
-struct lsl_frame* lsl_frame_top();
-
 int lsl_accept(int codepoint);
 
 int lsl_main(int argc, char** argv);
@@ -52,8 +39,8 @@ void lsl_clear();
 void lsl_win_open(const char* title, int(*proc)(void*), void* usr);
 void lsl_main_loop();
 
-void lsl_frame_push_clip(struct rect* r);
-void lsl_frame_pop();
+void lsl_clip_push(struct rect* r);
+void lsl_clip_pop();
 
 void lsl_scope_push_data(const void* data, size_t sz);
 void lsl_scope_push_static(const void* ptr);
@@ -69,10 +56,13 @@ void lsl_set_pointer(int);
 #define LSL_DRAG_START (1)
 #define LSL_DRAG_CONT (2)
 #define LSL_DRAG_STOP (3)
+int lsl_mpos(int* mx, int* my);
+int lsl_mpos_vec2(union vec2* mpos);
+int lsl_click();
+int lsl_shift_click();
+int lsl_right_click();
 int lsl_drag_pos(const char* id, int can_begin_drag, int pointer, int* x, int* y, int fx, int fy);
 int lsl_drag(const char* id, int can_begin_drag, int pointer);
-int lsl_shift_click();
-int lsl_click();
 
 
 #define LSL_PRG_H

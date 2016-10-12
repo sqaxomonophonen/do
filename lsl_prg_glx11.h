@@ -74,8 +74,16 @@ struct win {
 	void* usr;
 	Window window;
 	XIC xic;
-	struct lsl_frame frame;
+	struct wglobal wglobal;
+	struct wframe wframe_init;
 } wins[MAX_WIN];
+struct win* current_win;
+
+static struct wglobal* wglobal_get()
+{
+	assert(current_win != NULL);
+	return &current_win->wglobal;
+}
 
 void lsl_win_open(const char* title, int(*proc)(void*), void* usr)
 {
@@ -160,18 +168,18 @@ static struct win* wlookup(Window w)
 	return NULL;
 }
 
-static void handle_text_event(char* text, int length, struct lsl_frame* f)
+static void handle_text_event(struct wglobal* wg, char* text, int length)
 {
 	if (length <= 0) return;
-	if ((f->text_length + length) >= LSL_MAX_TEXT_LENGTH) return;
-	memcpy(f->text + f->text_length, text, length);
-	f->text_length += length;
-	f->text[f->text_length] = 0;
+	if ((wg->text_length + length) >= LSL_MAX_TEXT_LENGTH) return;
+	memcpy(wg->text + wg->text_length, text, length);
+	wg->text_length += length;
+	wg->text[wg->text_length] = 0;
 }
 
 static void handle_key_event(XKeyEvent* e, struct win* lw)
 {
-	struct lsl_frame* f = &lw->frame;
+	struct wglobal* wg = &lw->wglobal;
 
 	KeySym sym = XkbKeycodeToKeysym(dpy, e->keycode, 0, 0);
 	int mask = 0;
@@ -180,7 +188,7 @@ static void handle_key_event(XKeyEvent* e, struct win* lw)
 		case XK_Return:
 			if (is_keypress) {
 				// XLookupString would give "\r" :-/
-				handle_text_event("\n", 1, f);
+				handle_text_event(wg, "\n", 1);
 			}
 			return;
 		case XK_Shift_L:
@@ -205,15 +213,15 @@ static void handle_key_event(XKeyEvent* e, struct win* lw)
 
 	if (mask) {
 		if (is_keypress) {
-			f->mod |= mask;
+			wg->mod |= mask;
 		} else {
-			f->mod &= ~mask;
+			wg->mod &= ~mask;
 		}
 	} else if (is_keypress) {
 		char buf[16];
 		int len = Xutf8LookupString(lw->xic, e, buf, sizeof(buf), NULL, NULL);
 		if (len > 0) {
-			handle_text_event(buf, len, f);
+			handle_text_event(wg, buf, len);
 		}
 	}
 }
@@ -326,7 +334,7 @@ static void draw_append(int n_vertices, int n_elements, struct draw_vertex* vert
 
 static void draw_rect_2col(struct rect posrect, struct rect uvrect, union vec4 c0, union vec4 c1)
 {
-	struct rect fr = lsl_frame_top()->rect;
+	struct rect fr = wframe_top()->rect;
 
 	struct rect rx = posrect;
 	rx.p0 = vec2_add(rx.p0, fr.p0);
@@ -414,7 +422,7 @@ void lsl_cell_plot(int column, int row, int x, int y, int width, int height)
 
 void lsl_line(float thickness, union vec2 p0, union vec2 p1)
 {
-	struct rect fr = lsl_frame_top()->rect;
+	struct rect fr = wframe_top()->rect;
 
 	p0 = vec2_add(p0, fr.p0);
 	p1 = vec2_add(p1, fr.p0);
@@ -470,7 +478,7 @@ void lsl_clear()
 {
 	struct rect r;
 	r.p0.x = r.p0.y = 0;
-	r.dim = lsl_frame_top()->rect.dim;
+	r.dim = wframe_top()->rect.dim;
 	lsl_fill_rect(&r);
 }
 
@@ -616,33 +624,34 @@ void lsl_main_loop()
 			struct win* lw = wlookup(w);
 			if (lw == NULL) continue;
 
-			struct lsl_frame* f = &lw->frame;
+			struct wframe* wf = &lw->wframe_init;
+			struct wglobal* wg = &lw->wglobal;
 
 			switch (xe.type) {
 				case EnterNotify:
-					f->minside = 1;
-					f->mpos.x = xe.xcrossing.x;
-					f->mpos.y = xe.xcrossing.y;
+					wf->minside = 1;
+					wf->mpos.x = xe.xcrossing.x;
+					wf->mpos.y = xe.xcrossing.y;
 					break;
 				case LeaveNotify:
-					f->minside = 0;
-					f->mpos.x = 0;
-					f->mpos.y = 0;
+					wf->minside = 0;
+					wf->mpos.x = 0;
+					wf->mpos.y = 0;
 					break;
 				case ButtonPress:
 				case ButtonRelease:
 				{
 					int i = xe.xbutton.button - 1;
 					if (i >= 0 && i < LSL_MAX_BUTTONS) {
-						f->button[i] = xe.type == ButtonPress;
-						f->button_cycles[i]++;
+						wg->button[i] = xe.type == ButtonPress;
+						wg->button_cycles[i]++;
 					}
 				}
 				break;
 				case MotionNotify:
-					f->minside = 1;
-					f->mpos.x = xe.xmotion.x;
-					f->mpos.y = xe.xmotion.y;
+					wf->minside = 1;
+					wf->mpos.x = xe.xmotion.x;
+					wf->mpos.y = xe.xmotion.y;
 					break;
 				case KeyPress:
 				case KeyRelease:
@@ -656,26 +665,40 @@ void lsl_main_loop()
 			if (!lw->open) continue;
 
 			// fetch window dimensions
-			struct lsl_frame* f = &lw->frame;
-			f->rect.p0.x = f->rect.p0.y = 0;
-			f->rect.dim = get_dim_vec2(lw->window);
-			viewport_height = f->rect.dim.h;
+			struct wframe* wf = &lw->wframe_init;
+			wf->rect.p0.x = wf->rect.p0.y = 0;
+			wf->rect.dim = get_dim_vec2(lw->window);
+			viewport_height = wf->rect.dim.h;
+
+			/* register mouse press positions (for click position
+			upon release) */
+			struct wglobal* wg = &lw->wglobal;
+			for (int i = 0; i < LSL_MAX_BUTTONS; i++) {
+				if (wg->button[i] && wg->button_cycles[i]) {
+					wg->button_press_mpos[i] = wf->mpos;
+				}
+			}
 
 			glXMakeCurrent(dpy, lw->window, ctx);
-			glViewport(0, 0, f->rect.dim.w, f->rect.dim.h);
+			glViewport(0, 0, wf->rect.dim.w, wf->rect.dim.h);
 
 			glUseProgram(glprg);
 			glUniform1i(u_texture, 0);
-			glUniform2f(u_scaling, 1.0f / (float)f->rect.dim.w, -1.0f / (float)f->rect.dim.h);
+			glUniform2f(u_scaling, 1.0f / (float)wf->rect.dim.w, -1.0f / (float)wf->rect.dim.h);
 
 			glBindVertexArray(vertex_array);
 
 			current_cursor = cursor_default;
 
-			frame_stack_reset(f);
+			wframe_stack_reset(wf);
+			current_win = lw;
 
 			// run user callback
 			int ret = lw->proc(lw->usr);
+
+			// post frame cleanup
+			wglobal_post_frame_reset();
+			current_win = NULL;
 
 			if (current_cursor != last_cursor) {
 				XDefineCursor(dpy, RootWindow(dpy, vis->screen), current_cursor);
@@ -686,9 +709,9 @@ void lsl_main_loop()
 
 			glXSwapBuffers(dpy, lw->window);
 
-			// clear per-frame input stuff
-			for (int i = 0; i < LSL_MAX_BUTTONS; i++) f->button_cycles[i] = 0;
-			f->text_length = 0;
+			// clear per-wframe input stuff
+			for (int i = 0; i < LSL_MAX_BUTTONS; i++) wg->button_cycles[i] = 0;
+			wg->text_length = 0;
 
 			if (ret != 0) {
 				return; // XXX or close window?

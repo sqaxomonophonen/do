@@ -243,8 +243,6 @@ static u16 port_id_at(struct dd_node* node, int pos)
 
 static int winproc_graph(struct window* w)
 {
-	struct lsl_frame* top = lsl_frame_top();
-
 	lsl_set_color(lsl_eval(colorpid_background));
 	lsl_clear();
 
@@ -281,40 +279,45 @@ static int winproc_graph(struct window* w)
 		int n_in, n_out, width, height, port_y0, port_y1;
 		node_box_calc(clt, node, &n_in, &n_out, &width, &height, &port_y0, &port_y1);
 
-		s32 rx = top->mpos.x - (node->x - view->pan_x);
-		s32 ry = top->mpos.y - (node->y - view->pan_y);
+		int mx,my;
+		if (lsl_mpos(&mx, &my)) {
+			s32 rx = mx - (node->x - view->pan_x);
+			s32 ry = my - (node->y - view->pan_y);
 
-		int max_n = n_in > n_out ? n_in : n_out;
-		for (int i = 0; i < max_n; i++) {
-			for (int side = 0; side < 2; side++) {
-				if ((side == 0 && i >= n_in) || (side == 1 && i >= n_out)) continue;
-				int cx = side == 0 ? (clt->widths[0]/2) : (width - clt->widths[2]/2);
-				int cy = (side == 0 ? port_y0 : port_y1) + i*port_height + port_height/2;
+			int max_n = n_in > n_out ? n_in : n_out;
+			for (int i = 0; i < max_n; i++) {
+				for (int side = 0; side < 2; side++) {
+					if ((side == 0 && i >= n_in) || (side == 1 && i >= n_out)) continue;
+					int cx = side == 0 ? (clt->widths[0]/2) : (width - clt->widths[2]/2);
+					int cy = (side == 0 ? port_y0 : port_y1) + i*port_height + port_height/2;
 
-				int dx = cx - rx;
-				int dy = cy - ry;
+					int dx = cx - rx;
+					int dy = cy - ry;
 
-				int r2 = dx*dx + dy*dy;
-				if (r2 < port_far_r2) {
-					if (nearport.r2 < 0 || r2 < nearport.r2) {
-						nearport.r2 = r2;
-						nearport.node = node;
-						nearport.pos = encode_pos(side, i);
+					int r2 = dx*dx + dy*dy;
+					if (r2 < port_far_r2) {
+						if (nearport.r2 < 0 || r2 < nearport.r2) {
+							nearport.r2 = r2;
+							nearport.node = node;
+							nearport.pos = encode_pos(side, i);
+						}
 					}
 				}
 			}
-		}
-		nearport.is_near = nearport.node != NULL && nearport.r2 < port_near_r2;
+			nearport.is_near = nearport.node != NULL && nearport.r2 < port_near_r2;
 
-		{
-			struct rect nr = (struct rect) {
-				.p0 = { .x = node->x - view->pan_x , .y = node->y - view->pan_y },
-				.dim = { .w = width, .h = height }
-			};
-			int mpos_in_area = rect_contains_point(&nr, top->mpos) && !nearport.is_near && w->graph_tmp_conn.node == NULL;
-			lsl_scope_push_data(&node->id, sizeof(node->id));
-			lsl_drag_pos("node", mpos_in_area, LSL_POINTER_4WAY, &node->x, &node->y, 1, 1);
-			lsl_scope_pop();
+			{
+				struct rect nr = (struct rect) {
+					.p0 = { .x = node->x - view->pan_x , .y = node->y - view->pan_y },
+					.dim = { .w = width, .h = height }
+				};
+
+				union vec2 mpos;
+				int mpos_in_area = lsl_mpos_vec2(&mpos) && rect_contains_point(&nr, mpos) && !nearport.is_near && w->graph_tmp_conn.node == NULL;
+				lsl_scope_push_data(&node->id, sizeof(node->id));
+				lsl_drag_pos("node", mpos_in_area, LSL_POINTER_4WAY, &node->x, &node->y, 1, 1);
+				lsl_scope_pop();
+			}
 		}
 	}
 
@@ -399,7 +402,10 @@ static int winproc_graph(struct window* w)
 			};
 
 			union vec2 cp = vec2_add(pan, ps[0]);
-			union vec2 ep = can_connect ? vec2_add(pan, ps[1]) : top->mpos;
+
+			union vec2 mpos;
+			lsl_mpos_vec2(&mpos);
+			union vec2 ep = can_connect ? vec2_add(pan, ps[1]) : mpos;
 
 			int modifier = can_connect ? 3 : 2;
 			if (w->graph_tmp_conn.pos > 0) {
@@ -461,13 +467,15 @@ static int winproc_graph(struct window* w)
 			union vec2 p0 = (union vec2) { .x = sx0, .y = sy0 };
 			union vec2 p1 = (union vec2) { .x = sx1, .y = sy1 };
 
-			float distance = connection_distance(p0, p1, top->mpos);
+			union vec2 mpos;
+			int inside = lsl_mpos_vec2(&mpos);
+			float distance = connection_distance(p0, p1, mpos);
 			const float min_distance = 16.0; // XXX config?
 
 			struct gsel subject = gsel_conn(*c);
 
 			if (pass == 0) {
-				if (distance < min_distance) {
+				if (inside && distance < min_distance) {
 					if (lsl_shift_click()) {
 						n_shifty_sel += window_graph_select(w, subject);
 						n_shifty_total++;
@@ -644,7 +652,7 @@ static int winproc_graph(struct window* w)
 	if (w->modal == MODAL_NODEINSERT) {
 	}
 
-	return top->button[2];
+	return lsl_right_click();
 }
 
 static int winproc(void* usr)
@@ -652,7 +660,6 @@ static int winproc(void* usr)
 	atls_enter_ctx(atls);
 
 	struct window* win = (struct window*) usr;
-	//struct lsl_frame* f = lsl_frame_top();
 
 	int retval = 0;
 	switch (win->type) {
@@ -735,9 +742,9 @@ int lsl_main(int argc, char** argv)
 		assert(n1 != NULL);
 		assert(n2 != NULL);
 		assert(n3 != NULL);
-		dd_graph_connect(g, n1->id, 1, n2->id, 1);
-		dd_graph_connect(g, n1->id, 1, n3->id, 1);
-		dd_graph_connect(g, n2->id, 1, n3->id, 2);
+		//dd_graph_connect(g, n1->id, 1, n2->id, 1);
+		//dd_graph_connect(g, n1->id, 1, n3->id, 1);
+		//dd_graph_connect(g, n2->id, 1, n3->id, 2);
 
 		struct dd_node* n4 = dd_graph_new_node(g, "[poly]32saw");
 		assert(n4 != NULL);
@@ -745,7 +752,7 @@ int lsl_main(int argc, char** argv)
 		dd_graph_new_node(g2, "in-");
 		dd_graph_new_node(g2, "-out");
 
-		dd_graph_connect(g, n3->id, 1, n4->id, 1);
+		//dd_graph_connect(g, n3->id, 1, n4->id, 1);
 	}
 
 	atls = load_atlas("default.atls");

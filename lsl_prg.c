@@ -34,23 +34,59 @@ u64 scope_stack[STACK_MAX];
 union vec4 draw_color0;
 union vec4 draw_color1;
 
-struct lsl_frame frame_stack[STACK_MAX];
-int frame_stack_top_index;
+struct wglobal {
+	int button[LSL_MAX_BUTTONS];
+	int button_cycles[LSL_MAX_BUTTONS];
+	int button_stolen[LSL_MAX_BUTTONS];
+	union vec2 button_press_mpos[LSL_MAX_BUTTONS];
 
-static void frame_stack_reset(struct lsl_frame* f)
+	int mod;
+
+	int text_length;
+	char text[LSL_MAX_TEXT_LENGTH + 1]; /* UTF-8 */
+
+	struct {
+		u64 active_id;
+		int active;
+		int initial_x;
+		int initial_y;
+		int initial_mx;
+		int initial_my;
+	} drag;
+};
+static struct wglobal* wglobal_get();
+
+static void wglobal_post_frame_reset()
 {
-	frame_stack_top_index = 0;
-	frame_stack[0] = *f;
+	struct wglobal* wg = wglobal_get();
+	wg->text_length = 0;
+	for (int i = 0; i < LSL_MAX_BUTTONS; i++) {
+		wg->button_cycles[i] = 0;
+		wg->button_stolen[i] = 0;
+	}
 }
 
-static void assert_valid_frame_stack_top(int i)
+struct wframe {
+	struct rect rect; // rectangle (absolute coords)
+	int minside; // is mouse inside rect?
+	union vec2 mpos; // mouse position (relative to rect top-left corner)
+} wframe_stack[STACK_MAX];
+int wframe_stack_top_index;
+
+static void wframe_stack_reset(struct wframe* f)
+{
+	wframe_stack_top_index = 0;
+	wframe_stack[0] = *f;
+}
+
+static void assert_valid_wframe_stack_top(int i)
 {
 	assert(i >= 0 && i < STACK_MAX);
 }
 
-struct lsl_frame* lsl_frame_top()
+struct wframe* wframe_top()
 {
-	return &frame_stack[frame_stack_top_index];
+	return &wframe_stack[wframe_stack_top_index];
 }
 
 static inline int utf8_decode(char** c0z, int* n)
@@ -149,12 +185,12 @@ void lsl_scope_pop()
 
 int lsl_accept(int codepoint)
 {
-	struct lsl_frame* top = lsl_frame_top();
-	char* p = top->text;
-	int n = top->text_length;
+	struct wglobal* wg = wglobal_get();
+	char* p = wg->text;
+	int n = wg->text_length;
 	if (utf8_decode(&p, &n) == codepoint) {
-		memmove(top->text, top->text + (top->text_length - n), n);
-		top->text_length = n;
+		memmove(wg->text, wg->text + (wg->text_length - n), n);
+		wg->text_length = n;
 		return 1;
 	} else {
 		return 0;
@@ -297,46 +333,99 @@ int lsl_printf(const char* fmt, ...)
 	return lsl_write(buf, n);
 }
 
-u64 drag_active_id;
-int drag_active;
-int drag_initial_x;
-int drag_initial_y;
-int drag_initial_mx;
-int drag_initial_my;
+int lsl_mpos_vec2(union vec2* mpos)
+{
+	struct wframe* top = wframe_top();
+	if (mpos) *mpos = top->mpos;
+	return top->minside;
+}
+
+int lsl_mpos(int* mx, int* my)
+{
+	union vec2 mpos;
+	int retval = lsl_mpos_vec2(&mpos);
+	if (mx) *mx = mpos.x;
+	if (my) *my = mpos.y;
+	return retval;
+}
+
+static void clicky_shifty(int button, int* clicky, int* shifty)
+{
+	struct wglobal* wg = wglobal_get();
+	struct wframe* top = wframe_top();
+	int clck =
+		!wg->button_stolen[button]
+		&& !wg->button[button]
+		&& wg->button_cycles[button]
+		&& rect_contains_point(&top->rect, wg->button_press_mpos[button]);
+
+	if (clicky) *clicky = clck;
+	if (shifty) *shifty = wg->mod & LSL_MOD_SHIFT;
+}
+
+int lsl_click()
+{
+	int clicky, shifty;
+	clicky_shifty(0, &clicky, &shifty);
+	return clicky && !shifty;
+}
+
+int lsl_shift_click()
+{
+	int clicky, shifty;
+	clicky_shifty(0, &clicky, &shifty);
+	return clicky && shifty;
+}
+
+int lsl_right_click()
+{
+	int clicky, shifty;
+	clicky_shifty(2, &clicky, &shifty);
+	return clicky && !shifty;
+}
+
+
 int lsl_drag_pos(const char* id, int can_begin_drag, int pointer, int* x, int* y, int fx, int fy)
 {
-	struct lsl_frame* f = lsl_frame_top();
+	struct wframe* f = wframe_top();
+	struct wglobal* wg = wglobal_get();
 
-	int btn = f->button[0];
+	const int button = 0;
+
+	int pressed = f->minside && wg->button[button];
+	int press = pressed && wg->button_cycles[button];
+	int stolen = wg->button_stolen[button];
 	int retval = 0;
 
-	if (drag_active) {
-		if (drag_active_id != get_scope_id(id)) return 0;
+	if (wg->drag.active) {
+		if (stolen || wg->drag.active_id != get_scope_id(id)) return 0;
+		wg->button_stolen[button] = 1;
 
 		lsl_set_pointer(pointer);
 
 		retval = LSL_DRAG_CONT;
-		if (!btn) {
+		if (!pressed) {
 			lsl_set_pointer(0);
-			drag_active = 0;
+			wg->drag.active = 0;
 			retval = LSL_DRAG_STOP;
 		}
-		if (x != NULL) *x = drag_initial_x + (f->mpos.x - drag_initial_mx) * fx;
-		if (y != NULL) *y = drag_initial_y + (f->mpos.y - drag_initial_my) * fy;
-	} else if (can_begin_drag) {
+		if (x != NULL) *x = wg->drag.initial_x + (f->mpos.x - wg->drag.initial_mx) * fx;
+		if (y != NULL) *y = wg->drag.initial_y + (f->mpos.y - wg->drag.initial_my) * fy;
+	} else if (can_begin_drag && !stolen) {
+		wg->button_stolen[button] = 1;
 		if (pointer != 0) lsl_set_pointer(pointer);
 
-		if (btn) {
-			drag_active_id = get_scope_id(id);
-			drag_active = 1;
+		if (press) {
+			wg->drag.active_id = get_scope_id(id);
+			wg->drag.active = 1;
 			retval = LSL_DRAG_START;
 			if (x != NULL) {
-				drag_initial_x = *x;
-				drag_initial_mx = f->mpos.x;
+				wg->drag.initial_x = *x;
+				wg->drag.initial_mx = f->mpos.x;
 			}
 			if (y != NULL) {
-				drag_initial_y = *y;
-				drag_initial_my = f->mpos.y;
+				wg->drag.initial_y = *y;
+				wg->drag.initial_my = f->mpos.y;
 			}
 		}
 	}
@@ -348,48 +437,24 @@ int lsl_drag(const char* id, int can_begin_drag, int pointer)
 	return lsl_drag_pos(id, can_begin_drag, pointer, NULL, NULL, 0, 0);
 }
 
-static void clicky_shifty(int* clicky, int* shifty)
+void lsl_clip_push(struct rect* r)
 {
-	struct lsl_frame* top = lsl_frame_top();
-	if (clicky) *clicky = !top->button[0] && top->button_cycles[0];
-	if (shifty) *shifty = top->mod & LSL_MOD_SHIFT;
-}
+	struct wframe* src = &wframe_stack[wframe_stack_top_index];
 
-int lsl_shift_click()
-{
-	int clicky, shifty;
-	clicky_shifty(&clicky, &shifty);
-	return clicky && shifty;
-}
-
-int lsl_click()
-{
-	int clicky, shifty;
-	clicky_shifty(&clicky, &shifty);
-	return clicky && !shifty;
-}
-
-void lsl_frame_push_clip(struct rect* r)
-{
-	struct lsl_frame* src = &frame_stack[frame_stack_top_index];
-
-	assert_valid_frame_stack_top(++frame_stack_top_index);
-	struct lsl_frame* dst = &frame_stack[frame_stack_top_index];
+	assert_valid_wframe_stack_top(++wframe_stack_top_index);
+	struct wframe* dst = &wframe_stack[wframe_stack_top_index];
 	memcpy(dst, src, sizeof(*dst));
 	dst->rect = (struct rect) { .p0 = vec2_add(src->rect.p0, r->p0), .dim = r->dim };
 
 	dst->mpos = vec2_sub(dst->mpos, r->p0);
 	if (!rect_contains_point(r, src->mpos)) {
-		// XXX what about dragging?
 		dst->minside = 0;
-		memset(&dst->button, 0, sizeof(dst->button));
-		memset(&dst->button_cycles, 0, sizeof(dst->button_cycles));
 	}
 }
 
-void lsl_frame_pop()
+void lsl_clip_pop()
 {
-	assert_valid_frame_stack_top(--frame_stack_top_index);
+	assert_valid_wframe_stack_top(--wframe_stack_top_index);
 }
 
 void lsl_bezier(float thickness, union vec2 p0, union vec2 p1, union vec2 p2, union vec2 p3)
