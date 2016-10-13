@@ -1,5 +1,9 @@
 #ifndef DD_H
 
+/*
+dd.h: do data, data manipulation, serialization and audio engine.
+*/
+
 #include "dya.h"
 
 struct dd_node;

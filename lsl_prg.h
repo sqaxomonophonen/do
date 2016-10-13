@@ -1,5 +1,9 @@
 #ifndef LSL_PRG_H
 
+/*
+lsl_prg.h: application framework (windowing, drawing, input)
+*/
+
 #include "m.h"
 #include "atls.h"
 

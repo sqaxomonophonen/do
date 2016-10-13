@@ -1,5 +1,10 @@
 #ifndef ATLS_H
 
+/*
+atls.h: atls file support. atls files define "skins", and contain an atlas
+texture, fonts, cell-based graphics, expression programs and colorschemes.
+*/
+
 struct atls_glyph {
 	int w,h,x,y,xoff,yoff;
 };

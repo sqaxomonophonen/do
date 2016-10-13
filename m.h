@@ -1,5 +1,9 @@
 #ifndef M_H
 
+/*
+m.h: math structures and functions
+*/
+
 union vec2 {
 	float s[2];
 	struct { float x, y; };

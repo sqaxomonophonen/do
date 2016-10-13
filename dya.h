@@ -1,5 +1,9 @@
 #ifndef DYA_H
 
+/*
+dya.h: dynamic array, including binary search (_bs_) operations.
+*/
+
 #include "dtypes.h"
 
 struct dya {
