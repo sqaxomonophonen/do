@@ -2,4 +2,4 @@ background @background
 builtin.footer_text @builtin.footer_text
 builtin.port_text @builtin.port_text
 connection.shadow @connection.shadow
-connection.signal select($modifier, @connection.signal, @connection.selected, @connection.tmp0, @connection.tmp1)
+connection.signal select($modifier, @connection.signal, @selected, @connection.tmp0, @connection.tmp1)

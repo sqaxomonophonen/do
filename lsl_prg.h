@@ -62,6 +62,8 @@ void lsl_set_pointer(int);
 #define LSL_DRAG_STOP (3)
 int lsl_mpos(int* mx, int* my);
 int lsl_mpos_vec2(union vec2* mpos);
+int lsl_mpos_press_vec2(union vec2* mpos);
+int lsl_mpos_press(int* mx, int* my);
 int lsl_click();
 int lsl_shift_click();
 int lsl_right_click();

@@ -241,6 +241,46 @@ static u16 port_id_at(struct dd_node* node, int pos)
 	assert(!"not found");
 }
 
+static void conn_endpoints(struct dd_graph* dg, struct atls_cell_table* clt, union vec2 sub, struct dd_conn* c, union vec2* out_p0, union vec2* out_p1)
+{
+	struct dd_node* src_node = dd_graph_find_node(dg, c->src_node_id);
+	struct dd_node* dst_node = dd_graph_find_node(dg, c->dst_node_id);
+	assert(src_node != NULL);
+	assert(dst_node != NULL);
+
+	int dy0 = 0;
+	for (struct dd_port_it it = dd_node_inport_it(dst_node); it.valid; dd_port_it_next(&it)) {
+		if (it.id == c->dst_port_id) break;
+		dy0++;
+	}
+	int dy1 = 0;
+	for (struct dd_port_it it = dd_node_outport_it(src_node); it.valid; dd_port_it_next(&it)) {
+		if (it.id == c->src_port_id) break;
+		dy1++;
+	}
+
+	int src_node_width, py0, py1;
+	node_box_calc(clt, src_node, NULL, NULL, &src_node_width, NULL, NULL, &py0);
+	node_box_calc(clt, dst_node, NULL, NULL, NULL,            NULL, &py1, NULL);
+
+	const int pcx = 3; // XXX metadata?
+	const int pcy = 5; // XXX metadata?
+
+	int port_height = clt->heights[2];
+	s32 sx0 = src_node->x + src_node_width - pcx;
+	s32 sy0 = src_node->y + pcy + py0 + dy1 * port_height;
+	s32 sx1 = dst_node->x + pcx;
+	s32 sy1 = dst_node->y + pcy + py1 + dy0 * port_height;
+
+	union vec2 p0 = (union vec2) { .x = sx0, .y = sy0 };
+	p0 = vec2_sub(p0, sub);
+	union vec2 p1 = (union vec2) { .x = sx1, .y = sy1 };
+	p1 = vec2_sub(p1, sub);
+
+	if (out_p0) *out_p0 = p0;
+	if (out_p1) *out_p1 = p1;
+}
+
 static int winproc_graph(struct window* w)
 {
 	lsl_set_color(lsl_eval(colorpid_background));
@@ -273,6 +313,7 @@ static int winproc_graph(struct window* w)
 	const int port_near_r2 = 50;
 	const int port_far_r2 = 250;
 
+	// nodes; interaction
 	for (int i = graph->nodes_dya.n-1; i >= 0; i--) {
 		struct dd_node* node = &graph->nodes[i];
 
@@ -305,22 +346,39 @@ static int winproc_graph(struct window* w)
 				}
 			}
 			nearport.is_near = nearport.node != NULL && nearport.r2 < port_near_r2;
+		}
 
-			{
-				struct rect nr = (struct rect) {
-					.p0 = { .x = node->x - view->pan_x , .y = node->y - view->pan_y },
-					.dim = { .w = width, .h = height }
-				};
+		struct rect nr = (struct rect) {
+			.p0 = { .x = node->x - view->pan_x , .y = node->y - view->pan_y },
+			.dim = { .w = width, .h = height }
+		};
 
-				union vec2 mpos;
-				int mpos_in_area = lsl_mpos_vec2(&mpos) && rect_contains_point(&nr, mpos) && !nearport.is_near && w->graph_tmp_conn.node == NULL;
-				lsl_scope_push_data(&node->id, sizeof(node->id));
-				lsl_drag_pos("node", mpos_in_area, LSL_POINTER_4WAY, &node->x, &node->y, 1, 1);
-				lsl_scope_pop();
+		union vec2 mpos;
+		int mpos_in_area = lsl_mpos_vec2(&mpos) && rect_contains_point(&nr, mpos) && !nearport.is_near && w->graph_tmp_conn.node == NULL;
+		lsl_scope_push_data(&node->id, sizeof(node->id));
+		lsl_drag_pos("node", mpos_in_area, LSL_POINTER_4WAY, &node->x, &node->y, 1, 1);
+		lsl_scope_pop();
+		if (mpos_in_area) {
+			struct gsel subject = gsel_node(node->id);
+			int is_selected = window_graph_is_selected(w, subject);
+			if (lsl_shift_click()) {
+				if (is_selected) {
+					window_graph_deselect(w, subject);
+				} else {
+					window_graph_select(w, subject);
+				}
+			} else if (lsl_click()) {
+				window_graph_clear_selection(w);
+				if (is_selected) {
+					window_graph_deselect(w, subject);
+				} else {
+					window_graph_select(w, subject);
+				}
 			}
 		}
 	}
 
+	// connections; makes new ones
 	{
 		int can_init_tmp_conn = nearport.node != NULL;
 		if (can_init_tmp_conn && !w->graph_tmp_conn.drag_state) {
@@ -423,115 +481,82 @@ static int winproc_graph(struct window* w)
 		}
 	}
 
-	// handle connections
-	struct gsel nearest = gsel_none();
-	float nearest_distance = 0;
-	struct dd_conn* next_selection = NULL;
-	for (int pass = 0; pass < 2; pass++) {
-		int n_shifty_sel = 0;
-		int n_shifty_total = 0;
-		int grab_next = 0;
+	union vec2 view_pan = { .x = view->pan_x, .y = view->pan_y };
+
+	// connections; selection
+	union vec2 mpos;
+	if (lsl_mpos_press_vec2(&mpos)) {
+		struct dd_conn* nearest = NULL;
+		float nearest_distance = 0;
+
+		int n_selected = 0;
+		int n_total = 0;
+		int previous_was_selected = 0;
 		struct dd_conn* first = NULL;
-		int n_subjects = 0;
+		struct dd_conn* next_in_line = NULL;
+
+		const float min_distance = 16.0; // XXX config?
 
 		for (int i = 0; i < graph->conns_dya.n; i++) {
 			struct dd_conn* c = &graph->conns[i];
-			struct dd_node* src_node = dd_graph_find_node(graph, c->src_node_id);
-			struct dd_node* dst_node = dd_graph_find_node(graph, c->dst_node_id);
-			assert(src_node != NULL);
-			assert(dst_node != NULL);
-
-			int dy0 = 0;
-			for (struct dd_port_it it = dd_node_inport_it(dst_node); it.valid; dd_port_it_next(&it)) {
-				if (it.id == c->dst_port_id) break;
-				dy0++;
-			}
-			int dy1 = 0;
-			for (struct dd_port_it it = dd_node_outport_it(src_node); it.valid; dd_port_it_next(&it)) {
-				if (it.id == c->src_port_id) break;
-				dy1++;
-			}
-
-			int src_node_width, py0, py1;
-			node_box_calc(clt, src_node, NULL, NULL, &src_node_width, NULL, NULL, &py0);
-			node_box_calc(clt, dst_node, NULL, NULL, NULL,            NULL, &py1, NULL);
-
-			const int pcx = 3; // XXX metadata?
-			const int pcy = 5; // XXX metadata?
-
-			s32 sx0 = src_node->x - view->pan_x + src_node_width - pcx;
-			s32 sy0 = src_node->y - view->pan_y + pcy + py0 + dy1 * port_height;
-			s32 sx1 = dst_node->x - view->pan_x + pcx;
-			s32 sy1 = dst_node->y - view->pan_y + pcy + py1 + dy0 * port_height;
-
-			union vec2 p0 = (union vec2) { .x = sx0, .y = sy0 };
-			union vec2 p1 = (union vec2) { .x = sx1, .y = sy1 };
-
-			union vec2 mpos;
-			int inside = lsl_mpos_vec2(&mpos);
+			union vec2 p0,p1;
+			conn_endpoints(graph, clt, view_pan, c, &p0, &p1);
 			float distance = connection_distance(p0, p1, mpos);
-			const float min_distance = 16.0; // XXX config?
-
-			struct gsel subject = gsel_conn(*c);
-
-			if (pass == 0) {
-				if (inside && distance < min_distance) {
-					if (lsl_shift_click()) {
-						n_shifty_sel += window_graph_select(w, subject);
-						n_shifty_total++;
-					} else if (lsl_click()) {
-						if (first == NULL) first = c;
-						n_subjects++;
-						if (nearest.type == GSEL_NONE || distance < nearest_distance) {
-							nearest = subject;
-							nearest_distance = distance;
-						}
-						if (grab_next) {
-							next_selection = c;
-							grab_next = 0;
-						}
-						if (window_graph_is_selected(w, subject)) {
-							grab_next = 1;
-						}
-					}
+			if (distance < min_distance) {
+				n_total++;
+				if (previous_was_selected) {
+					next_in_line = c;
+					previous_was_selected = 0;
 				}
-
-				draw_connection(p0, p1, window_graph_is_selected(w, subject));
-			} else if (pass == 1) {
-				if (distance < min_distance) {
-					if (next_selection != NULL) {
-						if (next_selection == c) {
-							window_graph_select(w, subject);
-						} else {
-							window_graph_deselect(w, subject);
-						}
-					} else {
-						window_graph_deselect(w, subject);
-					}
+				if (window_graph_is_selected(w, gsel_conn(*c))) {
+					n_selected++;
+					previous_was_selected = 1;
+				}
+				if (first == NULL) first = c;
+				if (nearest == NULL || distance < nearest_distance) {
+					nearest = c;
+					nearest_distance = distance;
 				}
 			}
 		}
+		if (previous_was_selected) next_in_line = first;
 
-		if (grab_next) next_selection = first;
+		if ((next_in_line || nearest) && lsl_click()) {
+			window_graph_clear_selection(w);
+			for (int i = 0; i < graph->conns_dya.n; i++) {
+				struct dd_conn* c = &graph->conns[i];
+				struct gsel subject = gsel_conn(*c);
+				if ((n_selected > 0 && n_total > 1 && next_in_line == c) || (n_selected == 0 && nearest == c)) {
+					window_graph_select(w, subject);
+				}
+			}
+		} else if (n_total > 0 && lsl_shift_click()) {
+			for (int i = 0; i < graph->conns_dya.n; i++) {
+				struct dd_conn* c = &graph->conns[i];
+				union vec2 p0,p1;
+				conn_endpoints(graph, clt, view_pan, c, &p0, &p1);
+				float distance = connection_distance(p0, p1, mpos);
+				if (distance >= min_distance) continue;
 
-		if (lsl_click()) {
-			if (next_selection) {
-				if (n_subjects == 1) {
-					window_graph_deselect(w, gsel_conn(*next_selection));
+				struct gsel subject = gsel_conn(*c);
+				if (n_selected == n_total) {
+					window_graph_deselect(w, subject);
 				} else {
-					continue;
+					window_graph_select(w, subject);
 				}
-			} else {
-				window_graph_clear_selection(w);
-				window_graph_select(w, nearest);
 			}
-		} else if (lsl_shift_click() && n_shifty_sel == 0 && n_shifty_total > 0) {
-			continue;
 		}
-		break;
 	}
 
-	// draw nodes
+	// connections; draw
+	for (int i = 0; i < graph->conns_dya.n; i++) {
+		struct dd_conn* c = &graph->conns[i];
+		union vec2 p0,p1;
+		conn_endpoints(graph, clt, view_pan, c, &p0, &p1);
+		draw_connection(p0, p1, window_graph_is_selected(w, gsel_conn(*c)));
+	}
+
+	// nodes; draw
 	for (int i = 0; i < graph->nodes_dya.n; i++) {
 		struct dd_node* n = &graph->nodes[i];
 
@@ -547,6 +572,7 @@ static int winproc_graph(struct window* w)
 		};
 
 		int text_height = lsl_get_text_height();
+		atls_ctx_set(atls, cvi_modifier, window_graph_is_selected(w, gsel_node(n->id)));
 
 		for (int row = 0; row < 6; row++) {
 			for (int column = 0; column < 3; column++) {
@@ -624,6 +650,8 @@ static int winproc_graph(struct window* w)
 			i++;
 		}
 	}
+
+	if (lsl_click()) window_graph_clear_selection(w);
 
 	// pan drag
 	lsl_drag_pos("pan", 1, 0, &view->pan_x, &view->pan_y, -1, -1);

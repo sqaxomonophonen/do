@@ -349,6 +349,32 @@ int lsl_mpos(int* mx, int* my)
 	return retval;
 }
 
+static int mpos_press_vec2(int button, union vec2* mpos)
+{
+	struct wglobal* wg = wglobal_get();
+	struct wframe* top = wframe_top();
+	if (wg->button_stolen[button]) return 0;
+	if (!wg->button[button] && !wg->button_cycles[button]) return 0;
+	union vec2 mp = vec2_sub(wg->button_press_mpos[button], top->rect.p0);
+	if (!rect_contains_point(&top->rect, mp)) return 0;
+	if (mpos) *mpos = mp;
+	return 1;
+}
+
+int lsl_mpos_press_vec2(union vec2* mpos)
+{
+	return mpos_press_vec2(0, mpos);
+}
+
+int lsl_mpos_press(int* mx, int* my)
+{
+	union vec2 mpos;
+	int retval = lsl_mpos_press_vec2(&mpos);
+	if (mx) *mx = mpos.x;
+	if (my) *my = mpos.y;
+	return retval;
+}
+
 static void clicky_shifty(int button, int* clicky, int* shifty)
 {
 	struct wglobal* wg = wglobal_get();
@@ -363,25 +389,32 @@ static void clicky_shifty(int button, int* clicky, int* shifty)
 	if (shifty) *shifty = wg->mod & LSL_MOD_SHIFT;
 }
 
-int lsl_click()
+static int steal_button_input_if(int button, int p)
+{
+	if (p) wglobal_get()->button_stolen[button] = 1;
+	return p;
+}
+
+static int click(int button, int shift)
 {
 	int clicky, shifty;
-	clicky_shifty(0, &clicky, &shifty);
-	return clicky && !shifty;
+	clicky_shifty(button, &clicky, &shifty);
+	return steal_button_input_if(button, clicky && shifty == shift);
+}
+
+int lsl_click()
+{
+	return click(0, 0);
 }
 
 int lsl_shift_click()
 {
-	int clicky, shifty;
-	clicky_shifty(0, &clicky, &shifty);
-	return clicky && shifty;
+	return click(0, 1);
 }
 
 int lsl_right_click()
 {
-	int clicky, shifty;
-	clicky_shifty(2, &clicky, &shifty);
-	return clicky && !shifty;
+	return click(2, 0);
 }
 
 
@@ -399,7 +432,9 @@ int lsl_drag_pos(const char* id, int can_begin_drag, int pointer, int* x, int* y
 
 	if (wg->drag.active) {
 		if (stolen || wg->drag.active_id != get_scope_id(id)) return 0;
-		wg->button_stolen[button] = 1;
+
+		if (f->mpos.x != wg->drag.initial_mx || f->mpos.y != wg->drag.initial_my) wg->drag.active = 2;
+		if (wg->drag.active > 1) wg->button_stolen[button] = 1;
 
 		lsl_set_pointer(pointer);
 
@@ -412,21 +447,16 @@ int lsl_drag_pos(const char* id, int can_begin_drag, int pointer, int* x, int* y
 		if (x != NULL) *x = wg->drag.initial_x + (f->mpos.x - wg->drag.initial_mx) * fx;
 		if (y != NULL) *y = wg->drag.initial_y + (f->mpos.y - wg->drag.initial_my) * fy;
 	} else if (can_begin_drag && !stolen) {
-		wg->button_stolen[button] = 1;
 		if (pointer != 0) lsl_set_pointer(pointer);
 
 		if (press) {
 			wg->drag.active_id = get_scope_id(id);
 			wg->drag.active = 1;
 			retval = LSL_DRAG_START;
-			if (x != NULL) {
-				wg->drag.initial_x = *x;
-				wg->drag.initial_mx = f->mpos.x;
-			}
-			if (y != NULL) {
-				wg->drag.initial_y = *y;
-				wg->drag.initial_my = f->mpos.y;
-			}
+			wg->drag.initial_mx = f->mpos.x;
+			wg->drag.initial_my = f->mpos.y;
+			if (x != NULL) wg->drag.initial_x = *x;
+			if (y != NULL) wg->drag.initial_y = *y;
 		}
 	}
 	return retval;
