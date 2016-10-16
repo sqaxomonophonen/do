@@ -4,7 +4,7 @@
 #include <string.h>
 #include <assert.h>
 
-#include "lsl_prg.h"
+#include "lsl.h"
 #include "dtypes.h"
 
 #define ASSERT(cond) \
@@ -66,6 +66,7 @@ static void wglobal_post_frame_reset()
 	}
 }
 
+
 struct wframe {
 	struct rect rect; // rectangle (absolute coords)
 	int minside; // is mouse inside rect?
@@ -87,6 +88,15 @@ static void assert_valid_wframe_stack_top(int i)
 struct wframe* wframe_top()
 {
 	return &wframe_stack[wframe_stack_top_index];
+}
+
+static void register_mouse_press_position(struct wglobal* wg, struct wframe* wf)
+{
+	for (int i = 0; i < LSL_MAX_BUTTONS; i++) {
+		if (wg->button[i] && wg->button_cycles[i]) {
+			wg->button_press_mpos[i] = wf->mpos;
+		}
+	}
 }
 
 static inline int utf8_decode(char** c0z, int* n)
@@ -500,8 +510,19 @@ void lsl_bezier(float thickness, union vec2 p0, union vec2 p1, union vec2 p2, un
 	}
 }
 
+
 #ifdef USE_GLX11
-#include "lsl_prg_glx11.h"
+
+	#include "lsl_gl_header.h"
+	#include "lsl_gl_x11.h"
+	#include "lsl_gl.h"
+
+#elif USE_GL_WIN
+
+	#include "lsl_gl_header.h"
+	#include "lsl_gl_win.h"
+	#include "lsl_gl.h"
+
 #else
-#error "missing lsl define/implementation (2)"
+	#error "missing lsl USE_* define/implementation (2)"
 #endif

@@ -1,0 +1,9 @@
+USE=-DUSE_GLX11
+OPT=-g -O0
+STD=-std=gnu99
+CFLAGS=$(OPT) $(STD) -Wall $(USE)
+LINK=-lm -lX11 -lGL -lrt -Wall
+
+BIN=do
+
+include Makefile.common

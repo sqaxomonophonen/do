@@ -3,7 +3,7 @@
 #include <assert.h>
 #include <stdio.h>
 
-#include "lsl_prg.h"
+#include "lsl.h"
 #include "dd.h"
 #include "dya.h"
 
@@ -89,6 +89,7 @@ static int gsel_compar(const void* va, const void* vb)
 
 	} else {
 		assert(!"invalid gsel_type");
+		return 0;
 	}
 }
 
@@ -239,6 +240,7 @@ static u16 port_id_at(struct dd_node* node, int pos)
 		index--;
 	}
 	assert(!"not found");
+	return 0;
 }
 
 static void conn_endpoints(struct dd_graph* dg, struct atls_cell_table* clt, union vec2 sub, struct dd_conn* c, union vec2* out_p0, union vec2* out_p1)
@@ -729,9 +731,12 @@ static struct window* clone_win(struct window* ow)
 	return w;
 }
 
-static struct atls* load_atlas(char* path)
+static struct atls* load_atlas(char* relpath)
 {
-	struct atls* atls = atls_load_from_file("default.atls");
+	char path[4096];
+	assert (lsl_relpath(path, sizeof(path), relpath) != -1);
+
+	struct atls* atls = atls_load_from_file(path);
 	if (atls == NULL) {
 		fprintf(stderr, "%s\n", atls_get_error());
 		assert(!"atls_load_from_file");

@@ -77,7 +77,7 @@ struct atls* atls_load_from_file(char* file)
 	error = 0;
 	error_str = "";
 
-	FILE* f = fopen(file, "r");
+	FILE* f = fopen(file, "rb");
 	if (f == NULL) {
 		error = 1;
 		error_str = "no such file";
@@ -726,6 +726,7 @@ int atls_glyph_table_index(struct atls_glyph_table* t, int codepoint)
 	while (l <= r) {
 		int m = (l+r) >> 1;
 		int cmp = t->codepoints[m] - codepoint;
+
 		if (cmp < 0) {
 			l = m + 1;
 		} else if (cmp > 0) {

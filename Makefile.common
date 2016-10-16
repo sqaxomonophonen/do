@@ -1,0 +1,25 @@
+all: $(BIN)
+
+m.o: m.c
+	$(CC) $(CFLAGS) -c $<
+
+atls.o: atls.c
+	$(CC) $(CFLAGS) -c $<
+
+lsl.o: lsl.c lsl.h lsl_gl.h lsl_gl_x11.h lsl_gl_win.h
+	$(CC) $(CFLAGS) -c $<
+
+dya.o: dya.c
+	$(CC) $(CFLAGS) -c $<
+
+dd.o: dd.c
+	$(CC) $(CFLAGS) -c $<
+
+do.o: do.c
+	$(CC) $(CFLAGS) -c $<
+
+$(BIN): do.o dd.o dya.o lsl.o m.o atls.o
+	$(CC) $^ -o $@ $(LINK)
+
+clean:
+	rm -f *.o $(BIN)

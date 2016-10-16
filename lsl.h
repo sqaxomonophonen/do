@@ -23,6 +23,8 @@ int lsl_accept(int codepoint);
 
 int lsl_main(int argc, char** argv);
 
+int lsl_relpath(char* buffer, size_t buffer_sz, char* relpath);
+
 void lsl_set_atls(struct atls*);
 void lsl_set_type_index(unsigned int index);
 int lsl_get_text_width(char* str, int n);
