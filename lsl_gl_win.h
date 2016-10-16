@@ -83,6 +83,13 @@ static void die(const char* msg)
 }
 #endif
 
+HCURSOR current_cursor;
+HCURSOR cursor_default;
+HCURSOR cursor_sizeall;
+HCURSOR cursor_hand;
+HCURSOR cursor_sizens;
+HCURSOR cursor_sizewe;
+
 WNDCLASSA win_class;
 
 #define MAX_WIN (32)
@@ -320,6 +327,8 @@ void lsl_main_loop()
 			continue;
 		}
 
+		current_cursor = cursor_default;
+
 		for (int i = 0; i < MAX_WIN; i++) {
 			struct win* w = &wins[i];
 			if (!w->open) continue;
@@ -368,7 +377,22 @@ void lsl_main_loop()
 
 void lsl_set_pointer(int id)
 {
-	// TODO
+	HCURSOR c = cursor_default;
+	switch (id) {
+		case LSL_POINTER_HORIZONTAL:
+			c = cursor_sizewe;
+			break;
+		case LSL_POINTER_VERTICAL:
+			c = cursor_sizens;
+			break;
+		case LSL_POINTER_4WAY:
+			c = cursor_sizeall;
+			break;
+		case LSL_POINTER_TOUCH:
+			c = cursor_hand;
+			break;
+	}
+	current_cursor = c;
 }
 
 static LRESULT WINAPI win_proc(HWND w, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -384,6 +408,9 @@ static LRESULT WINAPI win_proc(HWND w, UINT msg, WPARAM wParam, LPARAM lParam)
 		BeginPaint(w, &paint);
 		EndPaint(w, &paint);
 	} break;
+	case WM_SETCURSOR:
+		SetCursor(current_cursor);
+		return 0;
 	case WM_DESTROY:
 	case WM_CLOSE: // XXX just close window?
 		PostQuitMessage(0);
@@ -459,10 +486,18 @@ int main(int argc, char** argv)
 		exe_path_sz = strlen(exe_path);
 	}
 
+	{
+		current_cursor = cursor_default = LoadCursor(NULL, IDC_ARROW);
+		cursor_sizeall = LoadCursor(NULL, IDC_SIZEALL);
+		cursor_hand = LoadCursor(NULL, IDC_HAND);
+		cursor_sizens = LoadCursor(NULL, IDC_SIZENS);
+		cursor_sizewe = LoadCursor(NULL, IDC_SIZEWE);
+	}
+
 	win_class.style = CS_HREDRAW | CS_VREDRAW | CS_OWNDC;
 	win_class.lpfnWndProc = win_proc;
 	win_class.hInstance = GetModuleHandle(NULL);
-	win_class.hCursor = LoadCursor(NULL, IDC_ARROW);
+	win_class.hCursor = current_cursor;
 	win_class.lpszClassName = "LSLWindowClass";
 	assert(RegisterClassA(&win_class));
 

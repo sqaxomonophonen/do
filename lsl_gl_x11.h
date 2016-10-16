@@ -302,6 +302,8 @@ void lsl_main_loop()
 			}
 		}
 
+		current_cursor = cursor_default;
+
 		for (int i = 0; i < MAX_WIN; i++) {
 			struct win* lw = &wins[i];
 			if (!lw->open) continue;
@@ -318,8 +320,6 @@ void lsl_main_loop()
 
 			gl_frame_begin(wf->rect.dim.w, wf->rect.dim.h);
 
-			current_cursor = cursor_default;
-
 			wframe_stack_reset(wf);
 			current_win = lw;
 
@@ -329,11 +329,6 @@ void lsl_main_loop()
 			// post frame cleanup
 			wglobal_post_frame_reset();
 			current_win = NULL;
-
-			if (current_cursor != last_cursor) {
-				XDefineCursor(dpy, RootWindow(dpy, vis->screen), current_cursor);
-				last_cursor = current_cursor;
-			}
 
 			gl_draw_flush();
 
@@ -347,6 +342,12 @@ void lsl_main_loop()
 				return; // XXX or close window?
 			}
 		}
+
+		if (current_cursor != last_cursor) {
+			XDefineCursor(dpy, RootWindow(dpy, vis->screen), current_cursor);
+			last_cursor = current_cursor;
+		}
+
 	}
 }
 
