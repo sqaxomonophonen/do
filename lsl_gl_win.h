@@ -349,14 +349,12 @@ void lsl_main_loop()
 			wf->rect.dim.w = width;
 			wf->rect.dim.h = height;
 
-			struct wglobal* wg = &w->wglobal;
-			handle_modifier_keys(wg);
-			register_mouse_press_position(wg, wf);
+			handle_modifier_keys(&w->wglobal);
 
 			gl_frame_begin(width, height);
 
-			wframe_stack_reset(wf);
 			current_win = w;
+			new_frame(wf);
 
 			int ret = w->proc(w->usr);
 

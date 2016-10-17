@@ -305,26 +305,23 @@ void lsl_main_loop()
 		current_cursor = cursor_default;
 
 		for (int i = 0; i < MAX_WIN; i++) {
-			struct win* lw = &wins[i];
-			if (!lw->open) continue;
+			struct win* w = &wins[i];
+			if (!w->open) continue;
 
 			// fetch window dimensions
-			struct wframe* wf = &lw->wframe_init;
+			struct wframe* wf = &w->wframe_init;
 			wf->rect.p0.x = wf->rect.p0.y = 0;
-			wf->rect.dim = get_dim_vec2(lw->window);
+			wf->rect.dim = get_dim_vec2(w->window);
 
-			struct wglobal* wg = &lw->wglobal;
-			register_mouse_press_position(wg, wf);
-
-			glXMakeCurrent(dpy, lw->window, ctx);
+			glXMakeCurrent(dpy, w->window, ctx);
 
 			gl_frame_begin(wf->rect.dim.w, wf->rect.dim.h);
 
-			wframe_stack_reset(wf);
-			current_win = lw;
+			current_win = w;
+			new_frame(wf);
 
 			// run user callback
-			int ret = lw->proc(lw->usr);
+			int ret = w->proc(w->usr);
 
 			// post frame cleanup
 			wglobal_post_frame_reset();
@@ -332,11 +329,7 @@ void lsl_main_loop()
 
 			gl_draw_flush();
 
-			glXSwapBuffers(dpy, lw->window);
-
-			// clear per-wframe input stuff
-			for (int i = 0; i < LSL_MAX_BUTTONS; i++) wg->button_cycles[i] = 0;
-			wg->text_length = 0;
+			glXSwapBuffers(dpy, w->window);
 
 			if (ret != 0) {
 				return; // XXX or close window?

@@ -12,12 +12,23 @@ lsl_prg.h: application framework (windowing, drawing, input)
 
 #define LSL_MOD_LSHIFT (1<<0)
 #define LSL_MOD_RSHIFT (1<<1)
-#define LSL_MOD_LCTRL (1<<2)
-#define LSL_MOD_RCTRL (1<<3)
-#define LSL_MOD_LALT (1<<4)
-#define LSL_MOD_RALT (1<<5)
-
 #define LSL_MOD_SHIFT (LSL_MOD_LSHIFT | LSL_MOD_RSHIFT)
+#define LSL_MOD_LCTRL  (1<<2)
+#define LSL_MOD_RCTRL  (1<<3)
+#define LSL_MOD_LALT   (1<<4)
+#define LSL_MOD_RALT   (1<<5)
+
+#define LSL_LMB        (1<<6)
+#define LSL_MMB        (1<<7)
+#define LSL_RMB        (1<<8)
+
+#define LSL_PRESS      (1<<9)
+#define LSL_ACTIVE     (1<<10)
+#define LSL_CLICK      (1<<11)
+#define LSL_CANCEL     (1<<12)
+#define LSL_RELEASE    (1<<13)
+#define LSL_DRAGGED    (1<<14)
+
 
 int lsl_accept(int codepoint);
 
@@ -58,20 +69,11 @@ void lsl_scope_pop();
 #define LSL_POINTER_TOUCH (4)
 void lsl_set_pointer(int);
 
-
-#define LSL_DRAG_START (1)
-#define LSL_DRAG_CONT (2)
-#define LSL_DRAG_STOP (3)
-int lsl_mpos(int* mx, int* my);
 int lsl_mpos_vec2(union vec2* mpos);
-int lsl_mpos_press_vec2(union vec2* mpos);
-int lsl_mpos_press(int* mx, int* my);
-int lsl_click();
-int lsl_shift_click();
-int lsl_right_click();
-int lsl_drag_pos(const char* id, int can_begin_drag, int pointer, int* x, int* y, int fx, int fy);
-int lsl_drag(const char* id, int can_begin_drag, int pointer);
-
+int lsl_mpos(int* mx, int* my);
+int lsl_mdelta_vec2(union vec2* mdelta);
+int lsl_mdelta(int* dx, int* dy);
+int lsl_press(const char* id, int activatable, int pointer);
 
 #define LSL_PRG_H
 #endif

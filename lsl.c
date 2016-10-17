@@ -35,24 +35,18 @@ union vec4 draw_color0;
 union vec4 draw_color1;
 
 struct wglobal {
+	union vec2 mdelta;
+
 	int button[LSL_MAX_BUTTONS];
 	int button_cycles[LSL_MAX_BUTTONS];
-	int button_stolen[LSL_MAX_BUTTONS];
-	union vec2 button_press_mpos[LSL_MAX_BUTTONS];
 
 	int mod;
 
 	int text_length;
 	char text[LSL_MAX_TEXT_LENGTH + 1]; /* UTF-8 */
 
-	struct {
-		u64 active_id;
-		int active;
-		int initial_x;
-		int initial_y;
-		int initial_mx;
-		int initial_my;
-	} drag;
+	int press_active, press_active_modmask;
+	u64 press_active_id;
 };
 static struct wglobal* wglobal_get();
 
@@ -62,7 +56,6 @@ static void wglobal_post_frame_reset()
 	wg->text_length = 0;
 	for (int i = 0; i < LSL_MAX_BUTTONS; i++) {
 		wg->button_cycles[i] = 0;
-		wg->button_stolen[i] = 0;
 	}
 }
 
@@ -74,8 +67,11 @@ struct wframe {
 } wframe_stack[STACK_MAX];
 int wframe_stack_top_index;
 
-static void wframe_stack_reset(struct wframe* f)
+static void new_frame(struct wframe* f)
 {
+	union vec2 new_mpos = f->mpos;
+	union vec2 old_mpos = wframe_stack[0].mpos;
+	wglobal_get()->mdelta = vec2_sub(new_mpos, old_mpos);
 	wframe_stack_top_index = 0;
 	wframe_stack[0] = *f;
 }
@@ -88,15 +84,6 @@ static void assert_valid_wframe_stack_top(int i)
 struct wframe* wframe_top()
 {
 	return &wframe_stack[wframe_stack_top_index];
-}
-
-static void register_mouse_press_position(struct wglobal* wg, struct wframe* wf)
-{
-	for (int i = 0; i < LSL_MAX_BUTTONS; i++) {
-		if (wg->button[i] && wg->button_cycles[i]) {
-			wg->button_press_mpos[i] = wf->mpos;
-		}
-	}
 }
 
 static inline int utf8_decode(char** c0z, int* n)
@@ -359,122 +346,70 @@ int lsl_mpos(int* mx, int* my)
 	return retval;
 }
 
-static int mpos_press_vec2(int button, union vec2* mpos)
+int lsl_mdelta_vec2(union vec2* mdelta)
 {
-	struct wglobal* wg = wglobal_get();
-	struct wframe* top = wframe_top();
-	if (wg->button_stolen[button]) return 0;
-	if (!wg->button[button] && !wg->button_cycles[button]) return 0;
-	union vec2 mp = vec2_sub(wg->button_press_mpos[button], top->rect.p0);
-	if (!rect_contains_point(&top->rect, mp)) return 0;
-	if (mpos) *mpos = mp;
-	return 1;
+	if (mdelta) *mdelta = wglobal_get()->mdelta;
+	return wframe_top()->minside;
 }
 
-int lsl_mpos_press_vec2(union vec2* mpos)
+int lsl_mdelta(int* dx, int* dy)
 {
-	return mpos_press_vec2(0, mpos);
-}
-
-int lsl_mpos_press(int* mx, int* my)
-{
-	union vec2 mpos;
-	int retval = lsl_mpos_press_vec2(&mpos);
-	if (mx) *mx = mpos.x;
-	if (my) *my = mpos.y;
+	union vec2 mdelta;
+	int retval = lsl_mdelta_vec2(&mdelta);
+	if (dx) *dx = mdelta.x;
+	if (dy) *dy = mdelta.y;
 	return retval;
 }
 
-static void clicky_shifty(int button, int* clicky, int* shifty)
-{
-	struct wglobal* wg = wglobal_get();
-	struct wframe* top = wframe_top();
-	int clck =
-		!wg->button_stolen[button]
-		&& !wg->button[button]
-		&& wg->button_cycles[button]
-		&& rect_contains_point(&top->rect, wg->button_press_mpos[button]);
-
-	if (clicky) *clicky = clck;
-	if (shifty) *shifty = wg->mod & LSL_MOD_SHIFT;
-}
-
-static int steal_button_input_if(int button, int p)
-{
-	if (p) wglobal_get()->button_stolen[button] = 1;
-	return p;
-}
-
-static int click(int button, int shift)
-{
-	int clicky, shifty;
-	clicky_shifty(button, &clicky, &shifty);
-	return steal_button_input_if(button, clicky && shifty == shift);
-}
-
-int lsl_click()
-{
-	return click(0, 0);
-}
-
-int lsl_shift_click()
-{
-	return click(0, 1);
-}
-
-int lsl_right_click()
-{
-	return click(2, 0);
-}
-
-
-int lsl_drag_pos(const char* id, int can_begin_drag, int pointer, int* x, int* y, int fx, int fy)
+int lsl_press(const char* id, int activatable, int pointer)
 {
 	struct wframe* f = wframe_top();
 	struct wglobal* wg = wglobal_get();
 
-	const int button = 0;
+	int minside = f->minside;
+	int pressed = 0;
+	int press = 0;
+	int modmask = 0;
+	for (int button = 0; button < 3; button++) {
+		int p = minside && wg->button[button];
+		pressed |= p;
+		press |= (p && wg->button_cycles[button]);
+		if (pressed) modmask |= (LSL_LMB << button);
+	}
 
-	int pressed = f->minside && wg->button[button];
-	int press = pressed && wg->button_cycles[button];
-	int stolen = wg->button_stolen[button];
 	int retval = 0;
 
-	if (wg->drag.active) {
-		if (stolen || wg->drag.active_id != get_scope_id(id)) return 0;
+	if (wg->press_active) {
+		if (wg->press_active_id != get_scope_id(id)) return 0;
+		if (pointer != 0) lsl_set_pointer(pointer);
 
-		if (f->mpos.x != wg->drag.initial_mx || f->mpos.y != wg->drag.initial_my) wg->drag.active = 2;
-		if (wg->drag.active > 1) wg->button_stolen[button] = 1;
+		int dx, dy;
+		lsl_mdelta(&dx, &dy);
+		if (dx || dy) wg->press_active_modmask |= LSL_DRAGGED;
 
-		lsl_set_pointer(pointer);
-
-		retval = LSL_DRAG_CONT;
-		if (!pressed) {
+		if (pressed) {
+			retval = LSL_ACTIVE;
+		} else {
 			lsl_set_pointer(0);
-			wg->drag.active = 0;
-			retval = LSL_DRAG_STOP;
+			wg->press_active = 0;
+			if (activatable) {
+				retval = LSL_CLICK | LSL_RELEASE;
+			} else {
+				retval = LSL_CANCEL | LSL_RELEASE;
+			}
 		}
-		if (x != NULL) *x = wg->drag.initial_x + (f->mpos.x - wg->drag.initial_mx) * fx;
-		if (y != NULL) *y = wg->drag.initial_y + (f->mpos.y - wg->drag.initial_my) * fy;
-	} else if (can_begin_drag && !stolen) {
+	} else if (!wg->press_active && activatable) {
 		if (pointer != 0) lsl_set_pointer(pointer);
 
 		if (press) {
-			wg->drag.active_id = get_scope_id(id);
-			wg->drag.active = 1;
-			retval = LSL_DRAG_START;
-			wg->drag.initial_mx = f->mpos.x;
-			wg->drag.initial_my = f->mpos.y;
-			if (x != NULL) wg->drag.initial_x = *x;
-			if (y != NULL) wg->drag.initial_y = *y;
+			wg->press_active = 1;
+			wg->press_active_id = get_scope_id(id);
+			wg->press_active_modmask = modmask | wg->mod;
+			retval = LSL_PRESS | LSL_ACTIVE;
 		}
 	}
-	return retval;
-}
 
-int lsl_drag(const char* id, int can_begin_drag, int pointer)
-{
-	return lsl_drag_pos(id, can_begin_drag, pointer, NULL, NULL, 0, 0);
+	return retval == 0 ? 0 : (retval | wg->press_active_modmask);
 }
 
 void lsl_clip_push(struct rect* r)
