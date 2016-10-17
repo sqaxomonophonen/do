@@ -1,0 +1,11 @@
+CC=i686-w64-mingw32-gcc
+USE=-DUSE_GL_WIN
+OPT=-g -gdwarf-2 -O0
+#OPT=-O2
+STD=-std=gnu99
+CFLAGS=$(OPT) $(STD) -Wall $(USE)
+LINK=-lm -lopengl32 -mwindows -Wall
+
+BIN=do.exe
+
+include Makefile.common
