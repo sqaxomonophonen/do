@@ -47,6 +47,20 @@ union vec2 vec2_normal(union vec2 v)
 	};
 }
 
+struct rect rect_from_points(union vec2 p0, union vec2 p1)
+{
+	return (struct rect) {
+		.p0 = {
+			.x = p0.x < p1.x ? p0.x : p1.x,
+			.y = p0.y < p1.y ? p0.y : p1.y
+		},
+		.dim = {
+			.w = fabsf(p1.x - p0.x),
+			.h = fabsf(p1.y - p0.y),
+		}
+	};
+}
+
 int rect_not_empty(struct rect* r)
 {
 	return r->dim.w > 0 && r->dim.h > 0;
@@ -61,6 +75,23 @@ int rect_contains_point(struct rect* rect, union vec2 point)
 			&& point.s[axis] < (rect->p0.s[axis] + rect->dim.s[axis]);
 	}
 	return inside;
+}
+
+void rect_edges(struct rect* r, float* left, float* right, float* top, float* bottom)
+{
+	if (left) *left = r->p0.x;
+	if (right) *right = r->p0.x + r->dim.w - 1;
+	if (top) *top = r->p0.y;
+	if (bottom) *bottom = r->p0.y + r->dim.h - 1;
+}
+
+int rect_overlaps(struct rect* r0, struct rect* r1)
+{
+	float r0left, r0right, r0top, r0bottom;
+	rect_edges(r0, &r0left, &r0right, &r0top, &r0bottom);
+	float r1left, r1right, r1top, r1bottom;
+	rect_edges(r1, &r1left, &r1right, &r1top, &r1bottom);
+	return r0left < r1right && r0right > r1left && r0top < r1bottom && r0bottom > r1top;
 }
 
 void rect_split_vertical(struct rect* r, float height, struct rect* a, struct rect* b)

@@ -14,8 +14,11 @@ mkatls: mkatls.o dya.o
 builtin.tbl: builtin.xcf
 	./gimp2tblspec.sh $^
 
-DEFAULT_DEPS=mkatls default.progs default.cols lsl_reserved.rects ter-u18n.bdf ter-u12n.bdf builtin.tbl
-DEFAULT_ARGS=default.progs default.cols lsl_reserved.rects main:ter-u18n.bdf subs:ter-u12n.bdf builtin.tbl
+boxselect.tbl: boxselect.xcf
+	./gimp2tblspec.sh $^
+
+DEFAULT_DEPS=mkatls default.progs default.cols lsl_reserved.rects ter-u18n.bdf ter-u12n.bdf builtin.tbl boxselect.tbl
+DEFAULT_ARGS=default.progs default.cols lsl_reserved.rects main:ter-u18n.bdf subs:ter-u12n.bdf builtin.tbl boxselect.tbl
 
 default.atls: $(DEFAULT_DEPS)
 	./mkatls default.atls $(DEFAULT_ARGS)

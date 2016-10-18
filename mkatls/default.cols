@@ -9,3 +9,5 @@ builtin.footer 255 255 255 192
 builtin.port 255 255 0 192
 builtin.footer_text 0 0 0 255
 builtin.port_text 255 255 0 255
+boxselect 50 50 0 50
+boxselect.border 255 255 0 255

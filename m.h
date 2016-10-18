@@ -29,8 +29,10 @@ union vec2 vec2_scale(union vec2 v, float s);
 union vec2 vec2_unit(union vec2 v);
 union vec2 vec2_normal(union vec2 v);
 
+struct rect rect_from_points(union vec2 p0, union vec2 p1);
 int rect_not_empty(struct rect* r);
 int rect_contains_point(struct rect* rect, union vec2 point);
+int rect_overlaps(struct rect* rect0, struct rect* rect1);
 void rect_split_vertical(struct rect* r, float height, struct rect* a, struct rect* b);
 void rect_split_horizontal(struct rect* r, float width, struct rect* a, struct rect* b);
 

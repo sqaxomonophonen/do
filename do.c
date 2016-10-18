@@ -10,6 +10,7 @@
 struct atls* atls;
 
 int builtin_ctbl;
+int boxselect_ctbl;
 
 int colorpid_background;
 int colorpid_builtin_footer_text;
@@ -110,6 +111,8 @@ struct window {
 	struct dya graph_view_stack_dya;
 	struct graph_view* graph_view_stack;
 	struct graph_view graph_view_root;
+
+	union vec2 mpos0;
 
 	struct {
 		struct dd_node* node;
@@ -281,6 +284,31 @@ static void conn_endpoints(struct dd_graph* dg, struct atls_cell_table* clt, uni
 
 	if (out_p0) *out_p0 = p0;
 	if (out_p1) *out_p1 = p1;
+}
+
+static void draw_cell_box(struct atls_cell_table* ct, struct rect r)
+{
+	int x0 = r.p0.x;
+	int y0 = r.p0.y;
+	int width = r.dim.w;
+	int height = r.dim.h;
+
+	int center_w = width - (ct->widths[0] + ct->widths[2]);
+	int center_h = height - (ct->heights[0] + ct->heights[2]);
+
+	int y = y0;
+	for (int row = 0; row < 3; row++) {
+		int h = row == 1 ? center_h : ct->heights[row];
+		if (center_h < 0) h -= (((-center_h)/2)+(row==2));
+		int x = x0;
+		for (int column = 0; column < 3; column++) {
+			int w = column == 1 ? center_w : ct->widths[column];
+			if (center_w < 0) w -= (((-center_w)/2)+(column==2));
+			if (w > 0 && h > 0) lsl_cell_plot(column, row, x, y, w, h);
+			x += w;
+		}
+		y += h;
+	}
 }
 
 static int winproc_graph(struct window* w)
@@ -672,12 +700,37 @@ static int winproc_graph(struct window* w)
 	{
 		int pmask;
 		if ((pmask = lsl_press("bg", 1, 0)) != 0) {
-			int dx, dy;
-			lsl_mdelta(&dx, &dy);
-			view->pan_x -= dx;
-			view->pan_y -= dy;
+			int is_pan = (pmask & LSL_RMB) || ((pmask & LSL_LMB) && (pmask & LSL_MOD_ALT));
+			int is_boxselect = (pmask & LSL_LMB) && !is_pan;
 			if ((pmask & LSL_CLICK) && !(pmask & LSL_DRAGGED)) {
 				window_graph_clear_selection(w);
+			} else if (is_pan) {
+				int dx, dy;
+				lsl_mdelta(&dx, &dy);
+				view->pan_x -= dx;
+				view->pan_y -= dy;
+			} else if (is_boxselect) {
+				union vec2 mpos;
+				lsl_mpos_vec2(&mpos);
+				if (pmask & LSL_PRESS) {
+					w->mpos0 = mpos;
+				} else if (pmask & LSL_RELEASE) {
+					struct rect r0 = rect_from_points(w->mpos0, mpos);
+					if (!(pmask & LSL_MOD_SHIFT)) window_graph_clear_selection(w);
+					for (int i = 0; i < graph->nodes_dya.n; i++) {
+						struct dd_node* node = &graph->nodes[i];
+						int width, height;
+						node_box_calc(clt, node, NULL, NULL, &width, &height, NULL, NULL);
+						struct rect r1 = (struct rect) {
+							.p0 = { .x = node->x, .y = node->y },
+							.dim = { .w = width, .h = height }
+						};
+						r1.p0 = vec2_sub(r1.p0, view_pan);
+						if (rect_overlaps(&r0, &r1)) window_graph_select(w, gsel_node(node->id));
+					}
+				}
+				struct atls_cell_table* ct = lsl_set_cell_table(boxselect_ctbl);
+				draw_cell_box(ct, rect_from_points(w->mpos0, mpos));
 			}
 		}
 	}
@@ -773,7 +826,8 @@ static struct atls* load_atlas(char* relpath)
 	assert((type_index_main = atls_get_glyph_table_index(atls, "main")) >= 0);
 	assert((type_index_subs = atls_get_glyph_table_index(atls, "subs")) >= 0);
 
-	builtin_ctbl = atls_get_cell_table_index(atls, "builtin");
+	assert((builtin_ctbl = atls_get_cell_table_index(atls, "builtin")) != -1);
+	assert((boxselect_ctbl = atls_get_cell_table_index(atls, "boxselect")) != -1);
 
 	colorpid_background = atls_get_prg_id(atls, "background");
 	colorpid_builtin_footer_text = atls_get_prg_id(atls, "builtin.footer_text");

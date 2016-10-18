@@ -374,7 +374,7 @@ int lsl_press(const char* id, int activatable, int pointer)
 		int p = minside && wg->button[button];
 		pressed |= p;
 		press |= (p && wg->button_cycles[button]);
-		if (pressed) modmask |= (LSL_LMB << button);
+		if (p) modmask |= (LSL_LMB << button);
 	}
 
 	int retval = 0;
