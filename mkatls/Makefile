@@ -27,4 +27,4 @@ default.png: $(DEFAULT_DEPS)
 	./mkatls default.png $(DEFAULT_ARGS)
 
 clean:
-	rm -rf mkatls default.atls default.png builtin.tbl *.o
+	rm -rf mkatls *.atls *.*.png *.tbl *.o
