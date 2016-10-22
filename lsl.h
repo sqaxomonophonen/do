@@ -31,8 +31,38 @@ lsl_prg.h: application framework (windowing, drawing, input)
 #define LSL_RELEASE    (1<<13)
 #define LSL_DRAGGED    (1<<14)
 
+// some ASCII-fyable keys
+#define LSLK_DEL (127)
 
-int lsl_accept(int codepoint);
+/* (ab-)using the reserved unicode/latin1 0x80-09f range for special keys I
+ * want to capture with lsl_getch() */
+#define LSLK_S0 (0x80)
+#define LSLK_ARROW_LEFT  (LSLK_S0 + 0)
+#define LSLK_ARROW_RIGHT (LSLK_S0 + 1)
+#define LSLK_ARROW_UP    (LSLK_S0 + 2)
+#define LSLK_ARROW_DOWN  (LSLK_S0 + 3)
+#define LSLK_ARROW_DOWN  (LSLK_S0 + 3)
+#define LSLK_INSERT      (LSLK_S0 + 4)
+#define LSLK_HOME        (LSLK_S0 + 5) // XXX or use STX/ETX? ascii codes 3/4? they mean "start/end of text"
+#define LSLK_END         (LSLK_S0 + 6)
+#define LSLK_PGUP        (LSLK_S0 + 7)
+#define LSLK_PGDN        (LSLK_S0 + 8)
+
+#define LSLK_F1          (LSLK_S0 + 9)
+#define LSLK_F2          (LSLK_F1 + 1)
+#define LSLK_F3          (LSLK_F1 + 2)
+#define LSLK_F4          (LSLK_F1 + 3)
+#define LSLK_F5          (LSLK_F1 + 4)
+#define LSLK_F6          (LSLK_F1 + 5)
+#define LSLK_F7          (LSLK_F1 + 6)
+#define LSLK_F8          (LSLK_F1 + 7)
+#define LSLK_F9          (LSLK_F1 + 8)
+#define LSLK_F10         (LSLK_F1 + 9)
+#define LSLK_F11         (LSLK_F1 + 10)
+#define LSLK_F12         (LSLK_F1 + 11)
+
+
+int lsl_getch();
 
 int lsl_main(int argc, char** argv);
 

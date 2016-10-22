@@ -43,7 +43,7 @@ struct wglobal {
 	int mod;
 
 	int text_length;
-	char text[LSL_MAX_TEXT_LENGTH + 1]; /* UTF-8 */
+	int text[LSL_MAX_TEXT_LENGTH]; // codepoints
 
 	int press_active, press_active_modmask;
 	u64 press_active_id;
@@ -84,6 +84,12 @@ static void assert_valid_wframe_stack_top(int i)
 struct wframe* wframe_top()
 {
 	return &wframe_stack[wframe_stack_top_index];
+}
+
+static void handle_text_input_code(struct wglobal* wg, int code)
+{
+	if ((wg->text_length + 1) >= LSL_MAX_TEXT_LENGTH) return;
+	wg->text[wg->text_length++] = code;
 }
 
 static inline int utf8_decode(char** c0z, int* n)
@@ -180,18 +186,14 @@ void lsl_scope_pop()
 	scope_stack_size--;
 }
 
-int lsl_accept(int codepoint)
+int lsl_getch()
 {
 	struct wglobal* wg = wglobal_get();
-	char* p = wg->text;
-	int n = wg->text_length;
-	if (utf8_decode(&p, &n) == codepoint) {
-		memmove(wg->text, wg->text + (wg->text_length - n), n);
-		wg->text_length = n;
-		return 1;
-	} else {
-		return 0;
-	}
+	if (wg->text_length <= 0) return -1;
+	int code = wg->text[0];
+	wg->text_length--;
+	memmove(wg->text, wg->text+1, wg->text_length * sizeof(wg->text));
+	return code;
 }
 
 struct atls_glyph* get_codepoint_glyph(int codepoint)

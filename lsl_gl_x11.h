@@ -155,29 +155,45 @@ static struct win* wlookup(Window w)
 	return NULL;
 }
 
-static void handle_text_event(struct wglobal* wg, char* text, int length)
-{
-	if (length <= 0) return;
-	if ((wg->text_length + length) >= LSL_MAX_TEXT_LENGTH) return;
-	memcpy(wg->text + wg->text_length, text, length);
-	wg->text_length += length;
-	wg->text[wg->text_length] = 0;
-}
-
 static void handle_key_event(XKeyEvent* e, struct win* lw)
 {
 	struct wglobal* wg = &lw->wglobal;
 
 	KeySym sym = XkbKeycodeToKeysym(dpy, e->keycode, 0, 0);
-	int mask = 0;
 	int is_keypress = e->type == KeyPress;
+
+	if (is_keypress) {
+		switch (sym) {
+		case XK_Return:    handle_text_input_code(wg, '\n'); return; // XLookupString gives \r :-/
+		case XK_Left:      handle_text_input_code(wg, LSLK_ARROW_LEFT); return;
+		case XK_Right:     handle_text_input_code(wg, LSLK_ARROW_RIGHT); return;
+		case XK_Up:        handle_text_input_code(wg, LSLK_ARROW_UP); return;
+		case XK_Down:      handle_text_input_code(wg, LSLK_ARROW_DOWN); return;
+		case XK_Insert:    handle_text_input_code(wg, LSLK_INSERT); return;
+		case XK_Home:      handle_text_input_code(wg, LSLK_HOME); return;
+		case XK_End:       handle_text_input_code(wg, LSLK_END); return;
+		case XK_Page_Up:   handle_text_input_code(wg, LSLK_PGUP); return;
+		case XK_Page_Down: handle_text_input_code(wg, LSLK_PGDN); return;
+
+		/* XXX I'd like a XK_F1 <= sym <= XK_F12, but it's not
+		 * completely consistent :-/ */
+		case XK_F1:        handle_text_input_code(wg, LSLK_F1); return;
+		case XK_F2:        handle_text_input_code(wg, LSLK_F2); return;
+		case XK_F3:        handle_text_input_code(wg, LSLK_F3); return;
+		case XK_F4:        handle_text_input_code(wg, LSLK_F4); return;
+		case XK_F5:        handle_text_input_code(wg, LSLK_F5); return;
+		case XK_F6:        handle_text_input_code(wg, LSLK_F6); return;
+		case XK_F7:        handle_text_input_code(wg, LSLK_F7); return;
+		case XK_F8:        handle_text_input_code(wg, LSLK_F8); return;
+		case XK_F9:        handle_text_input_code(wg, LSLK_F9); return;
+		case XK_F10:       handle_text_input_code(wg, LSLK_F10); return;
+		case XK_F11:       handle_text_input_code(wg, LSLK_F11); return;
+		case XK_F12:       handle_text_input_code(wg, LSLK_F12); return;
+		}
+	}
+
+	int mask = 0;
 	switch (sym) {
-		case XK_Return:
-			if (is_keypress) {
-				// XLookupString would give "\r" :-/
-				handle_text_event(wg, "\n", 1);
-			}
-			return;
 		case XK_Shift_L:
 			mask = LSL_MOD_LSHIFT;
 			break;
@@ -208,7 +224,9 @@ static void handle_key_event(XKeyEvent* e, struct win* lw)
 		char buf[16];
 		int len = Xutf8LookupString(lw->xic, e, buf, sizeof(buf), NULL, NULL);
 		if (len > 0) {
-			handle_text_event(wg, buf, len);
+			char* p = &buf[0];
+			int codepoint = utf8_decode(&p, &len);
+			if (codepoint > 0) handle_text_input_code(wg, codepoint);
 		}
 	}
 }
