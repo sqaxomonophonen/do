@@ -276,30 +276,32 @@ static void handle_modifier_keys(struct wglobal* wg)
 void lsl_main_loop()
 {
 	{
-		glCreateShader = (LGLCreateShader*) gl_get_proc_address("glCreateShader");
-		glShaderSource = (LGLShaderSource*) gl_get_proc_address("glShaderSource");
-		glCompileShader = (LGLCompileShader*) gl_get_proc_address("glCompileShader");
-		glGetShaderiv = (LGLGetShaderiv*) gl_get_proc_address("glGetShaderiv");
-		glGetShaderInfoLog = (LGLGetShaderInfoLog*) gl_get_proc_address("glGetShaderInfoLog");
-		glCreateProgram = (LGLCreateProgram*) gl_get_proc_address("glCreateProgram");
-		glAttachShader = (LGLAttachShader*) gl_get_proc_address("glAttachShader");
-		glLinkProgram = (LGLLinkProgram*) gl_get_proc_address("glLinkProgram");
-		glGetProgramiv = (LGLGetProgramiv*) gl_get_proc_address("glGetProgramiv");
-		glGetProgramInfoLog = (LGLGetProgramInfoLog*) gl_get_proc_address("glGetProgramInfoLog");
-		glDeleteShader = (LGLDeleteShader*) gl_get_proc_address("glDeleteShader");
-		glGetUniformLocation = (LGLGetUniformLocation*) gl_get_proc_address("glGetUniformLocation");
-		glGetAttribLocation = (LGLGetAttribLocation*) gl_get_proc_address("glGetAttribLocation");
-		glGenBuffers = (LGLGenBuffers*) gl_get_proc_address("glGenBuffers");
-		glGenVertexArrays = (LGLGenVertexArrays*) gl_get_proc_address("glGenVertexArrays");
-		glBindVertexArray = (LGLBindVertexArray*) gl_get_proc_address("glBindVertexArray");
-		glBindBuffer = (LGLBindBuffer*) gl_get_proc_address("glBindBuffer");
-		glBufferData = (LGLBufferData*) gl_get_proc_address("glBufferData");
-		glEnableVertexAttribArray = (LGLEnableVertexAttribArray*) gl_get_proc_address("glEnableVertexAttribArray");
-		glVertexAttribPointer = (LGLVertexAttribPointer*) gl_get_proc_address("glVertexAttribPointer");
-		glUseProgram = (LGLUseProgram*) gl_get_proc_address("glUseProgram");
-		glUniform1i = (LGLUniform1i*) gl_get_proc_address("glUniform1i");
-		glUniform2f = (LGLUniform2f*) gl_get_proc_address("glUniform2f");
-		glBufferSubData = (LGLBufferSubData*) gl_get_proc_address("glBufferSubData");
+		#define GLPROC(F) gl ## F = (LGL ## F *) gl_get_proc_address("gl" #F);
+		GLPROC(CreateShader);
+		GLPROC(ShaderSource);
+		GLPROC(CompileShader);
+		GLPROC(GetShaderiv);
+		GLPROC(GetShaderInfoLog);
+		GLPROC(CreateProgram);
+		GLPROC(AttachShader);
+		GLPROC(LinkProgram);
+		GLPROC(GetProgramiv);
+		GLPROC(GetProgramInfoLog);
+		GLPROC(DeleteShader);
+		GLPROC(GetUniformLocation);
+		GLPROC(GetAttribLocation);
+		GLPROC(GenBuffers);
+		GLPROC(GenVertexArrays);
+		GLPROC(BindVertexArray);
+		GLPROC(BindBuffer);
+		GLPROC(BufferData);
+		GLPROC(EnableVertexAttribArray);
+		GLPROC(VertexAttribPointer);
+		GLPROC(UseProgram);
+		GLPROC(Uniform1i);
+		GLPROC(Uniform2f);
+		GLPROC(BufferSubData);
+		#undef GLPROC
 	}
 
 	gl_init();
