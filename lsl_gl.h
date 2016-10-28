@@ -284,6 +284,16 @@ static void draw_rect_2col(struct rect posrect, struct rect uvrect, union vec4 c
 	draw_append(4, 6, vs, es);
 }
 
+static struct rect solid_uvrect()
+{
+	return (struct rect) { .p0 = dotuv, .dim = { .w = 0, .h = 0 }};
+}
+
+static void fill_rect(struct rect posrect, union vec4 color)
+{
+	draw_rect_2col(posrect, solid_uvrect(), color, color);
+}
+
 static void draw_rect(struct rect posrect, struct rect uvrect)
 {
 	draw_rect_2col(posrect, uvrect, draw_color0, draw_color1);
@@ -386,7 +396,7 @@ void lsl_line(float thickness, union vec2 p0, union vec2 p1)
 
 void lsl_fill_rect(struct rect* r)
 {
-	draw_rect(*r, (struct rect) { .p0 = dotuv, .dim = { .w = 0, .h = 0 }});
+	draw_rect(*r, solid_uvrect());
 }
 
 void lsl_clear()

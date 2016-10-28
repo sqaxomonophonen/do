@@ -3,3 +3,7 @@ builtin.footer_text @builtin.footer_text
 builtin.port_text @builtin.port_text
 connection.shadow @connection.shadow
 connection.signal select($modifier, @connection.signal, @selected, @connection.tmp0, @connection.tmp1)
+text @text
+text.cursor @text.cursor
+text.bg @text.bg
+text.bg.select @text.bg.select

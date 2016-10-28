@@ -211,21 +211,21 @@ static int handle_key(struct wglobal* wg, MSG* msg)
 	if (!down) return 0;
 
 	switch (msg->wParam) {
-	case VK_RETURN: handle_text_input_code(wg, '\n'); return 1;
-	case VK_DELETE: handle_text_input_code(wg, LSLK_DEL); return 1;
-	case VK_LEFT:   handle_text_input_code(wg, LSLK_ARROW_LEFT); return 1;
-	case VK_RIGHT:  handle_text_input_code(wg, LSLK_ARROW_RIGHT); return 1;
-	case VK_UP:     handle_text_input_code(wg, LSLK_ARROW_UP); return 1;
-	case VK_DOWN:   handle_text_input_code(wg, LSLK_ARROW_DOWN); return 1;
-	case VK_INSERT: handle_text_input_code(wg, LSLK_INSERT); return 1;
-	case VK_HOME:   handle_text_input_code(wg, LSLK_HOME); return 1;
-	case VK_END:    handle_text_input_code(wg, LSLK_END); return 1;
-	case VK_PRIOR:  handle_text_input_code(wg, LSLK_PGUP); return 1;
-	case VK_NEXT:   handle_text_input_code(wg, LSLK_PGDN); return 1;
+	case VK_RETURN: push_text_input_code(wg, '\n'); return 1;
+	case VK_DELETE: push_text_input_code(wg, LSLK_DEL); return 1;
+	case VK_LEFT:   push_text_input_code(wg, LSLK_ARROW_LEFT); return 1;
+	case VK_RIGHT:  push_text_input_code(wg, LSLK_ARROW_RIGHT); return 1;
+	case VK_UP:     push_text_input_code(wg, LSLK_ARROW_UP); return 1;
+	case VK_DOWN:   push_text_input_code(wg, LSLK_ARROW_DOWN); return 1;
+	case VK_INSERT: push_text_input_code(wg, LSLK_INSERT); return 1;
+	case VK_HOME:   push_text_input_code(wg, LSLK_HOME); return 1;
+	case VK_END:    push_text_input_code(wg, LSLK_END); return 1;
+	case VK_PRIOR:  push_text_input_code(wg, LSLK_PGUP); return 1;
+	case VK_NEXT:   push_text_input_code(wg, LSLK_PGDN); return 1;
 	}
 
 	if (VK_F1 <= msg->wParam && msg->wParam <= VK_F12) {
-		handle_text_input_code(wg, (msg->wParam - VK_F1) + LSLK_F1);
+		push_text_input_code(wg, (msg->wParam - VK_F1) + LSLK_F1);
 		return 1;
 	}
 
@@ -245,7 +245,7 @@ static int handle_keyboard_input(MSG* msg)
 		return handle_key(wg, msg);
 	case WM_CHAR:
 		if (msg->wParam > 0 && msg->wParam < 0x10000) {
-			handle_text_input_code(wg, (unsigned short)msg->wParam);
+			push_text_input_code(wg, (unsigned short)msg->wParam);
 		}
 		break;
 	default:

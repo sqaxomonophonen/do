@@ -5,7 +5,10 @@
 #include <assert.h>
 
 #include "lsl.h"
-#include "dtypes.h"
+#include "utf8.h"
+
+static void draw_glyph(struct atls_glyph*);
+static void fill_rect(struct rect posrect, union vec4 color);
 
 #define ASSERT(cond) \
 	do { \
@@ -31,8 +34,7 @@ int cursor_y;
 int scope_stack_size;
 u64 scope_stack[STACK_MAX];
 
-union vec4 draw_color0;
-union vec4 draw_color1;
+union vec4 draw_color0, draw_color1, text_bg_color;
 
 struct wglobal {
 	union vec2 mdelta;
@@ -40,10 +42,10 @@ struct wglobal {
 	int button[LSL_MAX_BUTTONS];
 	int button_cycles[LSL_MAX_BUTTONS];
 
-	int mod;
+	u32 mod;
 
 	int text_length;
-	int text[LSL_MAX_TEXT_LENGTH]; // codepoints
+	u32 text[LSL_MAX_TEXT_LENGTH]; // codepoints
 
 	int press_active, press_active_modmask;
 	u64 press_active_id;
@@ -86,40 +88,11 @@ struct wframe* wframe_top()
 	return &wframe_stack[wframe_stack_top_index];
 }
 
-static void handle_text_input_code(struct wglobal* wg, int code)
+static void push_text_input_code(struct wglobal* wg, u32 code)
 {
 	if ((wg->text_length + 1) >= LSL_MAX_TEXT_LENGTH) return;
-	wg->text[wg->text_length++] = code;
+	wg->text[wg->text_length++] = code | wg->mod;
 }
-
-static inline int utf8_decode(char** c0z, int* n)
-{
-	unsigned char** c0 = (unsigned char**)c0z;
-	if (*n <= 0) return -1;
-	unsigned char c = **c0;
-	(*n)--;
-	(*c0)++;
-	if ((c & 0x80) == 0) return c & 0x7f;
-	int mask = 192;
-	for (int d = 1; d <= 3; d++) {
-		int match = mask;
-		mask = (mask >> 1) | 0x80;
-		if ((c & mask) == match) {
-			int codepoint = (c & ~mask) << (6*d);
-			while (d > 0 && *n > 0) {
-				c = **c0;
-				if ((c & 192) != 128) return -1;
-				(*c0)++;
-				(*n)--;
-				d--;
-				codepoint += (c & 63) << (6*d);
-			}
-			return d == 0 ? codepoint : -1;
-		}
-	}
-	return -1;
-}
-
 
 static u64 hash(const void* key, int len, u64 seed)
 {
@@ -186,11 +159,11 @@ void lsl_scope_pop()
 	scope_stack_size--;
 }
 
-int lsl_getch()
+u32 lsl_getch()
 {
 	struct wglobal* wg = wglobal_get();
 	if (wg->text_length <= 0) return -1;
-	int code = wg->text[0];
+	u32 code = wg->text[0];
 	wg->text_length--;
 	memmove(wg->text, wg->text+1, wg->text_length * sizeof(wg->text));
 	return code;
@@ -225,8 +198,6 @@ int lsl_get_text_height()
 	return active_glyph_table->height;
 }
 
-static void draw_glyph(struct atls_glyph*);
-
 void lsl_putch(int codepoint)
 {
 	if (active_glyph_table == NULL) return;
@@ -238,6 +209,11 @@ void lsl_putch(int codepoint)
 	}
 
 	struct atls_glyph* glyph = get_codepoint_glyph(codepoint);
+	struct rect grect = {
+		.p0 = { .x = cursor_x, .y = cursor_y - active_glyph_table->height },
+		.dim = { .w = glyph->w, .h = glyph->h }
+	};
+	fill_rect(grect, text_bg_color);
 	draw_glyph(glyph);
 	/* XXX is the "off-by-1" required due to padding in mkatls? if so, is
 	 * it that way by convention, or is it something I ought to throw into
@@ -286,6 +262,12 @@ void lsl_set_cursor(int x, int y)
 	cursor_y = y;
 }
 
+void lsl_get_cursor(int* x, int* y)
+{
+	if (x) *x = cursor_x;
+	if (y) *y = cursor_y;
+}
+
 union vec4 lsl_eval(int atls_prg_id)
 {
 	float out[4];
@@ -307,6 +289,16 @@ void lsl_set_gradient(union vec4 color0, union vec4 color1)
 void lsl_set_color(union vec4 color)
 {
 	lsl_set_gradient(color, color);
+}
+
+void lsl_clear_text_bg_color()
+{
+	text_bg_color = (union vec4) { .r=0, .g=0, .b=0, .a=0 };
+}
+
+void lsl_set_text_bg_color(union vec4 color)
+{
+	text_bg_color = color;
 }
 
 int lsl_write(char* buf, int n)
@@ -445,6 +437,132 @@ void lsl_bezier(float thickness, union vec2 p0, union vec2 p1, union vec2 p2, un
 			bezier2(t0, p0, p1, p2, p3),
 			bezier2(t1, p0, p1, p2, p3));
 	}
+}
+
+
+void lsl_textedit_reset(struct lsl_textedit* te)
+{
+	memset(te, 0, sizeof(*te)); // XXX no reason to waste time clearing te->buffer actually?
+}
+
+static int txt_delete_at(struct lsl_textedit* t, int pos)
+{
+	if (pos < 0 || pos > t->buffer_len) return 0;
+	assert(pos <= t->buffer_len);
+	if (t->buffer_len > 0) {
+		int to_move = t->buffer_len - pos;
+		if (to_move) {
+			if (to_move > 0) memmove(&t->buffer[pos], &t->buffer[pos+1], (t->buffer_len - pos) * sizeof(*t->buffer));
+			t->buffer_len--;
+			return 1;
+		} else {
+			return 0;
+		}
+	} else {
+		return 0;
+	}
+}
+
+static int txt_delete_selection(struct lsl_textedit* t)
+{
+	if (t->select_start == t->select_end) return 0;
+	int select_min = t->select_start < t->select_end ? t->select_start : t->select_end;
+	int select_max = t->select_start > t->select_end ? t->select_start : t->select_end;
+	memmove(&t->buffer[select_min], &t->buffer[select_max], (t->buffer_len - select_max) * sizeof(*t->buffer));
+	t->buffer_len -= (select_max - select_min);
+	t->cursor = t->select_start = t->select_end = select_min;
+	return 1;
+}
+
+static int txt_insert_at(struct lsl_textedit* t, int pos, u32 ch)
+{
+	if (pos < 0 || pos > t->buffer_len) return 0;
+	if (t->buffer_len < LSL_TEXTEDIT_BUFSZ) {
+		int to_move = t->buffer_len - pos;
+		if (to_move > 0) memmove(&t->buffer[pos+1], &t->buffer[pos], (t->buffer_len - pos) * sizeof(*t->buffer));
+		t->buffer[pos] = ch;
+		t->buffer_len++;
+		return 1;
+	} else {
+		return 0;
+	}
+}
+
+static void txt_seek_word_boundary(struct lsl_textedit* t, int d)
+{
+	assert(!"TODO");
+	/*
+	XXX what are the rules?
+	*/
+	int pos = t->cursor;
+	for (;;) {
+		pos += d;
+		if (pos < 0) {
+			pos = 0;
+			break;
+		} else if (pos > t->buffer_len) {
+			pos = t->buffer_len;
+			break;
+		}
+	}
+	t->cursor = pos;
+}
+
+int lsl_textedit_io(struct lsl_textedit* t)
+{
+	int ch;
+	while ((ch = lsl_getch()) != -1) {
+		int cp = ch & LSL_CH_CODEPOINT_MASK;
+
+		int shift = ch & LSL_MOD_SHIFT;
+		int ctrl = ch & LSL_MOD_CTRL;
+
+		int is_movement = 0;
+
+		if (cp == 27) { // ESC
+			return LSL_CANCEL;
+		} else if (cp == LSLK_ARROW_LEFT) {
+			is_movement = 1;
+			if (ctrl) txt_seek_word_boundary(t, -1); else t->cursor--;
+		} else if (cp == LSLK_ARROW_RIGHT) {
+			is_movement = 1;
+			if (ctrl) txt_seek_word_boundary(t, 1);  else t->cursor++;
+		} else if (cp == LSLK_HOME) {
+			is_movement = 1;
+			t->cursor = 0;
+		} else if (cp == LSLK_END) {
+			is_movement = 1;
+			t->cursor = t->buffer_len;
+		} else if (cp == 127) { // DEL
+			if (!txt_delete_selection(t)) txt_delete_at(t, t->cursor);
+		} else if (cp == '\b') {
+			if (!txt_delete_selection(t)) txt_delete_at(t, --t->cursor);
+		} else if (cp == '\n') {
+			return LSL_COMMIT;
+		} else if (cp == '\t') {
+			assert(!"TODO complete?");
+		} else if (cp >= ' ') {
+			txt_delete_selection(t);
+			txt_insert_at(t, t->cursor++, cp);
+		}
+
+		// clamp cursor
+		if (t->cursor < 0) t->cursor = 0;
+		if (t->cursor > t->buffer_len) t->cursor = t->buffer_len;
+
+		// set selection range
+		t->select_end = t->cursor;
+		if (!is_movement || !shift) t->select_start = t->select_end;
+	}
+
+	#if 0
+	//printf("["); fwrite(t->buffer, 1, t->buffer_len, stdout); printf("]\n");
+	printf("[");
+	for (int i = 0; i < t->buffer_len; i++) printf("%c", t->buffer[i]);
+	printf("]\n");
+	#endif
+
+	return LSL_ACTIVE;
 }
 
 

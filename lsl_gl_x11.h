@@ -164,31 +164,31 @@ static void handle_key_event(XKeyEvent* e, struct win* lw)
 
 	if (is_keypress) {
 		switch (sym) {
-		case XK_Return:    handle_text_input_code(wg, '\n'); return; // XLookupString gives \r :-/
-		case XK_Left:      handle_text_input_code(wg, LSLK_ARROW_LEFT); return;
-		case XK_Right:     handle_text_input_code(wg, LSLK_ARROW_RIGHT); return;
-		case XK_Up:        handle_text_input_code(wg, LSLK_ARROW_UP); return;
-		case XK_Down:      handle_text_input_code(wg, LSLK_ARROW_DOWN); return;
-		case XK_Insert:    handle_text_input_code(wg, LSLK_INSERT); return;
-		case XK_Home:      handle_text_input_code(wg, LSLK_HOME); return;
-		case XK_End:       handle_text_input_code(wg, LSLK_END); return;
-		case XK_Page_Up:   handle_text_input_code(wg, LSLK_PGUP); return;
-		case XK_Page_Down: handle_text_input_code(wg, LSLK_PGDN); return;
+		case XK_Return:    push_text_input_code(wg, '\n'); return; // XLookupString gives \r :-/
+		case XK_Left:      push_text_input_code(wg, LSLK_ARROW_LEFT); return;
+		case XK_Right:     push_text_input_code(wg, LSLK_ARROW_RIGHT); return;
+		case XK_Up:        push_text_input_code(wg, LSLK_ARROW_UP); return;
+		case XK_Down:      push_text_input_code(wg, LSLK_ARROW_DOWN); return;
+		case XK_Insert:    push_text_input_code(wg, LSLK_INSERT); return;
+		case XK_Home:      push_text_input_code(wg, LSLK_HOME); return;
+		case XK_End:       push_text_input_code(wg, LSLK_END); return;
+		case XK_Page_Up:   push_text_input_code(wg, LSLK_PGUP); return;
+		case XK_Page_Down: push_text_input_code(wg, LSLK_PGDN); return;
 
 		/* XXX I'd like a XK_F1 <= sym <= XK_F12, but it's not
 		 * completely consistent :-/ */
-		case XK_F1:        handle_text_input_code(wg, LSLK_F1); return;
-		case XK_F2:        handle_text_input_code(wg, LSLK_F2); return;
-		case XK_F3:        handle_text_input_code(wg, LSLK_F3); return;
-		case XK_F4:        handle_text_input_code(wg, LSLK_F4); return;
-		case XK_F5:        handle_text_input_code(wg, LSLK_F5); return;
-		case XK_F6:        handle_text_input_code(wg, LSLK_F6); return;
-		case XK_F7:        handle_text_input_code(wg, LSLK_F7); return;
-		case XK_F8:        handle_text_input_code(wg, LSLK_F8); return;
-		case XK_F9:        handle_text_input_code(wg, LSLK_F9); return;
-		case XK_F10:       handle_text_input_code(wg, LSLK_F10); return;
-		case XK_F11:       handle_text_input_code(wg, LSLK_F11); return;
-		case XK_F12:       handle_text_input_code(wg, LSLK_F12); return;
+		case XK_F1:        push_text_input_code(wg, LSLK_F1); return;
+		case XK_F2:        push_text_input_code(wg, LSLK_F2); return;
+		case XK_F3:        push_text_input_code(wg, LSLK_F3); return;
+		case XK_F4:        push_text_input_code(wg, LSLK_F4); return;
+		case XK_F5:        push_text_input_code(wg, LSLK_F5); return;
+		case XK_F6:        push_text_input_code(wg, LSLK_F6); return;
+		case XK_F7:        push_text_input_code(wg, LSLK_F7); return;
+		case XK_F8:        push_text_input_code(wg, LSLK_F8); return;
+		case XK_F9:        push_text_input_code(wg, LSLK_F9); return;
+		case XK_F10:       push_text_input_code(wg, LSLK_F10); return;
+		case XK_F11:       push_text_input_code(wg, LSLK_F11); return;
+		case XK_F12:       push_text_input_code(wg, LSLK_F12); return;
 		}
 	}
 
@@ -226,7 +226,7 @@ static void handle_key_event(XKeyEvent* e, struct win* lw)
 		if (len > 0) {
 			char* p = &buf[0];
 			int codepoint = utf8_decode(&p, &len);
-			if (codepoint > 0) handle_text_input_code(wg, codepoint);
+			if (codepoint > 0) push_text_input_code(wg, codepoint);
 		}
 	}
 }

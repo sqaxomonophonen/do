@@ -6,6 +6,7 @@
 #include "lsl.h"
 #include "dd.h"
 #include "dya.h"
+#include "utf8.h"
 
 struct atls* atls;
 
@@ -17,6 +18,10 @@ int colorpid_builtin_footer_text;
 int colorpid_builtin_port_text;
 int colorpid_connection_shadow;
 int colorpid_connection_signal;
+int colorpid_text;
+int colorpid_text_cursor;
+int colorpid_text_bg_select;
+int colorpid_text_bg;
 
 int cvi_modifier;
 
@@ -94,20 +99,24 @@ static int gsel_compar(const void* va, const void* vb)
 	}
 }
 
-#define MODAL_NONE (0)
-#define MODAL_NODEINSERT (1)
 
+#define MODE_NODE_INSERT (1)
 
 struct graph_view {
 	u32 node_id;
 	s32 pan_x, pan_y;
 };
 
+
 enum window_type {
 	WINDOW_TIMELINE = 1,
 	WINDOW_GRAPH
 };
 struct window {
+	int mode;
+
+	struct lsl_textedit textedit;
+
 	struct dya graph_view_stack_dya;
 	struct graph_view* graph_view_stack;
 	struct graph_view graph_view_root;
@@ -120,8 +129,6 @@ struct window {
 		u16 port_id;
 		int pstate;
 	} graph_tmp_conn;
-
-	int modal;
 
 	struct dya gsel_dya;
 	struct gsel* gsel;
@@ -735,28 +742,76 @@ static int winproc_graph(struct window* w)
 		}
 	}
 
-	if (lsl_accept('\x7f')) { // 127=DEL
-		for (int i = 0; i < w->gsel_dya.n; i++) {
-			struct gsel s = w->gsel[i];
-			switch (s.type) {
-			case GSEL_NONE:
-				break;
-			case GSEL_NODE:
-				dd_graph_delete_node(graph, s.node_id);
-				break;
-			case GSEL_CONN:
-				dd_graph_disconnect(graph,
-					s.conn.src_node_id, s.conn.src_port_id,
-					s.conn.dst_node_id, s.conn.dst_port_id);
-				break;
+	if (w->mode == MODE_NODE_INSERT) {
+		struct lsl_textedit* te = &w->textedit;
+		int r = lsl_textedit_io(te);
+		if (r == LSL_CANCEL || r == LSL_COMMIT) {
+			w->mode = 0;
+			if (r == LSL_COMMIT) {
+				char utf8repr[LSL_TEXTEDIT_BUFSZ*2];
+				utf8_encode_cstr(utf8repr, sizeof(utf8repr), te->buffer, te->buffer_len);
+				// XXX ^^^ check return value
+				//printf("TODO create node: [%s]\n", utf8repr);
+				dd_graph_new_node(graph, utf8repr);
 			}
 		}
-		window_graph_clear_selection(w);
+
+		lsl_set_type_index(type_index_main);
+		lsl_set_cursor(100, 100);
+
+		int select_min = te->select_start < te->select_end ? te->select_start : te->select_end;
+		int select_max = te->select_start > te->select_end ? te->select_start : te->select_end;
+
+		int cursor_x = 0, cursor_y = 0;
+		int n = te->buffer_len;
+		for (int i = 0; i < n; i++) {
+			if (i == te->cursor) lsl_get_cursor(&cursor_x, &cursor_y);
+			lsl_set_color(lsl_eval(colorpid_text));
+			if (i >= select_min && i < select_max) {
+				lsl_set_text_bg_color(lsl_eval(colorpid_text_bg_select));
+			} else {
+				lsl_set_text_bg_color(lsl_eval(colorpid_text_bg));
+			}
+			lsl_putch(te->buffer[i]);
+		}
+		lsl_clear_text_bg_color();
+		if (n == te->cursor) lsl_get_cursor(&cursor_x, &cursor_y);
+
+		lsl_set_color(lsl_eval(colorpid_text_cursor));
+		int h = lsl_get_text_height();
+		struct rect rect = {
+			.p0 = { .x = cursor_x, .y = cursor_y-h },
+			.dim = { .w = 2, .h = h }
+		};
+		lsl_fill_rect(&rect);
 	}
 
-	if (w->modal == MODAL_NONE && lsl_accept(' ')) w->modal = MODAL_NODEINSERT;
-
-	if (w->modal == MODAL_NODEINSERT) {
+	int ch;
+	while ((ch = lsl_getch()) != -1) {
+		switch (ch) {
+		case 127: { // 127=DEL
+			for (int i = 0; i < w->gsel_dya.n; i++) {
+				struct gsel s = w->gsel[i];
+				switch (s.type) {
+				case GSEL_NONE:
+					break;
+				case GSEL_NODE:
+					dd_graph_delete_node(graph, s.node_id);
+					break;
+				case GSEL_CONN:
+					dd_graph_disconnect(graph,
+						s.conn.src_node_id, s.conn.src_port_id,
+						s.conn.dst_node_id, s.conn.dst_port_id);
+					break;
+				}
+			}
+			window_graph_clear_selection(w);
+		} break;
+		case ' ': {
+			w->mode = MODE_NODE_INSERT;
+			lsl_textedit_reset(&w->textedit);
+		} break;
+		}
 	}
 
 	return 0;
@@ -834,6 +889,10 @@ static struct atls* load_atlas(char* relpath)
 	colorpid_builtin_port_text = atls_get_prg_id(atls, "builtin.port_text");
 	colorpid_connection_shadow = atls_get_prg_id(atls, "connection.shadow");
 	colorpid_connection_signal = atls_get_prg_id(atls, "connection.signal"); // XXX is type a ctxvar?
+	colorpid_text = atls_get_prg_id(atls, "text");
+	colorpid_text_cursor = atls_get_prg_id(atls, "text.cursor");
+	colorpid_text_bg = atls_get_prg_id(atls, "text.bg");
+	colorpid_text_bg_select = atls_get_prg_id(atls, "text.bg.select");
 
 	cvi_modifier = atls_get_ctxkey_id(atls, "modifier");
 
