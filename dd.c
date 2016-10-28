@@ -221,7 +221,7 @@ static int parse_nodedef(char* def, struct dd_nodedef* nd)
 struct dd_node* dd_graph_new_node(struct dd_graph* dg, char* def)
 {
 	struct dd_nodedef nd;
-	if (parse_nodedef(def, &nd) != 0) {
+	if (parse_nodedef(def, &nd) == -1) {
 		return NULL;
 	}
 	struct dd_node nn;
