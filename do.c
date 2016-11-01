@@ -752,7 +752,11 @@ static int winproc_graph(struct window* w)
 				utf8_encode_cstr(utf8repr, sizeof(utf8repr), te->buffer, te->buffer_len);
 				// XXX ^^^ check return value
 				//printf("TODO create node: [%s]\n", utf8repr);
-				dd_graph_new_node(graph, utf8repr);
+				struct dd_node* node = dd_graph_new_node(graph, utf8repr);
+				int mx, my;
+				lsl_mpos(&mx, &my);
+				node->x = mx + view->pan_x;
+				node->y = my + view->pan_y;
 			}
 		}
 
