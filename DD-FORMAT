@@ -1,0 +1,68 @@
+========
+OVERVIEW
+========
+
+DD is the Do data format.
+
+DD is a ZZ format, see ZZ-FORMAT. The ZZ header must be:
+ twocc = "DD"
+ version = 1
+ xcc = "V"
+
+DD defines the following block types:
+
+id identifier
+== ==========
+1  STR_TABLE
+2  DATA
+
+
+
+=========
+STRUCTURE
+=========
+
+STR_TABLE {
+	U8 str_table[]
+}
+
+STR_TABLE is a table of null-terminated UTF-8 encoded strings concatenated
+together. Other data refer to these strings using string table offsets.
+
+
+NODE {
+	VS x,y // node position
+	VU def // node definition string (table offset)
+	GRAPH child (if container)
+}
+
+CONN {
+	// indices are for the nodes array in same graph
+	VU src_node_index
+	VU src_port_id
+	VU dst_node_index
+	VU dst_port_id
+}
+
+GRAPH {
+	VU n_nodes
+	NODE nodes[n_nodes]
+	VU n_conns
+	CONN conns[n_conns]
+}
+
+DATA {
+	GRAPH graph
+}
+
+
+
+=========
+NODE DEFs
+=========
+
+NODE.def is the node definition string, e.g. "+" is an adder node, and
+"[poly]32saw" is a polyphonic container named "32saw".
+
+TODO grammar and crap
+

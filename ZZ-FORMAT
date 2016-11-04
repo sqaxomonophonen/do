@@ -1,0 +1,83 @@
+========
+OVERVIEW
+========
+
+ZZ is a "super file format" in the sense that it's used as a foundation for
+other file formats. It's block-based like RIFF.
+
+zz.h is library offering ZZ read/write functionality
+
+
+
+==========
+DATA TYPES
+==========
+
+ZZ defines a couple of data-types. Although most of these are not used by ZZ
+itself, it's convenient that other file format specs can refer back to these
+types. Another convenience is that they're implemented by zz.h
+
+Fixed size integers (all little-endian):
+U8:  unsigned 8-bit integer
+S8:  signed 8-bit integer
+U16: unsigned 16-bit integer
+S16: signed 16-bit integer
+U32: unsigned 32-bit integer
+S32: signed 32-bit integer
+U64: unsigned 64-bit integer
+S64: signed 64-bit integer
+
+Variable size integers:
+VU:  variable-size unsigned integer
+VS:  variable-size signed integer
+
+
+Variable size integers are LEB128 encoded, except that values larger than 64
+bits are not valid. They are encoded as a byte chain that continues as long as
+the high bit is set, and is terminated when the high bit is clear. This means
+that each byte contributes 7 bits to the actual value. The first byte defines
+the 7 least significant bits, the next byte the next 7 "slightly more
+significant bits", and so on. Signed values must be sign-extended.
+
+
+
+=========
+ZZ FORMAT
+=========
+
+A ZZ file starts with a ZZ header, followed by any number of ZZ blocks, until
+EOF. A ZZ file is invalid if a block size extends past EOF. After iterating all
+blocks, the file cursor is expected to be exactly at EOF.
+
+
+
+=========
+ZZ HEADER
+=========
+
+A ZZ file starts with this header:
+{
+	U8 twocc[2]
+	VU version
+	U8 xcc
+}
+The interpretation of each field is up to the actual file format.
+
+
+
+========
+ZZ BLOCK
+========
+
+{
+	VU type
+	VU flags
+	VU data_length
+	U8 data[data_length]
+}
+
+type: defined by the actual file format, except that 0 is "reserved" and means
+that the block is "freed" (useful when patching large files; blocks can be
+freed and reused without rewriting the entire file)
+
+flags: if bit 0 is set, the block is compressed (TODO?!)

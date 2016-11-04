@@ -790,9 +790,11 @@ static int winproc_graph(struct window* w)
 		lsl_fill_rect(&rect);
 	}
 
+	int quit = 0;
+
 	int ch;
 	while ((ch = lsl_getch()) != -1) {
-		switch (ch) {
+		switch (ch & LSL_CH_CODEPOINT_MASK) {
 		case 127: { // 127=DEL
 			for (int i = 0; i < w->gsel_dya.n; i++) {
 				struct gsel s = w->gsel[i];
@@ -815,10 +817,13 @@ static int winproc_graph(struct window* w)
 			w->mode = MODE_NODE_INSERT;
 			lsl_textedit_reset(&w->textedit);
 		} break;
+		case 'Q':
+			quit = 1;
+			break;
 		}
 	}
 
-	return 0;
+	return quit;
 }
 
 static int winproc(void* usr)
@@ -907,6 +912,7 @@ int lsl_main(int argc, char** argv)
 {
 	dd_init(&state.dd);
 
+	#if 0
 	{
 		// XXX some debug graph
 		struct dd_graph* g = &state.dd.root;
@@ -928,11 +934,12 @@ int lsl_main(int argc, char** argv)
 
 		//dd_graph_connect(g, n3->id, 1, n4->id, 1);
 	}
+	#endif
 
 	atls = load_atlas("default.atls");
 
 	clone_win(NULL);
 	lsl_main_loop();
 
-	return 0;
+	return dd_save_file(&state.dd, "_save.dd", 0);
 }

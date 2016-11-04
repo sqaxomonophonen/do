@@ -115,7 +115,11 @@ struct dd {
 // initialization
 void dd_init(struct dd*);
 
-void dd_commit(struct dd*);
+struct dd* dd_load_mem(void* data, long size);
+struct dd* dd_load_file(char* path);
+int dd_save_file(struct dd*, char* path, int flags);
+
+//void dd_commit(struct dd*);
 
 struct dd_node* dd_graph_new_node(struct dd_graph*, char* def);
 int dd_graph_delete_node(struct dd_graph*, u32 id);

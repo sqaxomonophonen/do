@@ -1,8 +1,10 @@
+#include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <assert.h>
 
 #include "dd.h"
+#include "zz.h"
 
 static u32 get_next_node_id()
 {
@@ -292,10 +294,16 @@ int dd_graph_delete_node(struct dd_graph* dg, u32 id)
 	}
 }
 
-struct dd_node* dd_graph_find_node(struct dd_graph* dg, u32 id)
+static int graph_find_node_index(struct dd_graph* dg, u32 id)
 {
 	struct dd_node key = {.id = id};
-	int index = dya_bs_find(&dg->nodes_dya, (void**)&dg->nodes, node_compar, &key);
+	return dya_bs_find(&dg->nodes_dya, (void**)&dg->nodes, node_compar, &key);
+}
+
+
+struct dd_node* dd_graph_find_node(struct dd_graph* dg, u32 id)
+{
+	int index = graph_find_node_index(dg, id);
 	if (index >= 0) {
 		return &dg->nodes[index];
 	} else {
@@ -576,3 +584,179 @@ void dd_port_it_next(struct dd_port_it* it)
 		assert(!"unhandled iterator type");
 	}
 }
+
+struct strtable {
+	// TODO hash table? (for string lookup performance)
+	// TODO string ref count? (filesize optimization via variable width integers)
+	int strings_sz_log2;
+	int string_cursor;
+	char* strings;
+};
+
+static void strtable_init(struct strtable* st)
+{
+	memset(st, 0, sizeof(*st));
+}
+
+static void strtable_free(struct strtable* st)
+{
+	if (st->strings) free(st->strings);
+	strtable_init(st);
+}
+
+static int strtable_find(struct strtable* st, char* str)
+{
+	size_t ksz = strlen(str);
+	int c = 0;
+	while (c < st->string_cursor) {
+		char* s = &st->strings[c];
+		size_t esz = strlen(s);
+		if (ksz == esz && memcmp(s, str, ksz) == 0) return c;
+		c += esz + 1;
+	}
+	assert(c == st->string_cursor);
+	return -1;
+}
+
+static int strtable_add(struct strtable* st, char* str)
+{
+	if (strtable_find(st, str) == 0) return 0;
+	size_t sz = strlen(str) + 1;
+	int required = st->string_cursor + sz;
+	int prev_strings_sz_log2 = st->strings_sz_log2;
+	if (st->strings_sz_log2 < 16) st->strings_sz_log2 = 16;
+	while (required > (1 << st->strings_sz_log2)) st->strings_sz_log2 += 2;
+	if (st->strings_sz_log2 != prev_strings_sz_log2) {
+		void* p = realloc(st->strings, 1 << st->strings_sz_log2);
+		if (p == NULL) {
+			free(st->strings);
+			return -1;
+		}
+		st->strings = p;
+	}
+	memcpy(st->strings + st->string_cursor, str, sz);
+	st->string_cursor += sz;
+	return 0;
+}
+
+#define GRAPH_MAX_DEPTH (1<<10)
+
+static int graph_build_strtable(struct dd_graph* dg, struct strtable* st, int depth)
+{
+	if (depth > GRAPH_MAX_DEPTH) return -1;
+	assert(dg != NULL);
+	assert(st != NULL);
+	for (int i = 0; i < dg->nodes_dya.n; i++) {
+		struct dd_node* node = &dg->nodes[i];
+		strtable_add(st, node->def);
+		if (is_container(node)) if (graph_build_strtable(node->container.graph, st, depth+1) == -1) return -1;
+	}
+	return 0;
+}
+
+static int emit_graph(struct dd_graph* dg, struct zz_wblk* wblk, struct strtable* st, int depth)
+{
+	if (depth > GRAPH_MAX_DEPTH || wblk->error) return -1;
+	assert(dg != NULL);
+	assert(st != NULL);
+
+	zz_wblk_vu(wblk, dg->nodes_dya.n);
+	for (int i = 0; i < dg->nodes_dya.n; i++) {
+		struct dd_node* node = &dg->nodes[i];
+
+		zz_wblk_vs(wblk, node->x);
+		zz_wblk_vs(wblk, node->y);
+
+		int def_sti = strtable_find(st, node->def);
+		assert(def_sti != -1);
+		zz_wblk_vu(wblk, def_sti);
+
+		if (is_container(node)) {
+			if (emit_graph(node->container.graph, wblk, st, depth+1) == -1) return -1;
+		} // XXX else handle node-type payloads
+	}
+
+	zz_wblk_vu(wblk, dg->conns_dya.n);
+	for (int i = 0; i < dg->conns_dya.n; i++) {
+		struct dd_conn* conn = &dg->conns[i];
+		int src_node_index = graph_find_node_index(dg, conn->src_node_id);
+		assert(src_node_index >= 0);
+		int dst_node_index = graph_find_node_index(dg, conn->dst_node_id);
+		assert(dst_node_index >= 0);
+		zz_wblk_vu(wblk, src_node_index);
+		zz_wblk_vu(wblk, conn->src_port_id);
+		zz_wblk_vu(wblk, dst_node_index);
+		zz_wblk_vu(wblk, conn->dst_port_id);
+	}
+
+	return 0;
+}
+
+
+#define BLKTYPE_STRTABLE 1
+#define BLKTYPE_DD 2
+
+static struct zz_head get_zz_head()
+{
+	struct zz_head h;
+	h.twocc[0] = h.twocc[1] = 'D';
+	h.xcc = 'V';
+	h.version = 1;
+	return h;
+}
+
+int dd_save_file(struct dd* dd, char* path, int flags)
+{
+	struct strtable st;
+	strtable_init(&st);
+
+	if (graph_build_strtable(&dd->root, &st, 0) == -1) {
+		strtable_free(&st);
+		return -1;
+	}
+
+	struct zz zz;
+	struct zz_head head = get_zz_head();
+	int mode = ZZ_MODE_TRUNC; // TODO also allow ZZ_MODE_PATCH based on flags
+	if (zz_open(&zz, path, mode, &head) == -1) {
+		strtable_free(&st);
+		return -1;
+	}
+
+	if (zz_emit_data_blk(&zz, BLKTYPE_STRTABLE, st.strings, st.string_cursor, 1) == -1) {
+		strtable_free(&st);
+		zz_close(&zz);
+		return -1;
+	}
+
+	struct zz_wblk zzdd;
+	if (zz_new_prep_wblk(&zz, &zzdd, BLKTYPE_DD, 1<<12, 1) == -1) {
+		strtable_free(&st);
+		zz_close(&zz);
+		return -1;
+	}
+	if (emit_graph(&dd->root, &zzdd, &st, 0) == -1) {
+		strtable_free(&st);
+		zz_close(&zz);
+		return -1;
+	}
+	zz_wblk_end(&zzdd);
+
+	zz_close(&zz);
+
+	strtable_free(&st);
+	return 0;
+}
+
+#if 0
+struct dd* dd_load_mem(void* data, long size)
+{
+	return NULL;
+}
+
+struct dd* dd_load_file(char* path)
+{
+	return NULL;
+}
+#endif
+
