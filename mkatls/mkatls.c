@@ -1076,13 +1076,13 @@ static struct prgs* prgs_new(struct strtbl* strtbl)
 	assert(prgs != NULL);
 	prgs->strtbl = strtbl;
 
-	dya_init(&prgs->sexprs_dya, (void**)&prgs->sexprs, sizeof(*prgs->sexprs), 0);
-	dya_init(&prgs->constants_dya, (void**)&prgs->constants, sizeof(*prgs->constants), 0);
-	dya_init(&prgs->ctx_keys_dya, (void**)&prgs->ctx_keys, sizeof(*prgs->ctx_keys), 0);
-	dya_init(&prgs->color_keys_dya, (void**)&prgs->color_keys, sizeof(*prgs->color_keys), 0);
-	dya_init(&prgs->program_keys_dya, (void**)&prgs->program_keys, sizeof(*prgs->program_keys), 0);
-	dya_init(&prgs->program_offsets_dya, (void**)&prgs->program_offsets, sizeof(*prgs->program_offsets), 0);
-	dya_init(&prgs->code_dya, (void**)&prgs->code, sizeof(*prgs->code), 0);
+	dya_init(&prgs->sexprs_dya, (void**)&prgs->sexprs, sizeof(*prgs->sexprs));
+	dya_init(&prgs->constants_dya, (void**)&prgs->constants, sizeof(*prgs->constants));
+	dya_init(&prgs->ctx_keys_dya, (void**)&prgs->ctx_keys, sizeof(*prgs->ctx_keys));
+	dya_init(&prgs->color_keys_dya, (void**)&prgs->color_keys, sizeof(*prgs->color_keys));
+	dya_init(&prgs->program_keys_dya, (void**)&prgs->program_keys, sizeof(*prgs->program_keys));
+	dya_init(&prgs->program_offsets_dya, (void**)&prgs->program_offsets, sizeof(*prgs->program_offsets));
+	dya_init(&prgs->code_dya, (void**)&prgs->code, sizeof(*prgs->code));
 
 	return prgs;
 }
@@ -1470,7 +1470,7 @@ static struct cols* cols_new(char* name)
 	struct cols* cols = calloc(1, sizeof(*cols));
 	assert(cols != NULL);
 	cols->name = strdup(name);
-	dya_init(&cols->colors_dya, (void**)&cols->colors, sizeof(*cols->colors), 0);
+	dya_init(&cols->colors_dya, (void**)&cols->colors, sizeof(*cols->colors));
 	return cols;
 }
 
@@ -1506,7 +1506,7 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 	struct prgs* prgs = prgs_new(&strtbl);
 	struct dya cols_array_dya;
 	struct cols** cols_array;
-	dya_init(&cols_array_dya, (void**)&cols_array, sizeof(*cols_array), 0);
+	dya_init(&cols_array_dya, (void**)&cols_array, sizeof(*cols_array));
 
 	for (int i = 0; i < n; i++) {
 		char* filename = filenames[i];

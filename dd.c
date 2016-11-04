@@ -105,8 +105,8 @@ static int conn_dst_compar(const void* va, const void* vb)
 static void graph_init(struct dd_graph* dg)
 {
 	memset(dg, 0, sizeof(*dg));
-	dya_init(&dg->nodes_dya, (void**)&dg->nodes, sizeof(*dg->nodes), 0);
-	dya_init(&dg->conns_dya, (void**)&dg->conns, sizeof(*dg->conns), 0);
+	dya_init(&dg->nodes_dya, (void**)&dg->nodes, sizeof(*dg->nodes));
+	dya_init(&dg->conns_dya, (void**)&dg->conns, sizeof(*dg->conns));
 }
 
 static int parse_nodedef0(char* def, struct dd_nodedef* nd)
@@ -229,7 +229,7 @@ struct dd_node* dd_graph_new_node(struct dd_graph* dg, char* def)
 	struct dd_node nn;
 	memset(&nn, 0, sizeof(nn));
 	nn.id = get_next_node_id();
-	assert((nn.def = strdup(def)) != NULL);
+	assert((nn.def = strdup(def)) != NULL); // TODO use a string table to avoid excessive mallocs?
 
 	nn.type = nd.type;
 
@@ -407,9 +407,14 @@ int dd_graph_disconnect(struct dd_graph* dg, u32 src_node_id, u16 src_port_id, u
 	return 0;
 }
 
-void dd_init(struct dd* ds)
+void dd_init(struct dd* dd)
 {
-	graph_init(&ds->root);
+	graph_init(&dd->root);
+}
+
+void dd_free(struct dd* dd)
+{
+	// TODO
 }
 
 struct dd_graph* dd_node_get_graph(struct dd_node* n)
@@ -694,7 +699,7 @@ static int emit_graph(struct dd_graph* dg, struct zz_wblk* wblk, struct strtable
 
 
 #define BLKTYPE_STRTABLE 1
-#define BLKTYPE_DD 2
+#define BLKTYPE_DATA 2
 
 static struct zz_head get_zz_head()
 {
@@ -703,6 +708,137 @@ static struct zz_head get_zz_head()
 	h.xcc = 'V';
 	h.version = 1;
 	return h;
+}
+
+static int read_graph(struct zz_rblk* rblk, struct dd_graph* dg, char* str_table, u64 str_table_size, int depth)
+{
+	if (depth > GRAPH_MAX_DEPTH || rblk->error) return -1;
+
+	u64 n_nodes = zz_rblk_vu(rblk);
+	dya_set_min_cap(&dg->nodes_dya, n_nodes); // XXX ought to be temporary min cap?
+	for (u64 i = 0; i < n_nodes; i++) {
+		s64 x = zz_rblk_vs(rblk);
+		s64 y = zz_rblk_vs(rblk);
+		u64 def_offset = zz_rblk_vu(rblk);
+		if (def_offset >= str_table_size) return -1;
+		char* def = str_table + def_offset;
+		struct dd_node* node = dd_graph_new_node(dg, def);
+		if (node == NULL) return -1;
+		node->x = x;
+		node->y = y;
+		if (is_container(node)) {
+			read_graph(rblk, node->container.graph, str_table, str_table_size, depth + 1);
+		}
+	}
+
+	u64 n_conns = zz_rblk_vu(rblk);
+	dya_set_min_cap(&dg->conns_dya, n_conns); // XXX ought to be temporary min cap?
+	for (u64 i = 0; i < n_conns; i++) {
+		u64 src_node_index = zz_rblk_vu(rblk);
+		if (src_node_index >= dg->nodes_dya.n) return -1;
+		u64 src_port_id = zz_rblk_vu(rblk);
+		u64 dst_node_index = zz_rblk_vu(rblk);
+		if (dst_node_index >= dg->nodes_dya.n) return -1;
+		u64 dst_port_id = zz_rblk_vu(rblk);
+		int e = dd_graph_connect(dg,
+			dg->nodes[src_node_index].id, src_port_id,
+			dg->nodes[dst_node_index].id, dst_port_id);
+		if (e == -1) return -1;
+	}
+
+	return 0;
+}
+
+int dd_load_file(char* path, struct dd* dd)
+{
+	struct zz zz;
+	struct zz_head head;
+	int mode = ZZ_MODE_READONLY;
+	if (zz_open(&zz, path, mode, &head) == -1) {
+		return -1;
+	}
+
+	{ // check header
+		struct zz_head match_head = get_zz_head();
+		int bad_header = 0;
+		for (int i = 0; i < 2; i++) bad_header |= (head.twocc[i] != match_head.twocc[i]);
+		bad_header |= (head.version != match_head.version);
+		bad_header |= (head.xcc != match_head.xcc);
+		if (bad_header) {
+			zz_close(&zz);
+			return -1;
+		}
+	}
+
+	char* str_table = NULL;
+	u64 str_table_sz;
+
+	struct zz_rblk_iter zzi;
+	struct zz_rblk rblk;
+	zz_new_rblk_iter(&zz, &zzi);
+	while (zz_rblk_iter_next(&zzi, &rblk)) {
+		if (rblk.usrtype != BLKTYPE_STRTABLE) continue;
+		if (str_table != NULL) {
+			zz_close(&zz);
+			return -1;
+		}
+		str_table_sz = rblk.size;
+		str_table = malloc(str_table_sz);
+		if (str_table == NULL) {
+			zz_close(&zz);
+			return -1;
+		}
+		if (zz_rblk_u8a(&rblk, (u8*)str_table, str_table_sz) == -1) {
+			zz_close(&zz);
+			return -1;
+		}
+
+		/* check that table is null-terminated (malicious dd files
+		 * could otherwise define strings that go out-of-bounds */
+		if (str_table[str_table_sz - 1] != 0) {
+			free(str_table);
+			zz_close(&zz);
+			return -1;
+		}
+		break;
+	}
+
+	if (!str_table) {
+		zz_close(&zz);
+		return -1;
+	}
+
+	if (zz_error(&zz)) {
+		free(str_table);
+		zz_close(&zz);
+		return -1;
+	}
+
+	dd_init(dd);
+	int got_data = 0;
+	zz_new_rblk_iter(&zz, &zzi);
+	while (zz_rblk_iter_next(&zzi, &rblk)) {
+		if (rblk.usrtype != BLKTYPE_DATA) continue;
+		if (read_graph(&rblk, &dd->root, str_table, str_table_sz, 0) == -1) {
+			dd_free(dd);
+			free(str_table);
+			zz_close(&zz);
+			return -1;
+		}
+		got_data = 1;
+		break;
+	}
+
+	if (!got_data || zz_error(&zz)) {
+		dd_free(dd);
+		free(str_table);
+		zz_close(&zz);
+		return -1;
+	}
+
+	free(str_table);
+	zz_close(&zz);
+	return 0;
 }
 
 int dd_save_file(struct dd* dd, char* path, int flags)
@@ -730,7 +866,7 @@ int dd_save_file(struct dd* dd, char* path, int flags)
 	}
 
 	struct zz_wblk zzdd;
-	if (zz_new_prep_wblk(&zz, &zzdd, BLKTYPE_DD, 1<<12, 1) == -1) {
+	if (zz_new_prep_wblk(&zz, &zzdd, BLKTYPE_DATA, 1<<12, 1) == -1) {
 		strtable_free(&st);
 		zz_close(&zz);
 		return -1;

@@ -10,10 +10,11 @@ struct dya {
 	u32 n;
 	u16 element_sz;
 	u8 cap_log2;
-	u8 flags;
+	u8 min_cap_log2;
 };
 
-void dya_init(struct dya*, void** ptr, size_t element_sz, uint8_t flags);
+void dya_init(struct dya*, void** ptr, size_t element_sz);
+void dya_set_min_cap(struct dya* d, int min_cap);
 void dya_clone(struct dya* dst, void** dstptr, struct dya* src, void** srcptr);
 void dya_clear(struct dya*, void** ptr);
 void* dya_append(struct dya*, void** ptr, void* new_element);

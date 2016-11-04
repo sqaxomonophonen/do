@@ -7,6 +7,7 @@
 #include "dd.h"
 #include "dya.h"
 #include "utf8.h"
+#include "opt.h"
 
 struct atls* atls;
 
@@ -770,12 +771,12 @@ static int winproc_graph(struct window* w)
 		int n = te->buffer_len;
 		for (int i = 0; i < n; i++) {
 			if (i == te->cursor) lsl_get_cursor(&cursor_x, &cursor_y);
-			lsl_set_color(lsl_eval(colorpid_text));
 			if (i >= select_min && i < select_max) {
 				lsl_set_text_bg_color(lsl_eval(colorpid_text_bg_select));
 			} else {
 				lsl_set_text_bg_color(lsl_eval(colorpid_text_bg));
 			}
+			lsl_set_color(lsl_eval(colorpid_text));
 			lsl_putch(te->buffer[i]);
 		}
 		lsl_clear_text_bg_color();
@@ -853,7 +854,7 @@ static struct window* clone_win(struct window* ow)
 	if (ow == NULL) {
 		// new window
 		memset(w, 0, sizeof(*w));
-		dya_init(&w->graph_view_stack_dya, (void**)&w->graph_view_stack, sizeof(*w->graph_view_stack), 0);
+		dya_init(&w->graph_view_stack_dya, (void**)&w->graph_view_stack, sizeof(*w->graph_view_stack));
 		w->type = WINDOW_GRAPH;
 	} else {
 		// clone window
@@ -864,7 +865,7 @@ static struct window* clone_win(struct window* ow)
 	}
 
 	// not ever copied
-	dya_init(&w->gsel_dya, (void**)&w->gsel, sizeof(*w->gsel), 0);
+	dya_init(&w->gsel_dya, (void**)&w->gsel, sizeof(*w->gsel));
 
 	w->next = windows;
 	windows = w;
@@ -910,31 +911,33 @@ static struct atls* load_atlas(char* relpath)
 
 int lsl_main(int argc, char** argv)
 {
-	dd_init(&state.dd);
+	char* load_file = NULL;
 
-	#if 0
-	{
-		// XXX some debug graph
-		struct dd_graph* g = &state.dd.root;
-		struct dd_node* n1 = dd_graph_new_node(g, "sin");
-		struct dd_node* n2 = dd_graph_new_node(g, "cos");
-		struct dd_node* n3 = dd_graph_new_node(g, "-");
-		assert(n1 != NULL);
-		assert(n2 != NULL);
-		assert(n3 != NULL);
-		//dd_graph_connect(g, n1->id, 1, n2->id, 1);
-		//dd_graph_connect(g, n1->id, 1, n3->id, 1);
-		//dd_graph_connect(g, n2->id, 1, n3->id, 2);
-
-		struct dd_node* n4 = dd_graph_new_node(g, "[poly]32saw");
-		assert(n4 != NULL);
-		struct dd_graph* g2 = dd_node_get_graph(n4);
-		dd_graph_new_node(g2, "in-");
-		dd_graph_new_node(g2, "-out");
-
-		//dd_graph_connect(g, n3->id, 1, n4->id, 1);
+	struct opt opts[] = {
+		{0, 0, NULL}
+	};
+	int opt_index = 1;
+	char* opt_value;
+	int opt_state;
+	while ((opt_state = opt_get(argc, argv, opts, &opt_index, &opt_value)) != OPT_END) {
+		if (opt_state == OPT_VALUE) {
+			if (load_file == NULL) {
+				load_file = opt_value;
+				continue;
+			}
+		}
+		fprintf(stderr, "invalid arg %s\n", opt_value);
+		return 1;
 	}
-	#endif
+
+	if (load_file) {
+		if (dd_load_file(load_file, &state.dd) == -1) {
+			fprintf(stderr, "dd_load_file(\"%s\") failed\n", load_file);
+			return 1;
+		}
+	} else {
+		dd_init(&state.dd);
+	}
 
 	atls = load_atlas("default.atls");
 

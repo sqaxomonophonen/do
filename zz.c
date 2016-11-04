@@ -6,14 +6,9 @@
 
 const u64 err_value = 0xdeadbeefcafebabe;
 
-static inline int has_error(struct zz* zz)
-{
-	return zz->read_error || zz->write_error;
-}
-
 static u8 read_u8(struct zz* zz)
 {
-	if (has_error(zz)) return err_value;
+	if (zz_error(zz)) return err_value;
 
 	u8 value;
 	if (fread(&value, 1, 1, zz->file) == 0) {
@@ -25,11 +20,11 @@ static u8 read_u8(struct zz* zz)
 
 static u64 read_vu(struct zz* zz)
 {
-	if (has_error(zz)) return err_value;
-	u64 value;
+	if (zz_error(zz)) return err_value;
+	u64 value = 0;
 	u8 byte;
 	int more;
-	int shift;
+	int shift = 0;
 	do {
 		if (fread(&byte, 1, 1, zz->file) == 0) {
 			zz->read_error = 1;
@@ -44,19 +39,19 @@ static u64 read_vu(struct zz* zz)
 
 static void write_data(struct zz* zz, void* data, u64 data_sz)
 {
-	if (has_error(zz) || data_sz == 0) return;
+	if (zz_error(zz) || data_sz == 0) return;
 	if (fwrite(data, data_sz, 1, zz->file) == 0) zz->write_error = 1;
 }
 
 static void write_u8(struct zz* zz, u8 value)
 {
-	if (has_error(zz)) return;
+	if (zz_error(zz)) return;
 	if (fwrite(&value, 1, 1, zz->file) == 0) zz->write_error = 1;
 }
 
 static void write_vu(struct zz* zz, u64 value)
 {
-	if (has_error(zz)) return;
+	if (zz_error(zz)) return;
 	int more;
 	do {
 		more = value >= 0x80;
@@ -93,14 +88,14 @@ int zz_open(struct zz* zz, char* path, int mode, struct zz_head* head)
 	if (zz->file == NULL) return -1;
 
 	fseek(zz->file, 0, SEEK_END);
-	long sz = ftell(zz->file);
-	if (sz > 0) {
+	zz->file_sz = ftell(zz->file);
+	if (zz->file_sz > 0) {
 		fseek(zz->file, 0, SEEK_SET);
 		head->twocc[0] = read_u8(zz);
 		head->twocc[1] = read_u8(zz);
 		head->version = read_vu(zz);
 		head->xcc = read_u8(zz);
-		if (has_error(zz)) {
+		if (zz_error(zz)) {
 			fclose(zz->file);
 			return -1;
 		}
@@ -110,7 +105,7 @@ int zz_open(struct zz* zz, char* path, int mode, struct zz_head* head)
 		write_u8(zz, head->twocc[1]);
 		write_vu(zz, head->version);
 		write_u8(zz, head->xcc);
-		if (has_error(zz)) {
+		if (zz_error(zz)) {
 			fclose(zz->file);
 			return -1;
 		}
@@ -119,6 +114,8 @@ int zz_open(struct zz* zz, char* path, int mode, struct zz_head* head)
 		fclose(zz->file);
 		return -1;
 	}
+
+	zz->first_blk = ftell(zz->file);
 
 	return 0;
 }
@@ -131,12 +128,102 @@ int zz_close(struct zz* zz)
 	return 0;
 }
 
+int zz_error(struct zz* zz)
+{
+	return zz->read_error || zz->write_error;
+}
+
+void zz_new_rblk_iter(struct zz* zz, struct zz_rblk_iter* it)
+{
+	memset(it, 0, sizeof(*it));
+	it->parent = zz;
+	it->cursor = zz->first_blk;
+}
+
+int zz_rblk_iter_next(struct zz_rblk_iter* it, struct zz_rblk* rblk)
+{
+	struct zz* zz = it->parent;
+	if (it->cursor >= zz->file_sz) {
+		if (it->cursor > zz->file_sz) zz->read_error = 1;
+		return 0;
+	}
+
+	fseek(zz->file, it->cursor, SEEK_SET);
+
+	memset(rblk, 0, sizeof(*rblk));
+	rblk->parent = zz;
+	rblk->usrtype = read_vu(zz);
+	rblk->flags = read_vu(zz);
+	rblk->data_size = read_vu(zz);
+	rblk->data_offset = ftell(zz->file);
+	if (rblk->flags == 0) {
+		rblk->size = rblk->data_size;
+	} else {
+		assert(!"TODO decompression");
+	}
+
+	it->cursor = rblk->data_offset + rblk->data_size;
+
+	return 1;
+}
+
+u8 zz_rblk_u8(struct zz_rblk* rblk)
+{
+	if (rblk->error) return err_value;
+	if (rblk->cursor >= rblk->size) {
+		rblk->error = 1;
+		return err_value;
+	}
+	fseek(rblk->parent->file, rblk->data_offset + rblk->cursor, SEEK_SET); // XXX is fseek expensive? cache position?
+	rblk->cursor++;
+	return read_u8(rblk->parent);
+}
+
+int zz_rblk_u8a(struct zz_rblk* rblk, u8* ary, u64 n)
+{
+	for (int i = 0; i < n; i++) ary[i] = zz_rblk_u8(rblk);
+	return rblk->error ? -1 : 0;
+}
+
+s64 zz_rblk_vs(struct zz_rblk* rblk)
+{
+	u64 uval = 0;
+	u8 byte;
+	int more;
+	int shift = 0;
+	do {
+		if (rblk->error) return err_value;
+		byte = zz_rblk_u8(rblk);
+		uval |= (byte & 0x7f) << shift;
+		more = byte & 0x80;
+		shift += 7;
+	} while (more);
+	if (uval >> (shift-1)) uval |= (((u64)-1) ^ ((1 << shift) - 1)); // sign-extend
+	return (s64)uval;
+}
+
+u64 zz_rblk_vu(struct zz_rblk* rblk)
+{
+	if (rblk->error) return err_value;
+	u64 value = 0;
+	u8 byte;
+	int more;
+	int shift = 0;
+	do {
+		byte = zz_rblk_u8(rblk);
+		value |= (byte & 0x7f) << shift;
+		more = byte & 0x80;
+		shift += 7;
+	} while (more);
+	return value;
+}
+
 static void new_blk(struct zz* zz, u64 usrtype, int compression, u64 data_sz)
 {
-	fseek(zz->file, 0, SEEK_END); // TODO look for free block data can contain data_sz
+	fseek(zz->file, 0, SEEK_END); // TODO look for free block that can contain data_sz
 	write_vu(zz, usrtype);
 	u64 flags = 0;
-	if (compression) flags |= 1;
+	//if (compression) flags |= 1; // TODO
 	write_vu(zz, flags);
 	write_vu(zz, data_sz);
 }
@@ -147,7 +234,7 @@ int zz_emit_data_blk(struct zz* zz, u64 usrtype, void* data, u64 data_sz, int co
 	// TODO compression
 	new_blk(zz, usrtype, compression, data_sz);
 	write_data(zz, data, data_sz);
-	return has_error(zz) ? -1 : 0;
+	return zz_error(zz) ? -1 : 0;
 }
 
 static int wblk_realloc(struct zz_wblk* wblk)
@@ -261,6 +348,6 @@ int zz_wblk_end(struct zz_wblk* wblk)
 	if (wblk->error) return -1;
 	new_blk(wblk->parent, wblk->usrtype, wblk->compression, wblk->buf_sz);
 	write_data(wblk->parent, wblk->buf, wblk->buf_sz);
-	return has_error(wblk->parent) ? -1 : 0;
+	return zz_error(wblk->parent) ? -1 : 0;
 }
 

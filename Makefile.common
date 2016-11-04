@@ -1,5 +1,8 @@
 all: $(BIN)
 
+opt.o: opt.c
+	$(CC) $(CFLAGS) -c $<
+
 m.o: m.c
 	$(CC) $(CFLAGS) -c $<
 
@@ -21,7 +24,7 @@ dd.o: dd.c
 do.o: do.c
 	$(CC) $(CFLAGS) -c $<
 
-$(BIN): do.o dd.o zz.o dya.o lsl.o m.o atls.o
+$(BIN): do.o dd.o zz.o dya.o lsl.o m.o atls.o opt.o
 	$(CC) $^ -o $@ $(LINK)
 
 clean:

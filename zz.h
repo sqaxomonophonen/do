@@ -8,6 +8,7 @@ ZZ read/write library. see ZZ-FORMAT for a description of what ZZ is.
 
 struct zz {
 	FILE* file;
+	u64 first_blk, file_sz;
 	int read:1;
 	int write:1;
 	int read_error;
@@ -21,8 +22,8 @@ struct zz_head {
 };
 
 struct zz_wblk {
-	u64 usrtype;
 	struct zz* parent;
+	u64 usrtype;
 	u64 cursor;
 	u64 buf_cap, buf_sz;
 	int compression;
@@ -31,8 +32,13 @@ struct zz_wblk {
 };
 
 struct zz_rblk {
-	int usrtype;
+	struct zz* parent;
+	u64 usrtype;
+	u64 flags;
+	u64 data_size;
 	u64 size;
+	u64 data_offset;
+	u64 cursor;
 	int error; // read past EOB, corrupted compression data,...
 	/* XXX transparent decompression? */
 };
@@ -49,12 +55,15 @@ struct zz_rblk_iter {
 int zz_open(struct zz*, char* path, int mode, struct zz_head*);
 int zz_close(struct zz*);
 
+int zz_error(struct zz*);
+
 void zz_new_rblk_iter(struct zz*, struct zz_rblk_iter*);
 int zz_rblk_iter_next(struct zz_rblk_iter*, struct zz_rblk*);
-int zz_rblk_free(struct zz_rblk*); // frees/deletes block in PATCH mode; will abort() if not operating in PATCH mode
+//int zz_rblk_free(struct zz_rblk*); // frees/deletes block in PATCH mode; will abort() if not operating in PATCH mode
 //int zz_rblk2wblk(struct zz_rblk*, struct zz_wblk*); // yields fixed size wblk (can't grow). will abort() unless if in PATCH mode
 
 u8 zz_rblk_u8(struct zz_rblk*);
+int zz_rblk_u8a(struct zz_rblk*, u8* ary, u64 n);
 u16 zz_rblk_u16(struct zz_rblk*);
 u32 zz_rblk_u32(struct zz_rblk*);
 s64 zz_rblk_vs(struct zz_rblk*);

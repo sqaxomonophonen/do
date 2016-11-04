@@ -114,9 +114,9 @@ struct dd {
 
 // initialization
 void dd_init(struct dd*);
+void dd_free(struct dd*);
 
-struct dd* dd_load_mem(void* data, long size);
-struct dd* dd_load_file(char* path);
+int dd_load_file(char* path, struct dd*);
 int dd_save_file(struct dd*, char* path, int flags);
 
 //void dd_commit(struct dd*);
