@@ -625,7 +625,7 @@ static int strtable_find(struct strtable* st, char* str)
 
 static int strtable_add(struct strtable* st, char* str)
 {
-	if (strtable_find(st, str) == 0) return 0;
+	if (strtable_find(st, str) >= 0) return 0;
 	size_t sz = strlen(str) + 1;
 	int required = st->string_cursor + sz;
 	int prev_strings_sz_log2 = st->strings_sz_log2;
