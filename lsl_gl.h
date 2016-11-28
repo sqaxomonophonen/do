@@ -376,6 +376,8 @@ void lsl_line(float thickness, union vec2 p0, union vec2 p1)
 			c0 = draw_color0;
 			c1 = draw_color1;
 			c2 = c3 = transparent;
+		} else {
+			assert(!"WRONG");
 		}
 
 		union vec2 v0 = vec2_add(p0, vec2_scale(d,s0));

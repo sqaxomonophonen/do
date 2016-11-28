@@ -50,12 +50,14 @@ struct gsel {
 };
 
 
+#if 0
 static inline struct gsel gsel_none()
 {
 	struct gsel s;
 	s.type = GSEL_NONE;
 	return s;
 }
+#endif
 
 static inline struct gsel gsel_node(u32 node_id)
 {
@@ -321,6 +323,8 @@ static void draw_cell_box(struct atls_cell_table* ct, struct rect r)
 
 static int winproc_graph(struct window* w)
 {
+	int do_commit = 0;
+
 	lsl_set_color(lsl_eval(colorpid_background));
 	lsl_clear();
 
@@ -517,7 +521,8 @@ static int winproc_graph(struct window* w)
 			if (w->graph_tmp_conn.pstate & LSL_RELEASE) {
 				w->graph_tmp_conn.node = NULL;
 				if (can_connect) {
-					dd_graph_connect(graph, src_node_id, src_port_id, dst_node_id, dst_port_id);
+					assert(dd_graph_connect(graph, src_node_id, src_port_id, dst_node_id, dst_port_id) == 0);
+					do_commit = 1;
 				}
 			}
 		}
@@ -754,10 +759,13 @@ static int winproc_graph(struct window* w)
 				// XXX ^^^ check return value
 				//printf("TODO create node: [%s]\n", utf8repr);
 				struct dd_node* node = dd_graph_new_node(graph, utf8repr);
-				int mx, my;
-				lsl_mpos(&mx, &my);
-				node->x = mx + view->pan_x;
-				node->y = my + view->pan_y;
+				if (node != NULL) {
+					do_commit = 1;
+					int mx, my;
+					lsl_mpos(&mx, &my);
+					node->x = mx + view->pan_x;
+					node->y = my + view->pan_y;
+				}
 			}
 		}
 
@@ -804,11 +812,13 @@ static int winproc_graph(struct window* w)
 					break;
 				case GSEL_NODE:
 					dd_graph_delete_node(graph, s.node_id);
+					do_commit = 1;
 					break;
 				case GSEL_CONN:
 					dd_graph_disconnect(graph,
 						s.conn.src_node_id, s.conn.src_port_id,
 						s.conn.dst_node_id, s.conn.dst_port_id);
+					do_commit = 1;
 					break;
 				}
 			}
@@ -823,6 +833,8 @@ static int winproc_graph(struct window* w)
 			break;
 		}
 	}
+
+	if (do_commit) dd_commit(&state.dd);
 
 	return quit;
 }

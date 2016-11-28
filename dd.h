@@ -119,8 +119,6 @@ void dd_free(struct dd*);
 int dd_load_file(char* path, struct dd*);
 int dd_save_file(struct dd*, char* path, int flags);
 
-//void dd_commit(struct dd*);
-
 struct dd_node* dd_graph_new_node(struct dd_graph*, char* def);
 int dd_graph_delete_node(struct dd_graph*, u32 id);
 struct dd_node* dd_graph_find_node(struct dd_graph*, u32 id);
@@ -135,6 +133,8 @@ void dd_node_nports(struct dd_node* n, int* n_total, int* n_inports, int* n_outp
 struct dd_port_it dd_node_inport_it(struct dd_node*);
 struct dd_port_it dd_node_outport_it(struct dd_node*);
 void dd_port_it_next(struct dd_port_it*);
+
+void dd_commit(struct dd*);
 
 #define DD_H
 #endif

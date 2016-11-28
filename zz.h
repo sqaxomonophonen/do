@@ -75,6 +75,13 @@ int zz_new_stream_wblk(struct zz*, struct zz_wblk*, u64 usrtype, u64 size);
 int zz_new_prep_wblk(struct zz*, struct zz_wblk*, u64 usrtype, u64 capacity, int compression);
 int zz_emit_data_blk(struct zz*, u64 usrtype, void* data, u64 data_sz, int compression);
 
+#if 0
+int zz_new_strtbl(struct zz*, struct zz_strtbl*);
+int zz_strtbl_add(struct zz_strtbl*, char* str);
+int zz_strtbl_addn(struct zz_strtbl*, char* str, int n);
+int zz_strtbl_find(struct zz_strtbl*, char* str);
+#endif
+
 u64 zz_wblk_tell(struct zz_wblk*);
 int zz_wblk_seek(struct zz_wblk*, u64 cursor);
 

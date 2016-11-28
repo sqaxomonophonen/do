@@ -17,10 +17,12 @@ static inline int is_container(const struct dd_node* node)
 	return node->type > DD__CONTAINER_MIN && node->type < DD__CONTAINER_MAX;
 }
 
+#if 0
 static inline int is_builtin(const struct dd_node* node)
 {
 	return node->type > DD__BUILTIN_MIN && node->type < DD__BUILTIN_MAX;
 }
+#endif
 
 static inline int is_port_node(const struct dd_node* node)
 {
@@ -590,6 +592,12 @@ void dd_port_it_next(struct dd_port_it* it)
 	}
 }
 
+
+
+/********************************
+*********** LOAD/SAVE ***********
+********************************/
+
 struct strtable {
 	// TODO hash table? (for string lookup performance)
 	// TODO string ref count? (filesize optimization via variable width integers)
@@ -884,15 +892,13 @@ int dd_save_file(struct dd* dd, char* path, int flags)
 	return 0;
 }
 
-#if 0
-struct dd* dd_load_mem(void* data, long size)
-{
-	return NULL;
-}
 
-struct dd* dd_load_file(char* path)
-{
-	return NULL;
-}
-#endif
 
+/********************************
+*********** RUNTIME *************
+********************************/
+
+
+void dd_commit(struct dd* dd)
+{
+}
