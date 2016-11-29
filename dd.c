@@ -598,108 +598,50 @@ void dd_port_it_next(struct dd_port_it* it)
 *********** LOAD/SAVE ***********
 ********************************/
 
-struct strtable {
-	// TODO hash table? (for string lookup performance)
-	// TODO string ref count? (filesize optimization via variable width integers)
-	int strings_sz_log2;
-	int string_cursor;
-	char* strings;
-};
-
-static void strtable_init(struct strtable* st)
-{
-	memset(st, 0, sizeof(*st));
-}
-
-static void strtable_free(struct strtable* st)
-{
-	if (st->strings) free(st->strings);
-	strtable_init(st);
-}
-
-static int strtable_find(struct strtable* st, char* str)
-{
-	size_t ksz = strlen(str);
-	int c = 0;
-	while (c < st->string_cursor) {
-		char* s = &st->strings[c];
-		size_t esz = strlen(s);
-		if (ksz == esz && memcmp(s, str, ksz) == 0) return c;
-		c += esz + 1;
-	}
-	assert(c == st->string_cursor);
-	return -1;
-}
-
-static int strtable_add(struct strtable* st, char* str)
-{
-	if (strtable_find(st, str) >= 0) return 0;
-	size_t sz = strlen(str) + 1;
-	int required = st->string_cursor + sz;
-	int prev_strings_sz_log2 = st->strings_sz_log2;
-	if (st->strings_sz_log2 < 16) st->strings_sz_log2 = 16;
-	while (required > (1 << st->strings_sz_log2)) st->strings_sz_log2 += 2;
-	if (st->strings_sz_log2 != prev_strings_sz_log2) {
-		void* p = realloc(st->strings, 1 << st->strings_sz_log2);
-		if (p == NULL) {
-			free(st->strings);
-			return -1;
-		}
-		st->strings = p;
-	}
-	memcpy(st->strings + st->string_cursor, str, sz);
-	st->string_cursor += sz;
-	return 0;
-}
-
 #define GRAPH_MAX_DEPTH (1<<10)
 
-static int graph_build_strtable(struct dd_graph* dg, struct strtable* st, int depth)
+static int graph_build_strtable(struct dd_graph* dg, struct zz_strtbl* zst, int depth)
 {
 	if (depth > GRAPH_MAX_DEPTH) return -1;
-	assert(dg != NULL);
-	assert(st != NULL);
 	for (int i = 0; i < dg->nodes_dya.n; i++) {
 		struct dd_node* node = &dg->nodes[i];
-		strtable_add(st, node->def);
-		if (is_container(node)) if (graph_build_strtable(node->container.graph, st, depth+1) == -1) return -1;
+		if (zz_strtbl_add(zst, node->def) == -1) return -1;
+		if (is_container(node)) if (graph_build_strtable(node->container.graph, zst, depth+1) == -1) return -1;
 	}
 	return 0;
 }
 
-static int emit_graph(struct dd_graph* dg, struct zz_wblk* wblk, struct strtable* st, int depth)
+static int emit_graph(struct dd_graph* dg, struct zz_wblk* wblk, struct zz_strtbl* zst, int depth)
 {
 	if (depth > GRAPH_MAX_DEPTH || wblk->error) return -1;
-	assert(dg != NULL);
-	assert(st != NULL);
 
-	zz_wblk_vu(wblk, dg->nodes_dya.n);
+	zz_wblk_vu(wblk, dg->nodes_dya.n, "n_nodes");
 	for (int i = 0; i < dg->nodes_dya.n; i++) {
 		struct dd_node* node = &dg->nodes[i];
 
-		zz_wblk_vs(wblk, node->x);
-		zz_wblk_vs(wblk, node->y);
+		zz_wblk_vs(wblk, node->x, "nx");
+		zz_wblk_vs(wblk, node->y, "ny");
 
-		int def_sti = strtable_find(st, node->def);
-		assert(def_sti != -1);
-		zz_wblk_vu(wblk, def_sti);
+		int def_stridx = zz_strtbl_find(zst, node->def);
+		assert(def_stridx != -1);
+		zz_wblk_vu(wblk, def_stridx, "def_stridx");
 
 		if (is_container(node)) {
-			if (emit_graph(node->container.graph, wblk, st, depth+1) == -1) return -1;
+			if (emit_graph(node->container.graph, wblk, zst, depth+1) == -1) return -1;
 		} // XXX else handle node-type payloads
 	}
 
-	zz_wblk_vu(wblk, dg->conns_dya.n);
+	zz_wblk_vu(wblk, dg->conns_dya.n, "n_conns");
 	for (int i = 0; i < dg->conns_dya.n; i++) {
 		struct dd_conn* conn = &dg->conns[i];
 		int src_node_index = graph_find_node_index(dg, conn->src_node_id);
 		assert(src_node_index >= 0);
 		int dst_node_index = graph_find_node_index(dg, conn->dst_node_id);
 		assert(dst_node_index >= 0);
-		zz_wblk_vu(wblk, src_node_index);
-		zz_wblk_vu(wblk, conn->src_port_id);
-		zz_wblk_vu(wblk, dst_node_index);
-		zz_wblk_vu(wblk, conn->dst_port_id);
+		zz_wblk_vu(wblk, src_node_index, "src_node_index");
+		zz_wblk_vu(wblk, conn->src_port_id, "src_port_id");
+		zz_wblk_vu(wblk, dst_node_index, "src_node_index");
+		zz_wblk_vu(wblk, conn->dst_port_id, "dst_port_id");
 	}
 
 	return 0;
@@ -709,9 +651,9 @@ static int emit_graph(struct dd_graph* dg, struct zz_wblk* wblk, struct strtable
 #define BLKTYPE_STRTABLE 1
 #define BLKTYPE_DATA 2
 
-static struct zz_head get_zz_head()
+static struct zz_header get_zz_header()
 {
-	struct zz_head h;
+	struct zz_header h;
 	h.twocc[0] = h.twocc[1] = 'D';
 	h.xcc = 'V';
 	h.version = 1;
@@ -722,14 +664,14 @@ static int read_graph(struct zz_rblk* rblk, struct dd_graph* dg, char* str_table
 {
 	if (depth > GRAPH_MAX_DEPTH || rblk->error) return -1;
 
-	u64 n_nodes = zz_rblk_vu(rblk);
+	u64 n_nodes = zz_rblk_vu(rblk, "n_nodes");
 	dya_set_min_cap(&dg->nodes_dya, n_nodes); // XXX ought to be temporary min cap?
 	for (u64 i = 0; i < n_nodes; i++) {
-		s64 x = zz_rblk_vs(rblk);
-		s64 y = zz_rblk_vs(rblk);
-		u64 def_offset = zz_rblk_vu(rblk);
-		if (def_offset >= str_table_size) return -1;
-		char* def = str_table + def_offset;
+		s64 x = zz_rblk_vs(rblk, "nx");
+		s64 y = zz_rblk_vs(rblk, "ny");
+		u64 def_stridx = zz_rblk_vu(rblk, "def_stridx");
+		if (def_stridx >= str_table_size) return -1;
+		char* def = str_table + def_stridx;
 		struct dd_node* node = dd_graph_new_node(dg, def);
 		if (node == NULL) return -1;
 		node->x = x;
@@ -739,15 +681,15 @@ static int read_graph(struct zz_rblk* rblk, struct dd_graph* dg, char* str_table
 		}
 	}
 
-	u64 n_conns = zz_rblk_vu(rblk);
+	u64 n_conns = zz_rblk_vu(rblk, "n_conns");
 	dya_set_min_cap(&dg->conns_dya, n_conns); // XXX ought to be temporary min cap?
 	for (u64 i = 0; i < n_conns; i++) {
-		u64 src_node_index = zz_rblk_vu(rblk);
+		u64 src_node_index = zz_rblk_vu(rblk, "src_node_index");
 		if (src_node_index >= dg->nodes_dya.n) return -1;
-		u64 src_port_id = zz_rblk_vu(rblk);
-		u64 dst_node_index = zz_rblk_vu(rblk);
+		u64 src_port_id = zz_rblk_vu(rblk, "src_port_id");
+		u64 dst_node_index = zz_rblk_vu(rblk, "dst_node_index");
 		if (dst_node_index >= dg->nodes_dya.n) return -1;
-		u64 dst_port_id = zz_rblk_vu(rblk);
+		u64 dst_port_id = zz_rblk_vu(rblk, "dst_port_id");
 		int e = dd_graph_connect(dg,
 			dg->nodes[src_node_index].id, src_port_id,
 			dg->nodes[dst_node_index].id, dst_port_id);
@@ -760,18 +702,18 @@ static int read_graph(struct zz_rblk* rblk, struct dd_graph* dg, char* str_table
 int dd_load_file(char* path, struct dd* dd)
 {
 	struct zz zz;
-	struct zz_head head;
+	struct zz_header header;
 	int mode = ZZ_MODE_READONLY;
-	if (zz_open(&zz, path, mode, &head) == -1) {
+	if (zz_open(&zz, path, mode, &header) == -1) {
 		return -1;
 	}
 
 	{ // check header
-		struct zz_head match_head = get_zz_head();
+		struct zz_header match_head = get_zz_header();
 		int bad_header = 0;
-		for (int i = 0; i < 2; i++) bad_header |= (head.twocc[i] != match_head.twocc[i]);
-		bad_header |= (head.version != match_head.version);
-		bad_header |= (head.xcc != match_head.xcc);
+		for (int i = 0; i < 2; i++) bad_header |= (header.twocc[i] != match_head.twocc[i]);
+		bad_header |= (header.version != match_head.version);
+		bad_header |= (header.xcc != match_head.xcc);
 		if (bad_header) {
 			zz_close(&zz);
 			return -1;
@@ -783,7 +725,7 @@ int dd_load_file(char* path, struct dd* dd)
 
 	struct zz_rblk_iter zzi;
 	struct zz_rblk rblk;
-	zz_new_rblk_iter(&zz, &zzi);
+	zz_rblk_iter_init(&zz, &zzi);
 	while (zz_rblk_iter_next(&zzi, &rblk)) {
 		if (rblk.usrtype != BLKTYPE_STRTABLE) continue;
 		if (str_table != NULL) {
@@ -796,7 +738,7 @@ int dd_load_file(char* path, struct dd* dd)
 			zz_close(&zz);
 			return -1;
 		}
-		if (zz_rblk_u8a(&rblk, (u8*)str_table, str_table_sz) == -1) {
+		if (zz_rblk_u8a(&rblk, (u8*)str_table, str_table_sz, "strtbl") == -1) {
 			zz_close(&zz);
 			return -1;
 		}
@@ -824,7 +766,7 @@ int dd_load_file(char* path, struct dd* dd)
 
 	dd_init(dd);
 	int got_data = 0;
-	zz_new_rblk_iter(&zz, &zzi);
+	zz_rblk_iter_init(&zz, &zzi);
 	while (zz_rblk_iter_next(&zzi, &rblk)) {
 		if (rblk.usrtype != BLKTYPE_DATA) continue;
 		if (read_graph(&rblk, &dd->root, str_table, str_table_sz, 0) == -1) {
@@ -851,44 +793,66 @@ int dd_load_file(char* path, struct dd* dd)
 
 int dd_save_file(struct dd* dd, char* path, int flags)
 {
-	struct strtable st;
-	strtable_init(&st);
+	struct zz_strtbl zst;
+	if (zz_strtbl_create(&zst) == -1) return -1;
 
-	if (graph_build_strtable(&dd->root, &st, 0) == -1) {
-		strtable_free(&st);
+	if (graph_build_strtable(&dd->root, &zst, 0) == -1) {
+		zz_strtbl_destroy(&zst);
 		return -1;
 	}
+
+	zz_strtbl_optimize(&zst);
 
 	struct zz zz;
-	struct zz_head head = get_zz_head();
+	struct zz_header header = get_zz_header();
 	int mode = ZZ_MODE_TRUNC; // TODO also allow ZZ_MODE_PATCH based on flags
-	if (zz_open(&zz, path, mode, &head) == -1) {
-		strtable_free(&st);
+	if (zz_open(&zz, path, mode, &header) == -1) {
+		zz_strtbl_destroy(&zst);
 		return -1;
 	}
 
-	if (zz_emit_data_blk(&zz, BLKTYPE_STRTABLE, st.strings, st.string_cursor, 1) == -1) {
-		strtable_free(&st);
-		zz_close(&zz);
-		return -1;
+	{
+		struct zz_wblk wblk;
+		if (zz_wblk_create(&wblk, BLKTYPE_STRTABLE, zst.size, 1) == -1) {
+			zz_strtbl_destroy(&zst);
+			zz_close(&zz);
+			return -1;
+		}
+		zz_wblk_u8a(&wblk, zst.strings, zst.size, "strtbl");
+		if (zz_write_wblk(&zz, &wblk) == -1) {
+			zz_wblk_destroy(&wblk);
+			zz_strtbl_destroy(&zst);
+			zz_close(&zz);
+			return -1;
+		}
+		zz_wblk_destroy(&wblk);
 	}
 
-	struct zz_wblk zzdd;
-	if (zz_new_prep_wblk(&zz, &zzdd, BLKTYPE_DATA, 1<<12, 1) == -1) {
-		strtable_free(&st);
-		zz_close(&zz);
-		return -1;
+	{
+		struct zz_wblk wblk;
+		if (zz_wblk_create(&wblk, BLKTYPE_DATA, 1<<12, 1) == -1) {
+			zz_strtbl_destroy(&zst);
+			zz_close(&zz);
+			return -1;
+		}
+		if (emit_graph(&dd->root, &wblk, &zst, 0) == -1) {
+			zz_wblk_destroy(&wblk);
+			zz_strtbl_destroy(&zst);
+			zz_close(&zz);
+			return -1;
+		}
+		if (zz_write_wblk(&zz, &wblk) == -1) {
+			zz_wblk_destroy(&wblk);
+			zz_strtbl_destroy(&zst);
+			zz_close(&zz);
+			return -1;
+		}
+		zz_wblk_destroy(&wblk);
 	}
-	if (emit_graph(&dd->root, &zzdd, &st, 0) == -1) {
-		strtable_free(&st);
-		zz_close(&zz);
-		return -1;
-	}
-	zz_wblk_end(&zzdd);
 
 	zz_close(&zz);
 
-	strtable_free(&st);
+	zz_strtbl_destroy(&zst);
 	return 0;
 }
 

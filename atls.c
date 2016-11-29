@@ -4,57 +4,15 @@
 #include <assert.h>
 #include <math.h>
 
+#include "zz.h"
 #include "atls.h"
 #include "atlsvm.h"
+#include "atlsfmt.h"
 
 #define MAX_CONTEXTS (32)
 
 int error;
 char* error_str;
-
-static int read_fourcc(FILE* f, char* out_fourcc /*char[5]!*/)
-{
-	out_fourcc[4] = 0;
-	return fread(out_fourcc, 4, 1, f) == 1;
-}
-
-static unsigned short read_u16(FILE* f)
-{
-	unsigned char b[2];
-	if (fread(b, 2, 1, f) != 1) {
-		error = 1;
-		error_str = "premature end-of-file";
-		return 0;
-	}
-	return b[0] + (b[1]<<8);
-}
-
-
-static unsigned int read_u32(FILE* f)
-{
-	unsigned char b[4];
-	if (fread(b, 4, 1, f) != 1) {
-		error = 1;
-		error_str = "premature end-of-file";
-		return 0;
-	}
-	return b[0] + (b[1]<<8) + (b[2]<<16) + (b[3]<<24);
-}
-
-static float read_f32(FILE* f)
-{
-	union {
-		unsigned int u;
-		float f;
-	} b;
-	b.u = read_u32(f);
-	return b.f;
-}
-
-static int read_data(FILE* f, void* dst, size_t n)
-{
-	return fread(dst, n, 1, f) == 1;
-}
 
 static size_t reserve(size_t* csz, int n, size_t esz)
 {
@@ -77,11 +35,33 @@ struct atls* atls_load_from_file(char* file)
 	error = 0;
 	error_str = "";
 
-	FILE* f = fopen(file, "rb");
-	if (f == NULL) {
+	struct zz_header header;
+	struct zz zz;
+	if (zz_open(&zz, file, ZZ_MODE_READONLY, &header) == -1) {
 		error = 1;
 		error_str = "no such file";
 		return NULL;
+	}
+
+	{
+		int bad_header = 0;
+		bad_header |= (header.twocc[0] != 'A');
+		bad_header |= (header.twocc[1] != 'T');
+		bad_header |= (header.xcc != 'L');
+		if (bad_header) {
+			error = 1;
+			error_str = "invalid file (bad CCs)";
+			zz_close(&zz);
+			return NULL;
+		}
+
+		bad_header |= (header.version != 1);
+		if (bad_header) {
+			error = 1;
+			error_str = "invalid version (not 1)";
+			zz_close(&zz);
+			return NULL;
+		}
 	}
 
 	int n_glyph_tables = 0;
@@ -125,11 +105,9 @@ struct atls* atls_load_from_file(char* file)
 	int i_ops = 0;
 
 	for (int pass = 0; pass < 2; pass++) {
-		rewind(f);
-
 		if (pass == 1) {
 			if (!got_stri || !got_btmp || !got_prog) {
-				fclose(f);
+				zz_close(&zz);
 				error = 1;
 				error_str = "file missing blocks";
 				return NULL;
@@ -212,227 +190,197 @@ struct atls* atls_load_from_file(char* file)
 			i_float += ctx_storage;
 		}
 
-		int state = 0;
-		char fourcc[5];
-		for (;;) {
-			int got_fourcc = read_fourcc(f, fourcc);
-			if (!got_fourcc) break;
+		struct zz_rblk_iter zzi;
+		struct zz_rblk rblk;
+		zz_rblk_iter_init(&zz, &zzi);
+		while (zz_rblk_iter_next(&zzi, &rblk)) {
+			if (rblk.usrtype == ATLSFMT_GLYPH_TABLE) {
+				unsigned int name_stridx = zz_rblk_vu(&rblk, "glt_name_stridx");
+				unsigned int n_glyphs = zz_rblk_vu(&rblk, "n_glyphs");
+				unsigned int height = zz_rblk_vu(&rblk, "height");
+				unsigned int baseline = zz_rblk_vu(&rblk, "baseline");
 
-			unsigned int blksize = read_u32(f);
-			long nextblk = ftell(f) + blksize;
+				if (pass == 0) {
+					n_glyph_tables++;
+					n_ptrs++;
+					n_ints += n_glyphs;
+					n_glyphs_total += n_glyphs;
+				} else {
+					int glt_index = i_glt++;
+					assert(glt_index <= n_glyph_tables);
+					struct atls_glyph_table* glt = &r_atls->glyph_tables[glt_index];
 
-			if (state == 0) {
-				if (strcmp("ATLS", fourcc) == 0) {
-					unsigned int version = read_u32(f);
-					if (version != 5) {
-						fclose(f);
+					r_atls->glyph_table_keys[glt_index] = resolve_string(r_strlst, strlst_sz, name_stridx);
+
+					glt->n_glyphs = n_glyphs;
+					glt->height = height;
+					glt->baseline = baseline;
+					glt->codepoints = r_ints + i_int;
+					i_int += n_glyphs;
+					glt->glyphs = r_gly + i_gly;
+					i_gly += n_glyphs;
+					assert(i_gly <= n_glyphs_total);
+					for (int i = 0; i < n_glyphs; i++) {
+						struct atls_glyph* g = &glt->glyphs[i];
+						glt->codepoints[i] = zz_rblk_vu(&rblk, "codepoint");
+						g->x = zz_rblk_vu(&rblk, "x");
+						g->y = zz_rblk_vu(&rblk, "y");
+						g->w = zz_rblk_vu(&rblk, "w");
+						g->h = zz_rblk_vu(&rblk, "h");
+						g->xoff = zz_rblk_vs(&rblk, "xoff");
+						g->yoff = zz_rblk_vs(&rblk, "yoff");
+					}
+				}
+			} else if (rblk.usrtype == ATLSFMT_CELL_TABLE) {
+				unsigned int name_stridx = zz_rblk_vu(&rblk, "clt_name_stridx");
+				unsigned int n_columns = zz_rblk_vu(&rblk, "n_columns");
+				unsigned int n_rows = zz_rblk_vu(&rblk, "n_rows");
+				unsigned int n_layers = zz_rblk_vu(&rblk, "n_layers");
+				int n_cells = n_columns * n_rows * n_layers;
+				if (pass == 0) {
+					n_cell_tables++;
+					n_ptrs++;
+					n_cells_total += n_cells;
+					n_ints += n_layers + n_columns + n_rows;
+				} else {
+					int clt_index = i_clt++;
+					struct atls_cell_table* clt = &r_atls->cell_tables[clt_index];
+					assert(i_clt <= n_cell_tables);
+
+					r_atls->cell_table_keys[clt_index] = resolve_string(r_strlst, strlst_sz, name_stridx);
+					clt->n_columns = n_columns;
+					clt->n_rows = n_rows;
+					clt->n_layers = n_layers;
+
+					clt->layer_prg_ids = r_ints + i_int;
+					i_int += n_layers;
+
+					clt->widths = r_ints + i_int;
+					i_int += n_columns;
+					clt->heights = r_ints + i_int;
+					i_int += n_rows;
+					assert(i_int <= n_ints);
+
+					clt->cells = r_cel + i_cel;
+					i_cel += n_cells;
+					assert(i_cel <= n_cells_total);
+
+					for (int i = 0; i < n_layers; i++) {
+						clt->layer_prg_ids[i] = zz_rblk_vu(&rblk, "program_id");
+					}
+					for (int i = 0; i < n_columns; i++) {
+						clt->widths[i] = zz_rblk_vu(&rblk, "column_width");
+					}
+					for (int i = 0; i < n_rows; i++) {
+						clt->heights[i] = zz_rblk_vu(&rblk, "row_height");
+					}
+					for (int i = 0; i < n_cells; i++) {
+						struct atls_cell* c = &clt->cells[i];
+						c->x = zz_rblk_vs(&rblk, "xoff");
+						c->y = zz_rblk_vs(&rblk, "yoff");
+					}
+				}
+			} else if (rblk.usrtype == ATLSFMT_PROGRAMS) {
+				if (pass == 0 && got_prog) {
+					zz_close(&zz);
+					error = 1;
+					error_str = "more than one programs block";
+					return NULL;
+				}
+				got_prog = 1;
+				n_programs = zz_rblk_vu(&rblk, "n_programs");
+				n_constants = zz_rblk_vu(&rblk, "n_constants");
+				n_ctx_keys = zz_rblk_vu(&rblk, "n_ctx_keys");
+				n_colors_per_colorscheme = zz_rblk_vu(&rblk, "n_colors_per_colorscheme");
+				n_ops = zz_rblk_vu(&rblk, "n_ops");
+
+				if (pass == 0) {
+					n_ptrs += n_programs;
+					n_ptrs += n_ctx_keys;
+					n_ptrs += n_colors_per_colorscheme;
+					n_ints += n_programs;
+					n_floats += n_constants;
+				} else {
+					for (int i = 0; i < n_programs; i++) {
+						r_atls->program_keys[i] = resolve_string(r_strlst, strlst_sz, zz_rblk_vu(&rblk, "program_key_stridx"));
+						r_atls->program_op_offsets[i] = zz_rblk_vu(&rblk, "program_offset");
+					}
+					for (int i = 0; i < n_constants; i++) {
+						r_atls->constants[i] = zz_rblk_f32(&rblk, "f32_constant");
+					}
+					for (int i = 0; i < n_ctx_keys; i++) {
+						r_atls->ctx_keys[i] = resolve_string(r_strlst, strlst_sz, zz_rblk_vu(&rblk, "ctx_key_stridx"));
+					}
+					for (int i = 0; i < n_colors_per_colorscheme; i++) {
+						r_atls->color_keys[i] = resolve_string(r_strlst, strlst_sz, zz_rblk_vu(&rblk, "color_key_striddx"));
+					}
+					for (int i = 0; i < n_ops; i++) {
+						r_atls->programs[i] = zz_rblk_u16(&rblk, "opcode");
+					}
+				}
+			} else if (rblk.usrtype == ATLSFMT_BITMAP) {
+				if (pass == 0 && got_btmp) {
+					zz_close(&zz);
+					error = 1;
+					error_str = "more than one bitmap block";
+					return NULL;
+				}
+				got_btmp = 1;
+
+				atlas_width = zz_rblk_vu(&rblk, "width");
+				atlas_height = zz_rblk_vu(&rblk, "height");
+				if (pass == 1) {
+					zz_rblk_u8a(&rblk, r_atls->atlas_bitmap, atlas_width*atlas_height, "bitmap");
+				}
+			} else if (rblk.usrtype == ATLSFMT_STRTABLE) {
+				if (pass == 0 && got_stri) {
+					zz_close(&zz);
+					error = 1;
+					error_str = "more than one string table block";
+					return NULL;
+				}
+				got_stri = 1;
+
+				if (pass == 0) {
+					strlst_sz += rblk.size;
+				} else {
+					zz_rblk_u8a(&rblk, (u8*)r_strlst, rblk.size, "strtbl");
+				}
+			} else if (rblk.usrtype == ATLSFMT_COLORSCHEME) {
+				if (pass == 0) {
+					n_colorschemes++;
+					n_ints += n_colors_per_colorscheme;
+				} else {
+					struct atls_colorscheme* cs = &r_atls->colorschemes[i_colorscheme++];
+					cs->name = resolve_string(r_strlst, strlst_sz, zz_rblk_vu(&rblk, "colorscheme_stridx"));
+					cs->colors = (unsigned int*) &r_ints[i_int];
+					i_int += n_colors_per_colorscheme;
+					for (int i = 0; i < n_colors_per_colorscheme; i++) {
+						cs->colors[i] = zz_rblk_vu(&rblk, "rbga");
+					}
+					if (rblk.error) {
+						zz_close(&zz);
 						error = 1;
-						error_str = "invalid ATLS version";
+						error_str = "read error";
 						return NULL;
 					}
-
-					state = 1;
-				} else {
-					fclose(f);
-					error = 1;
-					error_str = "file does not begin with ATLS block";
-					return NULL;
+					if (!zz_rblk_is_eob(&rblk)) {
+						zz_close(&zz);
+						error = 1;
+						error_str = "read error (block larger than expected)";
+						return NULL;
+					}
 				}
 			}
 
-			if (state == 1) {
-				if (strcmp("GLYT", fourcc) == 0) {
-					unsigned int name_offset = read_u32(f);
-					unsigned int n_glyphs = read_u32(f);
-					unsigned int height = read_u32(f);
-					unsigned int baseline = read_u32(f);
-
-					if (pass == 0) {
-						n_glyph_tables++;
-						n_ptrs++;
-						n_ints += n_glyphs;
-						n_glyphs_total += n_glyphs;
-					} else {
-						int glt_index = i_glt++;
-						assert(glt_index <= n_glyph_tables);
-						struct atls_glyph_table* glt = &r_atls->glyph_tables[glt_index];
-
-						r_atls->glyph_table_keys[glt_index] = resolve_string(r_strlst, strlst_sz, name_offset);
-
-						glt->n_glyphs = n_glyphs;
-						glt->height = height;
-						glt->baseline = baseline;
-						glt->codepoints = r_ints + i_int;
-						i_int += n_glyphs;
-						glt->glyphs = r_gly + i_gly;
-						i_gly += n_glyphs;
-						assert(i_gly <= n_glyphs_total);
-						for (int i = 0; i < n_glyphs; i++) {
-							struct atls_glyph* g = &glt->glyphs[i];
-							glt->codepoints[i] = read_u32(f);
-							g->x = read_u32(f);
-							g->y = read_u32(f);
-							g->w = read_u32(f);
-							g->h = read_u32(f);
-							g->xoff = read_u32(f);
-							g->yoff = read_u32(f);
-						}
-					}
-				} else if (strcmp("CELT", fourcc) == 0) {
-					unsigned int name_offset = read_u32(f);
-					unsigned int n_columns = read_u32(f);
-					unsigned int n_rows = read_u32(f);
-					unsigned int n_layers = read_u32(f);
-					int n_cells = n_columns * n_rows * n_layers;
-					if (pass == 0) {
-						n_cell_tables++;
-						n_ptrs++;
-						n_cells_total += n_cells;
-						n_ints += n_layers + n_columns + n_rows;
-					} else {
-						int clt_index = i_clt++;
-						struct atls_cell_table* clt = &r_atls->cell_tables[clt_index];
-						assert(i_clt <= n_cell_tables);
-
-						r_atls->cell_table_keys[clt_index] = resolve_string(r_strlst, strlst_sz, name_offset);
-						clt->n_columns = n_columns;
-						clt->n_rows = n_rows;
-						clt->n_layers = n_layers;
-
-						clt->layer_prg_ids = r_ints + i_int;
-						i_int += n_layers;
-
-						clt->widths = r_ints + i_int;
-						i_int += n_columns;
-						clt->heights = r_ints + i_int;
-						i_int += n_rows;
-						assert(i_int <= n_ints);
-
-						clt->cells = r_cel + i_cel;
-						i_cel += n_cells;
-						assert(i_cel <= n_cells_total);
-
-						for (int i = 0; i < n_layers; i++) {
-							clt->layer_prg_ids[i] = read_u32(f);
-						}
-						for (int i = 0; i < n_columns; i++) {
-							clt->widths[i] = read_u32(f);
-						}
-						for (int i = 0; i < n_rows; i++) {
-							clt->heights[i] = read_u32(f);
-						}
-						for (int i = 0; i < n_cells; i++) {
-							struct atls_cell* c = &clt->cells[i];
-							c->x = read_u32(f);
-							c->y = read_u32(f);
-						}
-					}
-				} else if (strcmp("PROG", fourcc) == 0) {
-					if (pass == 0 && got_prog) {
-						fclose(f);
-						error = 1;
-						error_str = "more than one PROG block";
-						return NULL;
-					}
-					got_prog = 1;
-					n_programs = read_u32(f);
-					n_constants = read_u32(f);
-					n_ctx_keys = read_u32(f);
-					n_colors_per_colorscheme = read_u32(f);
-
-					if (pass == 0) {
-						n_ptrs += n_programs;
-						n_ptrs += n_ctx_keys;
-						n_ptrs += n_colors_per_colorscheme;
-						n_ints += n_programs;
-						n_floats += n_constants;
-						n_ops += (blksize - (4*4) - (8*n_programs) - (4*n_constants) - (4*n_ctx_keys) - (4*n_colors_per_colorscheme)) / 2;
-					} else {
-						for (int i = 0; i < n_programs; i++) {
-							r_atls->program_keys[i] = resolve_string(r_strlst, strlst_sz, read_u32(f));
-							r_atls->program_op_offsets[i] = read_u32(f);
-						}
-						for (int i = 0; i < n_constants; i++) {
-							r_atls->constants[i] = read_f32(f);
-						}
-						for (int i = 0; i < n_ctx_keys; i++) {
-							r_atls->ctx_keys[i] = resolve_string(r_strlst, strlst_sz, read_u32(f));
-						}
-						for (int i = 0; i < n_colors_per_colorscheme; i++) {
-							r_atls->color_keys[i] = resolve_string(r_strlst, strlst_sz, read_u32(f));
-						}
-						for (int i = 0; i < n_ops; i++) {
-							r_atls->programs[i] = read_u16(f);
-						}
-					}
-				} else if (strcmp("BTMP", fourcc) == 0) {
-					if (pass == 0 && got_btmp) {
-						fclose(f);
-						error = 1;
-						error_str = "more than one BTMP block";
-						return NULL;
-					}
-					got_btmp = 1;
-
-					atlas_width = read_u32(f);
-					atlas_height = read_u32(f);
-					unsigned int encoding = read_u32(f);
-					if (encoding != 1) {
-						error = 1;
-						error_str = "unsupported BTMP encoding";
-						fclose(f);
-						return NULL;
-					}
-					if (pass == 1) {
-						read_data(f, r_atls->atlas_bitmap, atlas_width*atlas_height);
-					}
-				} else if (strcmp("STRI", fourcc) == 0) {
-					if (pass == 0 && got_stri) {
-						fclose(f);
-						error = 1;
-						error_str = "more than one STRI block";
-						return NULL;
-					}
-					got_stri = 1;
-
-					if (pass == 0) {
-						strlst_sz += blksize;
-					} else {
-						read_data(f, r_strlst, blksize);
-					}
-				} else if (strcmp("COLS", fourcc) == 0) {
-					int n_colors = (blksize-4)/4;
-					if (n_colors != n_colors_per_colorscheme) {
-						fclose(f);
-						error = 1;
-						error_str = "invalid COLS block size";
-						return NULL;
-					}
-					if (pass == 0) {
-						n_colorschemes++;
-						n_ints += n_colors;
-					} else {
-						struct atls_colorscheme* cs = &r_atls->colorschemes[i_colorscheme++];
-						cs->name = resolve_string(r_strlst, strlst_sz, read_u32(f));
-						cs->colors = (unsigned int*) &r_ints[i_int];
-						i_int += n_colors;
-						for (int i = 0; i < n_colors; i++) {
-							cs->colors[i] = read_u32(f);
-						}
-					}
-				}
-
-				if (error) {
-					fclose(f);
-					return NULL;
-				}
-
-				fseek(f, nextblk, SEEK_SET);
+			if (error) {
+				zz_close(&zz);
+				return NULL;
 			}
 		}
 	}
 
-	fclose(f);
+	zz_close(&zz);
 
 	return r_atls;
 }

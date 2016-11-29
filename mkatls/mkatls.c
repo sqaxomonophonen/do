@@ -19,6 +19,8 @@ without cleaning it up first
 
 #include "atlsvm.h"
 #include "dya.h"
+#include "../zz.h"
+#include "../atlsfmt.h"
 
 
 struct glyph {
@@ -72,7 +74,7 @@ enum table_type {
 };
 
 struct table {
-	int name_sid;
+	char* name;
 	enum table_type type;
 	union {
 		struct glyph_table glyph;
@@ -168,7 +170,7 @@ static char** explode_strings(char* s, int* out_n)
 		p++;
 	}
 
-	char** lst = malloc(n * sizeof(char*));
+	char** lst = malloc(n * sizeof *lst);
 	assert(lst != NULL);
 
 	p = s;
@@ -195,7 +197,7 @@ static int* explode_integers(char* s, int* out_n)
 	char** ss = explode_strings(s, &n); // hehe
 	if (out_n != NULL) *out_n = n;
 
-	int* lst = malloc(n * sizeof(int));
+	int* lst = malloc(n * sizeof *lst);
 	assert(lst != NULL);
 
 	for (int i = 0; i < n; i++) {
@@ -212,13 +214,13 @@ static int* explode_integers(char* s, int* out_n)
 struct table tables[MAX_N];
 int n_tables;
 
-struct table* table_alloc(enum table_type tt, int name_sid)
+struct table* table_alloc(enum table_type tt, char* name)
 {
 	assert(n_tables < MAX_N);
 	struct table* t = &tables[n_tables++];
-	memset(t, 0, sizeof(*t));
+	memset(t, 0, sizeof *t);
 	t->type = tt;
-	t->name_sid = name_sid;
+	t->name = name;
 	return t;
 }
 
@@ -237,140 +239,6 @@ static int alpha_sum_rect(stbi_uc* bitmap, int stride, int x0, int y0, int w, in
 		}
 	}
 	return sum;
-}
-
-struct blk {
-	char type[4];
-	int cap_log2;
-	int data_sz;
-	char* data;
-	struct blk* next;
-};
-
-void blk_append(struct blk* b, unsigned char* data, int sz)
-{
-	int dst_offset = b->data_sz;
-	b->data_sz += sz;
-	{ // grow buffer if necessary
-		int old_cap_log2 = b->cap_log2;
-		while ((1<<b->cap_log2) < b->data_sz) b->cap_log2++;
-		if (b->cap_log2 != old_cap_log2) {
-			b->data = realloc(b->data, 1<<b->cap_log2);
-			assert(b->data != NULL);
-		}
-	}
-	memcpy(&b->data[dst_offset], data, sz);
-}
-
-struct blk* blk_new(char* type)
-{
-	assert(strlen(type) == 4);
-	struct blk* b = calloc(1, sizeof(*b));
-	assert(b != NULL);
-	memcpy(b->type, type, 4);
-	return b;
-}
-
-void encode_u32(unsigned int v, unsigned char* out)
-{
-	out[0] = v & 255;
-	out[1] = (v>>8) & 255;
-	out[2] = (v>>16) & 255;
-	out[3] = (v>>24) & 255;
-}
-
-void encode_u16(unsigned int v, unsigned char* out)
-{
-	out[0] = v & 255;
-	out[1] = (v>>8) & 255;
-}
-
-void blk_finalize(struct blk* b, FILE* f)
-{
-	fwrite(&b->type, sizeof(b->type), 1, f);
-
-	unsigned char c32[4];
-	encode_u32(b->data_sz, c32);
-	fwrite(c32, sizeof(c32), 1, f);
-
-	fwrite(b->data, b->data_sz, 1, f);
-	free(b->data);
-	free(b);
-}
-
-void blk_u16(struct blk* b, unsigned int v)
-{
-	unsigned char c16[2];
-	encode_u16(v, c16);
-	blk_append(b, c16, sizeof(c16));
-}
-
-
-void blk_u32(struct blk* b, unsigned int v)
-{
-	unsigned char c32[4];
-	encode_u32(v, c32);
-	blk_append(b, c32, sizeof(c32));
-}
-
-void blk_s32(struct blk* b, int v)
-{
-	blk_u32(b, (unsigned int)v);
-}
-
-void blk_f32(struct blk* b, float v)
-{
-	union {
-		unsigned int u;
-		float f;
-	} both;
-	both.f = v;
-	blk_u32(b, both.u);
-}
-
-
-struct strtbl {
-	struct blk* strings;
-};
-
-void strtbl_init(struct strtbl* t)
-{
-	t->strings = blk_new("STRI");
-}
-
-unsigned int strtbl_addn(struct strtbl* t, char* str, int n)
-{
-	int cursor = 0;
-	while (cursor < t->strings->data_sz) {
-		char* s = t->strings->data + cursor;
-		size_t sn = strlen(s);
-		if (sn == n && memcmp(s, str, sn) == 0) {
-			return cursor;
-		}
-		cursor += sn+1;
-	}
-	int p = t->strings->data_sz;
-	blk_append(t->strings, (unsigned char*)str, n);
-	unsigned char nullterm = 0;
-	blk_append(t->strings, &nullterm, 1);
-	return p;
-}
-
-unsigned int strtbl_add(struct strtbl* t, char* str)
-{
-	return strtbl_addn(t, str, strlen(str));
-}
-
-
-char* strtbl_get(struct strtbl* t, unsigned int id)
-{
-	assert(id < t->strings->data_sz);
-	return t->strings->data + id;
-}
-
-void strtbl_finalize(struct strtbl* t, FILE* f)
-{
-	blk_finalize(t->strings, f);
 }
 
 static char* penultimate(char* name)
@@ -459,7 +327,7 @@ static void* lex_main(struct lexer* l);
 
 static void lexer_init(struct lexer* l, char* src)
 {
-	memset(l, 0, sizeof(*l));
+	memset(l, 0, sizeof *l);
 	l->src = src;
 	l->src_len = strlen(src);
 	l->state_fn = lex_main;
@@ -746,7 +614,7 @@ static inline int sexpr_is_list(struct sexpr* e)
 
 static struct sexpr* _sexpr_new()
 {
-	struct sexpr* e = calloc(1, sizeof(*e));
+	struct sexpr* e = calloc(1, sizeof *e);
 	assert(e != NULL);
 	return e;
 }
@@ -830,7 +698,7 @@ static inline struct token parser_next_token(struct parser* p)
 
 static void parser_init(struct parser* p, char* src)
 {
-	memset(p, 0, sizeof(*p));
+	memset(p, 0, sizeof *p);
 	lexer_init(&p->lexer, src);
 	parser_next_token(p);
 }
@@ -842,7 +710,7 @@ static inline void parser_rewind(struct parser* p)
 	p->next_token = p->current_token;
 	p->can_rewind = 0;
 	p->has_stashed_token = 1;
-	memset(&p->current_token, 0, sizeof(p->current_token));
+	memset(&p->current_token, 0, sizeof p->current_token);
 }
 
 static inline int parser_accept_and_get(struct parser* p, enum token_type tt, struct token* tp)
@@ -1035,17 +903,7 @@ static struct sexpr* parse_expr(struct parser* p)
 
 struct prgs {
 	int n_programs;
-	struct strtbl* strtbl;
-	/*
-	struct blk* sexprs;
-	struct blk* constants;
-	struct blk* ctx_keys;
-	struct blk* color_keys;
-	struct blk* program_keys;
-	struct blk* program_offsets;
-	struct blk* code;
-	*/
-
+	struct zz_strtbl* zst;
 
 	struct dya sexprs_dya;
 	struct sexpr** sexprs;
@@ -1054,13 +912,13 @@ struct prgs {
 	float* constants;
 
 	struct dya ctx_keys_dya;
-	unsigned int* ctx_keys;
+	char** ctx_keys;
 
 	struct dya color_keys_dya;
-	unsigned int* color_keys;
+	char** color_keys;
 
 	struct dya program_keys_dya;
-	unsigned int* program_keys;
+	char** program_keys;
 
 	struct dya program_offsets_dya;
 	unsigned int* program_offsets;
@@ -1070,19 +928,19 @@ struct prgs {
 
 };
 
-static struct prgs* prgs_new(struct strtbl* strtbl)
+static struct prgs* prgs_new(struct zz_strtbl* zst)
 {
-	struct prgs* prgs = calloc(1, sizeof(*prgs));
+	struct prgs* prgs = calloc(1, sizeof *prgs);
 	assert(prgs != NULL);
-	prgs->strtbl = strtbl;
+	prgs->zst = zst;
 
-	dya_init(&prgs->sexprs_dya, (void**)&prgs->sexprs, sizeof(*prgs->sexprs));
-	dya_init(&prgs->constants_dya, (void**)&prgs->constants, sizeof(*prgs->constants));
-	dya_init(&prgs->ctx_keys_dya, (void**)&prgs->ctx_keys, sizeof(*prgs->ctx_keys));
-	dya_init(&prgs->color_keys_dya, (void**)&prgs->color_keys, sizeof(*prgs->color_keys));
-	dya_init(&prgs->program_keys_dya, (void**)&prgs->program_keys, sizeof(*prgs->program_keys));
-	dya_init(&prgs->program_offsets_dya, (void**)&prgs->program_offsets, sizeof(*prgs->program_offsets));
-	dya_init(&prgs->code_dya, (void**)&prgs->code, sizeof(*prgs->code));
+	dya_init(&prgs->sexprs_dya, (void**)&prgs->sexprs, sizeof *prgs->sexprs);
+	dya_init(&prgs->constants_dya, (void**)&prgs->constants, sizeof *prgs->constants);
+	dya_init(&prgs->ctx_keys_dya, (void**)&prgs->ctx_keys, sizeof *prgs->ctx_keys);
+	dya_init(&prgs->color_keys_dya, (void**)&prgs->color_keys, sizeof *prgs->color_keys);
+	dya_init(&prgs->program_keys_dya, (void**)&prgs->program_keys, sizeof *prgs->program_keys);
+	dya_init(&prgs->program_offsets_dya, (void**)&prgs->program_offsets, sizeof *prgs->program_offsets);
+	dya_init(&prgs->code_dya, (void**)&prgs->code, sizeof *prgs->code);
 
 	return prgs;
 }
@@ -1213,41 +1071,43 @@ static int prgs_emit(struct prgs* prgs, char* src, struct sexpr* e)
 			unsigned short op = 3 | (const_id << 2);
 			dya_append(&prgs->code_dya, (void**)&prgs->code, &op);
 		} else if (tt == T_IDENT_CTX_VAR || tt == T_IDENT_COLOR_NAME) {
-			int str_id = strtbl_addn(prgs->strtbl, base+1, e->atom.len-1);
+			assert(zz_strtbl_addn(prgs->zst, base+1, e->atom.len-1) != -1);
 
-			struct dya* idtbl_dya = tt == T_IDENT_CTX_VAR ? &prgs->ctx_keys_dya : tt == T_IDENT_COLOR_NAME ? &prgs->color_keys_dya : NULL;
-			assert(idtbl_dya != NULL);
-			unsigned int** idtbl = tt == T_IDENT_CTX_VAR ? &prgs->ctx_keys : tt == T_IDENT_COLOR_NAME ? &prgs->color_keys : NULL;
-			assert(idtbl != NULL);
+			struct dya* keytbl_dya = tt == T_IDENT_CTX_VAR ? &prgs->ctx_keys_dya : tt == T_IDENT_COLOR_NAME ? &prgs->color_keys_dya : NULL;
+			assert(keytbl_dya != NULL);
+			char*** keytbl = tt == T_IDENT_CTX_VAR ? &prgs->ctx_keys : tt == T_IDENT_COLOR_NAME ? &prgs->color_keys : NULL;
+			assert(keytbl != NULL);
 
-			int n = idtbl_dya->n;
-			int idid = -1;
+			int n = keytbl_dya->n;
+			int index = -1;
 			for (int i = 0; i < n; i++) {
-				int str_id = (*idtbl)[i];
-				char* key = strtbl_get(prgs->strtbl, str_id);
+				char* key = (*keytbl)[i];
 				size_t keyn = strlen(key);
 				if (keyn != (e->atom.len-1)) continue;
 				if (memcmp(base+1, key, keyn) != 0) continue;
-				idid = i;
+				index = i;
 				break;
 			}
-			if (idid == -1) {
-				idid = n;
-				dya_append(idtbl_dya, (void**)idtbl, &str_id);
+			if (index == -1) {
+				index = n;
+				char* newstr = malloc(e->atom.len);
+				assert(newstr != NULL);
+				memcpy(newstr, base+1, e->atom.len-1);
+				newstr[e->atom.len-1] = 0;
+				dya_append(keytbl_dya, (void**)keytbl, &newstr);
 			}
-			assert(idid < (1<<13));
+			assert(index < (1<<13));
 			int magic = tt == T_IDENT_CTX_VAR ? 2 : tt == T_IDENT_COLOR_NAME ? 6 : -1;
 			assert(magic >= 0);
-			unsigned short op = magic | (idid << 3);
+			unsigned short op = magic | (index << 3);
 			dya_append(&prgs->code_dya, (void**)&prgs->code, &op);
 		} else if (tt == T_IDENT) {
 			int found = 0;
 			for (int i = 0; i < prgs->n_programs; i++) {
-				int str_id = prgs->program_keys[i];
-				char* c = strtbl_get(prgs->strtbl, str_id);
-				size_t cn = strlen(c);
+				char* key = prgs->program_keys[i];
+				size_t cn = strlen(key);
 				if (cn != e->atom.len) continue;
-				if (memcmp(base, c, cn) != 0) continue;
+				if (memcmp(base, key, cn) != 0) continue;
 				found = 1;
 				prgs_emit(prgs, src, prgs->sexprs[i]);
 			}
@@ -1384,6 +1244,7 @@ static int prgs_emit(struct prgs* prgs, char* src, struct sexpr* e)
 	return top;
 }
 
+#ifdef DEBUG
 static void wrstr(char** d, const char* s)
 {
 	strcpy(*d, s);
@@ -1424,6 +1285,7 @@ static char* sexpr_str(char* src, struct sexpr* e)
 	*cpy = 0;
 	return s;
 }
+#endif
 
 static unsigned int prgs_compile(struct prgs* prgs, char* key, char* src)
 {
@@ -1432,11 +1294,16 @@ static unsigned int prgs_compile(struct prgs* prgs, char* key, char* src)
 	struct sexpr* se = parse_expr(&parser);
 	assert(se != NULL);
 
+	#ifdef DEBUG
 	int c0 = prgs->code_dya.n;
+	#endif
 
 	dya_append(&prgs->sexprs_dya, (void**)&prgs->sexprs, &se);
-	unsigned int program_key = strtbl_add(prgs->strtbl, key);
-	dya_append(&prgs->program_keys_dya, (void**)&prgs->program_keys, &program_key);
+
+	char* nkey = strdup(key);
+	zz_strtbl_add(prgs->zst, nkey);
+	dya_append(&prgs->program_keys_dya, (void**)&prgs->program_keys, &nkey);
+
 	unsigned int offset = prgs->code_dya.n;
 	dya_append(&prgs->program_offsets_dya, (void**)&prgs->program_offsets, &offset);
 
@@ -1445,12 +1312,14 @@ static unsigned int prgs_compile(struct prgs* prgs, char* key, char* src)
 
 	prgs->n_programs++;
 
-	int nops = prgs->code_dya.n - c0;
-
-	printf("  C  %s: '%s' => %s (%d ops)\n", key, src, sexpr_str(src, se), nops);
-	for (int i = 0; i < nops; i++) {
+	#ifdef DEBUG
+	int n_ops = prgs->code_dya.n - c0;
+	printf("  C  %s: '%s' => %s (%d ops)\n", key, src, sexpr_str(src, se), n_ops);
+	for (int i = 0; i < n_ops; i++) {
 		printf("       %04x\n", prgs->code[c0 + i]);
 	}
+	#endif
+
 	return offset;
 }
 
@@ -1467,10 +1336,10 @@ struct cols {
 
 static struct cols* cols_new(char* name)
 {
-	struct cols* cols = calloc(1, sizeof(*cols));
+	struct cols* cols = calloc(1, sizeof *cols);
 	assert(cols != NULL);
 	cols->name = strdup(name);
-	dya_init(&cols->colors_dya, (void**)&cols->colors, sizeof(*cols->colors));
+	dya_init(&cols->colors_dya, (void**)&cols->colors, sizeof *cols->colors);
 	return cols;
 }
 
@@ -1500,13 +1369,13 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 
 	int n_total_rects = 0;
 
-	struct strtbl strtbl;
-	strtbl_init(&strtbl);
+	struct zz_strtbl zst;
+	assert(zz_strtbl_create(&zst) != -1);
 
-	struct prgs* prgs = prgs_new(&strtbl);
+	struct prgs* prgs = prgs_new(&zst);
 	struct dya cols_array_dya;
 	struct cols** cols_array;
-	dya_init(&cols_array_dya, (void**)&cols_array, sizeof(*cols_array));
+	dya_init(&cols_array_dya, (void**)&cols_array, sizeof *cols_array);
 
 	for (int i = 0; i < n; i++) {
 		char* filename = filenames[i];
@@ -1533,12 +1402,13 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 		}
 
 		if (endswith(filename, ".tbl")) {
-			struct table* tbl = table_alloc(TT_CELL, strtbl_add(&strtbl, name));
+			assert(zz_strtbl_add(&zst, name) != -1);
+			struct table* tbl = table_alloc(TT_CELL, name);
 			struct cell_table* clt = &tbl->cell;
 			struct layer** layer_cursor = &clt->layers;
 			FILE* f = fopen(filename, "r");
 			for (;;) {
-				fread_line(f, line, sizeof(line));
+				fread_line(f, line, sizeof line);
 				if (strcmp(line, "END") == 0) break;
 
 				char* tail;
@@ -1547,7 +1417,7 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 				if (strcmp(line, "LAYER") == 0) {
 					char* program;
 					split2(tail, &program);
-					struct layer* layer = calloc(1, sizeof(*layer));
+					struct layer* layer = calloc(1, sizeof *layer);
 					layer->path = strdup(tail);
 					layer->program = strdup(program);
 					layer->program_id = prgs_compile(prgs, "", program);
@@ -1567,7 +1437,7 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 			fclose(f);
 			assert(clt->n_layers > 0);
 
-			clt->layer_bitmaps = calloc(clt->n_layers, sizeof(*clt->layer_bitmaps));
+			clt->layer_bitmaps = calloc(clt->n_layers, sizeof *clt->layer_bitmaps);
 			assert(clt->layer_bitmaps != NULL);
 
 			struct layer* layer = clt->layers;
@@ -1584,7 +1454,7 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 			}
 
 			int n_cells = clt->n_columns * clt->n_rows;
-			clt->cells = calloc(n_cells, sizeof(*clt->cells));
+			clt->cells = calloc(n_cells, sizeof *clt->cells);
 			assert(clt->cells != NULL);
 
 			int j = 0;
@@ -1593,7 +1463,7 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 				int x0 = 0;
 				for (int column = 0; column < clt->n_columns; column++) {
 					struct cell* c = &clt->cells[j++];
-					c->rects = calloc(clt->n_layers, sizeof(*c->rects));
+					c->rects = calloc(clt->n_layers, sizeof *c->rects);
 					assert(c->rects != NULL);
 					c->x0 = x0;
 					c->y0 = y0;
@@ -1616,7 +1486,8 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 			n_total_rects += n_cells * clt->n_layers;
 
 		} else if (endswith(filename, ".rects")) {
-			struct table* tbl = table_alloc(TT_GLYPH, strtbl_add(&strtbl, name));
+			zz_strtbl_add(&zst, name);
+			struct table* tbl = table_alloc(TT_GLYPH, name);
 			struct glyph_table* glt = &tbl->glyph;
 
 			glt->is_dummy = 1; // no bitmaps associated
@@ -1627,7 +1498,7 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 			glt->n_glyphs = 0;
 
 			for (;;) {
-				fread_line(f, line, sizeof(line));
+				fread_line(f, line, sizeof line);
 				if (strcmp(line, "END") == 0) break;
 
 				char* arg0;
@@ -1643,11 +1514,11 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 			rewind(f);
 
 			n_total_rects += glt->n_glyphs;
-			glt->glyphs = calloc(glt->n_glyphs, sizeof(*glt->glyphs));
+			glt->glyphs = calloc(glt->n_glyphs, sizeof *glt->glyphs);
 
 			int i = 0;
 			for (;;) {
-				fread_line(f, line, sizeof(line));
+				fread_line(f, line, sizeof line);
 				if (strcmp(line, "END") == 0) break;
 
 				char* arg0;
@@ -1676,7 +1547,8 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 				}
 			}
 		} else if (endswith(filename, ".bdf")) {
-			struct table* tbl = table_alloc(TT_GLYPH, strtbl_add(&strtbl, name));
+			zz_strtbl_add(&zst, name);
+			struct table* tbl = table_alloc(TT_GLYPH, name);
 			struct glyph_table* glt = &tbl->glyph;
 			glt->filename = filename;
 
@@ -1684,7 +1556,7 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 			assert(f);
 
 			{
-				fread_line(f, line, sizeof(line));
+				fread_line(f, line, sizeof line);
 
 				char* arg;
 				split2(line, &arg);
@@ -1694,7 +1566,7 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 			}
 
 			for (;;) {
-				fread_line(f, line, sizeof(line));
+				fread_line(f, line, sizeof line);
 				char* arg;
 				split2(line, &arg);
 
@@ -1714,7 +1586,7 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 			glt->n_glyphs = 0;
 
 			for (;;) {
-				fread_line(f, line, sizeof(line));
+				fread_line(f, line, sizeof line);
 				char* arg;
 				split2(line, &arg);
 
@@ -1727,13 +1599,13 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 			assert(glt->n_glyphs);
 			n_total_rects += glt->n_glyphs;
 
-			glt->glyphs = calloc(glt->n_glyphs, sizeof(*glt->glyphs));
+			glt->glyphs = calloc(glt->n_glyphs, sizeof *glt->glyphs);
 
 			for (int j = 0; j < glt->n_glyphs; j++) {
 				struct glyph* glyph = &glt->glyphs[j];
 
 				for (;;) {
-					fread_line(f, line, sizeof(line));
+					fread_line(f, line, sizeof line);
 					char* arg;
 					split2(line, &arg);
 
@@ -1762,7 +1634,7 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 			FILE* f = fopen(filename, "r");
 			assert(f);
 			while (!feof(f)) {
-				fread_line(f, line, sizeof(line));
+				fread_line(f, line, sizeof line);
 				char* code;
 				if (!split2(line, &code)) continue;
 				prgs_compile(prgs, line, code);
@@ -1772,10 +1644,11 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 			FILE* f = fopen(filename, "r");
 			assert(f);
 
+			zz_strtbl_add(&zst, name);
 			struct cols* cols = cols_new(name);
 
 			while (!feof(f)) {
-				fread_line(f, line, sizeof(line));
+				fread_line(f, line, sizeof line);
 				char* red;
 				char* green;
 				char* blue;
@@ -1802,11 +1675,11 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 		struct table* t = &tables[i];
 		if (t->type != TT_GLYPH) continue;
 		struct glyph_table* glt = &t->glyph;
-		qsort(glt->glyphs, glt->n_glyphs, sizeof(*glt->glyphs), glyph_codepoint_compar);
+		qsort(glt->glyphs, glt->n_glyphs, sizeof *glt->glyphs, glyph_codepoint_compar);
 	}
 
 	// zip rects into all_rects array
-	struct stbrp_rect* all_rects = calloc(1, n_total_rects * sizeof(*all_rects));
+	struct stbrp_rect* all_rects = calloc(1, n_total_rects * sizeof *all_rects);
 	assert(all_rects != NULL);
 	int offset = 0;
 	for (int i = 0; i < n_tables; i++) {
@@ -1815,7 +1688,7 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 		case TT_GLYPH: {
 			struct glyph_table* glt = &t->glyph;
 			for (int j = 0; j < glt->n_glyphs; j++) {
-				memcpy(all_rects + offset, &glt->glyphs[j].rect, sizeof(stbrp_rect));
+				memcpy(all_rects + offset, &glt->glyphs[j].rect, sizeof *all_rects);
 				glt->glyphs[j].all_rects_index = offset;
 				offset++;
 			}
@@ -1826,7 +1699,7 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 			for (int j = 0; j < n_cells; j++) {
 				clt->cells[j].all_rects_index = offset;
 				for (int k = 0; k < clt->n_layers; k++) {
-					memcpy(all_rects + offset, &clt->cells[j].rects[k], sizeof(stbrp_rect));
+					memcpy(all_rects + offset, &clt->cells[j].rects[k], sizeof *all_rects);
 					offset++;
 				}
 			}
@@ -1838,7 +1711,7 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 
 	// pack rects using stb_rect_pack.h
 	int n_nodes = atlas_width;
-	stbrp_node* nodes = calloc(1, n_nodes * sizeof(*nodes));
+	stbrp_node* nodes = calloc(1, n_nodes * sizeof *nodes);
 	assert(nodes);
 	stbrp_context ctx;
 	stbrp_init_target(&ctx, atlas_width, atlas_height, nodes, n_nodes);
@@ -1876,9 +1749,9 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 				assert(fseek(f, gly->bitmap_offset, SEEK_SET) == 0);
 
 				for (int k = 0; k < (prect->h-1); k++) {
-					fread_line(f, line, sizeof(line));
+					fread_line(f, line, sizeof line);
 					unsigned char row[1024];
-					hex2pixels(line, row, sizeof(row));
+					hex2pixels(line, row, sizeof row);
 					blit(bitmap, atlas_width, row, (prect->w-1), 1, prect->x, prect->y + k);
 				}
 			}
@@ -1915,6 +1788,8 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 		}
 	}
 
+	zz_strtbl_optimize(&zst);
+
 	if (endswith(outfile, ".png")) {
 		int comp = 3;
 
@@ -1947,60 +1822,83 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 		assert(stbi_write_png(outfile, atlas_width, atlas_height, comp, atlas, atlas_width * comp));
 	} else if (endswith(outfile, ".atls")) {
 		FILE* f = fopen(outfile, "wb");
+		struct zz_header header;
+		{
+			header.twocc[0] = 'A';
+			header.twocc[1] = 'T';
+			header.xcc = 'L';
+			header.version = 1;
+		}
+		struct zz zz;
+		zz_open(&zz, outfile, ZZ_MODE_TRUNC, &header);
 
 		{
-			struct blk* b = blk_new("ATLS");
-			blk_u32(b, 5); // version
-
-			blk_finalize(b, f);
+			struct zz_wblk wblk;
+			zz_wblk_create(&wblk, ATLSFMT_STRTABLE, 512, 1);
+			zz_wblk_u8a(&wblk, zst.strings, zst.size, "strtbl");
+			zz_write_wblk(&zz, &wblk);
 		}
 
 		{
-			struct blk* b = blk_new("PROG");
+			struct zz_wblk wblk;
+			zz_wblk_create(&wblk, ATLSFMT_PROGRAMS, 512, 1);
 
 			int n_programs = prgs->n_programs;
-			blk_u32(b, n_programs);
+			zz_wblk_vu(&wblk, n_programs, "n_programs");
 
 			int n_constants = prgs->constants_dya.n;
-			blk_u32(b, n_constants);
+			zz_wblk_vu(&wblk, n_constants, "n_constants");
 
 			int n_ctx_keys = prgs->ctx_keys_dya.n;
-			blk_u32(b, n_ctx_keys);
+			zz_wblk_vu(&wblk, n_ctx_keys, "n_ctx_keys");
 
 			int n_colors_per_colorscheme = prgs->color_keys_dya.n;
-			blk_u32(b, n_colors_per_colorscheme);
+			zz_wblk_vu(&wblk, n_colors_per_colorscheme, "n_colors_per_colorscheme");
+
+			zz_wblk_vu(&wblk, prgs->code_dya.n, "n_ops");
 
 			for (int i = 0; i < n_programs; i++) {
-				blk_u32(b, prgs->program_keys[i]);
-				blk_u32(b, prgs->program_offsets[i]);
+				int program_key_stridx = zz_strtbl_find(&zst, prgs->program_keys[i]);
+				assert(program_key_stridx != -1);
+				zz_wblk_vu(&wblk, program_key_stridx, "program_key_stridx");
+				zz_wblk_vu(&wblk, prgs->program_offsets[i], "program_offset");
 			}
 
 			for (int i = 0; i < n_constants; i++) {
-				blk_f32(b, prgs->constants[i]);
+				zz_wblk_f32(&wblk, prgs->constants[i], "f32_constant");
 			}
 
 			for (int i = 0; i < n_ctx_keys; i++) {
-				blk_u32(b, prgs->ctx_keys[i]);
+				int ctx_key_stridx = zz_strtbl_find(&zst, prgs->ctx_keys[i]);
+				assert(ctx_key_stridx != -1);
+				zz_wblk_vu(&wblk, ctx_key_stridx, "ctx_key_stridx");
 			}
 
 			for (int i = 0; i < n_colors_per_colorscheme; i++) {
-				blk_u32(b, prgs->color_keys[i]);
+				int color_key_stridx = zz_strtbl_find(&zst, prgs->color_keys[i]);
+				assert(color_key_stridx != -1);
+				zz_wblk_vu(&wblk, color_key_stridx, "color_key_stridx");
 			}
 
 			for (int i = 0; i < prgs->code_dya.n; i++) {
-				blk_u16(b, prgs->code[i]);
+				zz_wblk_u16(&wblk, prgs->code[i], "opcode");
 			}
 
-			blk_finalize(b, f);
+			zz_write_wblk(&zz, &wblk);
 		}
 
 		for (int i = 0; i < cols_array_dya.n; i++) {
+			struct zz_wblk wblk;
+			zz_wblk_create(&wblk, ATLSFMT_COLORSCHEME, 512, 1);
+
 			struct cols* cols = cols_array[i];
-			struct blk* b = blk_new("COLS");
-			blk_u32(b, strtbl_add(&strtbl, cols->name));
+			int colorscheme_stridx = zz_strtbl_find(&zst, cols->name);
+			assert(colorscheme_stridx != -1);
+			zz_wblk_vu(&wblk, colorscheme_stridx, "colorscheme_stridx");
+
 			for (int i = 0; i < prgs->color_keys_dya.n; i++) {
 				unsigned int rgba = 0x00ffffff;
-				char* n0 = strtbl_get(&strtbl, prgs->color_keys[i]);
+				char* n0 = prgs->color_keys[i];
 				for (int j = 0; j < cols->colors_dya.n; j++) {
 					struct color* color = &cols->colors[j];
 					char* n1 = color->name;
@@ -2009,55 +1907,59 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 						break;
 					}
 				}
-				blk_u32(b, rgba);
+				zz_wblk_vu(&wblk, rgba, "rgba");
 			}
-			blk_finalize(b, f);
+			zz_write_wblk(&zz, &wblk);
 		}
 
 		for (int i = 0; i < n_tables; i++) {
 			struct table* t = &tables[i];
-			struct blk* b = NULL;
+			struct zz_wblk wblk;
 			switch (t->type) {
 			case TT_GLYPH: {
 				struct glyph_table* glt = &t->glyph;
-				b = blk_new("GLYT");
-				blk_u32(b, t->name_sid);
-				blk_u32(b, glt->n_glyphs);
-				blk_u32(b, glt->height);
-				blk_u32(b, glt->baseline);
+				zz_wblk_create(&wblk, ATLSFMT_GLYPH_TABLE, 512, 1);
+				int name_stridx = zz_strtbl_find(&zst, t->name);
+				assert(name_stridx != -1);
+				zz_wblk_vu(&wblk, name_stridx, "glt_name_stridx");
+				zz_wblk_vu(&wblk, glt->n_glyphs, "n_glyphs");
+				zz_wblk_vu(&wblk, glt->height, "height");
+				zz_wblk_vu(&wblk, glt->baseline, "baseline");
 
 				for (int i = 0; i < glt->n_glyphs; i++) {
 					struct glyph* gly = &glt->glyphs[i];
-					blk_u32(b, gly->codepoint);
+					zz_wblk_vu(&wblk, gly->codepoint, "codepoint");
 
 					struct stbrp_rect* r = &all_rects[gly->all_rects_index];
-					blk_u32(b, r->x);
-					blk_u32(b, r->y);
-					blk_u32(b, r->w);
-					blk_u32(b, r->h);
-					blk_u32(b, gly->xoff);
-					blk_u32(b, gly->yoff);
+					zz_wblk_vu(&wblk, r->x, "x");
+					zz_wblk_vu(&wblk, r->y, "y");
+					zz_wblk_vu(&wblk, r->w, "w");
+					zz_wblk_vu(&wblk, r->h, "h");
+					zz_wblk_vs(&wblk, gly->xoff, "xoff");
+					zz_wblk_vs(&wblk, gly->yoff, "yoff");
 				}
 			} break;
 			case TT_CELL: {
 				struct cell_table* clt = &t->cell;
-				b = blk_new("CELT");
-				blk_u32(b, t->name_sid);
-				blk_u32(b, clt->n_columns);
-				blk_u32(b, clt->n_rows);
-				blk_u32(b, clt->n_layers);
+				zz_wblk_create(&wblk, ATLSFMT_CELL_TABLE, 512, 1);
+				int name_stridx = zz_strtbl_find(&zst, t->name);
+				assert(name_stridx != -1);
+				zz_wblk_vu(&wblk, name_stridx, "clt_name_stridx");
+				zz_wblk_vu(&wblk, clt->n_columns, "n_columns");
+				zz_wblk_vu(&wblk, clt->n_rows, "n_rows");
+				zz_wblk_vu(&wblk, clt->n_layers, "n_layers");
 
 				struct layer* layer = clt->layers;
+				assert(layer != NULL);
 				for (int j = 0; j < clt->n_layers; j++) {
-					assert(layer != NULL);
-					blk_u32(b, layer->program_id);
+					zz_wblk_vu(&wblk, layer->program_id, "program_id");
 					layer = layer->next;
 				}
 				for (int j = 0; j < clt->n_columns; j++) {
-					blk_u32(b, clt->vertical[j]);
+					zz_wblk_vu(&wblk, clt->vertical[j], "column_width");
 				}
 				for (int j = 0; j < clt->n_rows; j++) {
-					blk_u32(b, clt->horizontal[j]);
+					zz_wblk_vu(&wblk, clt->horizontal[j], "row_height");
 				}
 
 				int idx = 0;
@@ -2066,13 +1968,14 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 						struct cell* c = &clt->cells[idx++];
 						for (int j = 0; j < clt->n_layers; j++) {
 							struct stbrp_rect* r = &all_rects[c->all_rects_index + j];
-							if (r->w == 0 || r->h == 0) {
-								blk_s32(b, -1);
-								blk_s32(b, -1);
-							} else {
-								blk_s32(b, r->x);
-								blk_s32(b, r->y);
+							int wx = -1;
+							int wy = -1;
+							if (r->w > 0 && r->h > 0) {
+								wx = r->x;
+								wy = r->y;
 							}
+							zz_wblk_vs(&wblk, wx, "xoff");
+							zz_wblk_vs(&wblk, wy, "yoff");
 						}
 					}
 				}
@@ -2080,20 +1983,17 @@ static int try_sz(int sz, char* outfile, int n, char** filenames)
 			default:
 				assert(!"unknown type");
 			}
-			assert(b != NULL);
-			blk_finalize(b, f);
+			zz_write_wblk(&zz, &wblk);
 		}
 
 		{
-			struct blk* b = blk_new("BTMP");
-			blk_u32(b, atlas_width);
-			blk_u32(b, atlas_height);
-			blk_u32(b, 1); // uncompressed
-			blk_append(b, bitmap, atlas_width*atlas_height);
-			blk_finalize(b, f);
+			struct zz_wblk wblk;
+			zz_wblk_create(&wblk, ATLSFMT_BITMAP, atlas_width * atlas_height + 128, 1);
+			zz_wblk_vu(&wblk, atlas_width, "width");
+			zz_wblk_vu(&wblk, atlas_height, "height");
+			zz_wblk_u8a(&wblk, bitmap, atlas_width*atlas_height, "bitmap");
+			zz_write_wblk(&zz, &wblk);
 		}
-
-		strtbl_finalize(&strtbl, f);
 
 		/*
 		TODO

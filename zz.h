@@ -15,14 +15,13 @@ struct zz {
 	int write_error;
 };
 
-struct zz_head {
+struct zz_header {
 	char twocc[2];
 	char xcc;
 	u64 version;
 };
 
 struct zz_wblk {
-	struct zz* parent;
 	u64 usrtype;
 	u64 cursor;
 	u64 buf_cap, buf_sz;
@@ -35,7 +34,7 @@ struct zz_rblk {
 	struct zz* parent;
 	u64 usrtype;
 	u64 flags;
-	u64 data_size;
+	u64 _internal_size;
 	u64 size;
 	u64 data_offset;
 	u64 cursor;
@@ -48,50 +47,55 @@ struct zz_rblk_iter {
 	u64 cursor;
 };
 
+struct zz_strtbl {
+	u8* strings;
+	int size;
+	int _capacity;
+};
+
 #define ZZ_MODE_READONLY 1
 #define ZZ_MODE_TRUNC 2
 #define ZZ_MODE_PATCH 3
 
-int zz_open(struct zz*, char* path, int mode, struct zz_head*);
+int zz_open(struct zz*, char* path, int mode, struct zz_header*);
 int zz_close(struct zz*);
 
 int zz_error(struct zz*);
 
-void zz_new_rblk_iter(struct zz*, struct zz_rblk_iter*);
-int zz_rblk_iter_next(struct zz_rblk_iter*, struct zz_rblk*);
-//int zz_rblk_free(struct zz_rblk*); // frees/deletes block in PATCH mode; will abort() if not operating in PATCH mode
-//int zz_rblk2wblk(struct zz_rblk*, struct zz_wblk*); // yields fixed size wblk (can't grow). will abort() unless if in PATCH mode
+int zz_write_wblk(struct zz*, struct zz_wblk*);
 
-u8 zz_rblk_u8(struct zz_rblk*);
-int zz_rblk_u8a(struct zz_rblk*, u8* ary, u64 n);
-u16 zz_rblk_u16(struct zz_rblk*);
-u32 zz_rblk_u32(struct zz_rblk*);
-s64 zz_rblk_vs(struct zz_rblk*);
-u64 zz_rblk_vu(struct zz_rblk*);
+void zz_rblk_iter_init(struct zz*, struct zz_rblk_iter*);
+int zz_rblk_iter_next(struct zz_rblk_iter*, struct zz_rblk*);
+
+u8 zz_rblk_u8(struct zz_rblk*, char* expected_ident);
+int zz_rblk_u8a(struct zz_rblk*, u8* ary, u64 n, char* expected_ident);
+u16 zz_rblk_u16(struct zz_rblk*, char* expected_ident);
+u32 zz_rblk_u32(struct zz_rblk*, char* expected_ident);
+float zz_rblk_f32(struct zz_rblk*, char* expected_ident);
+s64 zz_rblk_vs(struct zz_rblk*, char* expected_ident);
+u64 zz_rblk_vu(struct zz_rblk*, char* expected_ident);
 int zz_rblk_is_eob(struct zz_rblk*);
 
-
-int zz_new_stream_wblk(struct zz*, struct zz_wblk*, u64 usrtype, u64 size);
-int zz_new_prep_wblk(struct zz*, struct zz_wblk*, u64 usrtype, u64 capacity, int compression);
-int zz_emit_data_blk(struct zz*, u64 usrtype, void* data, u64 data_sz, int compression);
-
-#if 0
-int zz_new_strtbl(struct zz*, struct zz_strtbl*);
-int zz_strtbl_add(struct zz_strtbl*, char* str);
-int zz_strtbl_addn(struct zz_strtbl*, char* str, int n);
-int zz_strtbl_find(struct zz_strtbl*, char* str);
-#endif
+int zz_wblk_create(struct zz_wblk*, u64 usrtype, u64 capacity, int compression);
+void zz_wblk_destroy(struct zz_wblk*);
 
 u64 zz_wblk_tell(struct zz_wblk*);
 int zz_wblk_seek(struct zz_wblk*, u64 cursor);
 
-void zz_wblk_u8(struct zz_wblk*, u8 val);
-void zz_wblk_u16(struct zz_wblk*, u16 val);
-void zz_wblk_u32(struct zz_wblk*, u32 val);
-void zz_wblk_vs(struct zz_wblk*, s64 val);
-void zz_wblk_vu(struct zz_wblk*, u64 val);
-int zz_wblk_end(struct zz_wblk*);
+void zz_wblk_u8(struct zz_wblk*, u8 val, char* ident);
+void zz_wblk_u8a(struct zz_wblk*, u8* ary, u64 n, char* ident);
+void zz_wblk_u16(struct zz_wblk*, u16 val, char* ident);
+void zz_wblk_u32(struct zz_wblk*, u32 val, char* ident);
+void zz_wblk_f32(struct zz_wblk*, float val, char* ident);
+void zz_wblk_vs(struct zz_wblk*, s64 val, char* ident);
+void zz_wblk_vu(struct zz_wblk*, u64 val, char* ident);
 
+int zz_strtbl_create(struct zz_strtbl*);
+void zz_strtbl_destroy(struct zz_strtbl*);
+int zz_strtbl_addn(struct zz_strtbl*, char* str, int n);
+int zz_strtbl_add(struct zz_strtbl*, char* str);
+int zz_strtbl_optimize(struct zz_strtbl*);
+int zz_strtbl_find(struct zz_strtbl*, char* str);
 
 #define ZZ_H
 #endif

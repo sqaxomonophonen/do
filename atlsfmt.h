@@ -1,0 +1,11 @@
+#ifndef ATLSFMT_H
+
+#define ATLSFMT_STRTABLE (1)
+#define ATLSFMT_PROGRAMS (2)
+#define ATLSFMT_COLORSCHEME (3)
+#define ATLSFMT_GLYPH_TABLE (4)
+#define ATLSFMT_CELL_TABLE (5)
+#define ATLSFMT_BITMAP (6)
+
+#define ATLSFMT_H
+#endif
