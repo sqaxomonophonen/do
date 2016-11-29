@@ -457,7 +457,7 @@ void lsl_win_open(const char* title, int(*proc)(void*), void* usr)
 	w->hdc = GetDC(w->hwnd);
 
 	PIXELFORMATDESCRIPTOR desired_pixfmt = {0};
-	desired_pixfmt.nSize = sizeof(desired_pixfmt);
+	desired_pixfmt.nSize = sizeof desired_pixfmt;
 	desired_pixfmt.nVersion = 1;
 	desired_pixfmt.dwFlags = PFD_SUPPORT_OPENGL | PFD_DRAW_TO_WINDOW | PFD_DOUBLEBUFFER;
 	//desired_pixfmt.dwFlags = PFD_SUPPORT_OPENGL | PFD_DRAW_TO_WINDOW;
@@ -470,7 +470,7 @@ void lsl_win_open(const char* title, int(*proc)(void*), void* usr)
 	assert(pixfmt_index != 0);
 
 	PIXELFORMATDESCRIPTOR pixfmt;
-	DescribePixelFormat(w->hdc, pixfmt_index, sizeof(pixfmt), &pixfmt);
+	DescribePixelFormat(w->hdc, pixfmt_index, sizeof pixfmt, &pixfmt);
 	SetPixelFormat(w->hdc, pixfmt_index, &pixfmt);
 
 	w->glrc = wglCreateContext(w->hdc);
@@ -483,7 +483,7 @@ int main(int argc, char** argv)
 {
 	{
 		// get path of executable
-		int n = GetModuleFileNameA(NULL, exe_path, sizeof(exe_path));
+		int n = GetModuleFileNameA(NULL, exe_path, sizeof exe_path);
 		assert(n > 0);
 		for (int i = n-1; i >= 0; i--) {
 			if (exe_path[i] == '\\') {

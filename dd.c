@@ -106,15 +106,15 @@ static int conn_dst_compar(const void* va, const void* vb)
 
 static void graph_init(struct dd_graph* dg)
 {
-	memset(dg, 0, sizeof(*dg));
-	dya_init(&dg->nodes_dya, (void**)&dg->nodes, sizeof(*dg->nodes));
-	dya_init(&dg->conns_dya, (void**)&dg->conns, sizeof(*dg->conns));
+	memset(dg, 0, sizeof *dg);
+	dya_init(&dg->nodes_dya, (void**)&dg->nodes, sizeof *dg->nodes);
+	dya_init(&dg->conns_dya, (void**)&dg->conns, sizeof *dg->conns);
 }
 
 static int parse_nodedef0(char* def, struct dd_nodedef* nd)
 {
 	assert(nd != NULL);
-	memset(nd, 0, sizeof(*nd));
+	memset(nd, 0, sizeof *nd);
 
 	size_t deflen = strlen(def);
 	if (deflen == 0) return -1;
@@ -229,14 +229,14 @@ struct dd_node* dd_graph_new_node(struct dd_graph* dg, char* def)
 		return NULL;
 	}
 	struct dd_node nn;
-	memset(&nn, 0, sizeof(nn));
+	memset(&nn, 0, sizeof nn);
 	nn.id = get_next_node_id();
 	assert((nn.def = strdup(def)) != NULL); // TODO use a string table to avoid excessive mallocs?
 
 	nn.type = nd.type;
 
 	if (nn.type > DD__CONTAINER_MIN && nn.type < DD__CONTAINER_MAX) {
-		nn.container.graph = malloc(sizeof(*nn.container.graph));
+		nn.container.graph = malloc(sizeof *nn.container.graph);
 		assert(nn.container.graph != NULL);
 		graph_init(nn.container.graph);
 	}
@@ -348,7 +348,7 @@ int dd_graph_can_connect(struct dd_graph* dg, u32 src_node_id, u16 src_port_id, 
 	}
 
 	struct dd_conn nc;
-	memset(&nc, 0, sizeof(nc));
+	memset(&nc, 0, sizeof nc);
 	nc.src_node_id = src_node_id;
 	nc.src_port_id = src_port_id;
 	nc.dst_node_id = dst_node_id;
@@ -384,7 +384,7 @@ int dd_graph_connect(struct dd_graph* dg, u32 src_node_id, u16 src_port_id, u32 
 	if (!dd_graph_can_connect(dg, src_node_id, src_port_id, dst_node_id, dst_port_id)) return -1;
 
 	struct dd_conn nc;
-	memset(&nc, 0, sizeof(nc));
+	memset(&nc, 0, sizeof nc);
 	nc.src_node_id = src_node_id;
 	nc.src_port_id = src_port_id;
 	nc.dst_node_id = dst_node_id;
@@ -397,7 +397,7 @@ int dd_graph_connect(struct dd_graph* dg, u32 src_node_id, u16 src_port_id, u32 
 int dd_graph_disconnect(struct dd_graph* dg, u32 src_node_id, u16 src_port_id, u32 dst_node_id, u16 dst_port_id)
 {
 	struct dd_conn nc;
-	memset(&nc, 0, sizeof(nc));
+	memset(&nc, 0, sizeof nc);
 	nc.src_node_id = src_node_id;
 	nc.src_port_id = src_port_id;
 	nc.dst_node_id = dst_node_id;
@@ -464,7 +464,7 @@ struct dd__portdef anon21[] = {
 static struct dd_port_it port_it(struct dd_node* n, int in, int out)
 {
 	struct dd_port_it it;
-	memset(&it, 0, sizeof(it));
+	memset(&it, 0, sizeof it);
 
 	it.valid = 1;
 

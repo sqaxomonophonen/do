@@ -138,7 +138,7 @@ static u64 hash(const void* key, int len, u64 seed)
 
 static u64 get_scope_id(const char* id)
 {
-	return hash(&id, sizeof(id), scope_stack_size == 0 ? 0 : scope_stack[scope_stack_size-1]);
+	return hash(&id, sizeof id, scope_stack_size == 0 ? 0 : scope_stack[scope_stack_size-1]);
 }
 
 void lsl_scope_push_data(const void* data, size_t sz)
@@ -150,7 +150,7 @@ void lsl_scope_push_data(const void* data, size_t sz)
 
 void lsl_scope_push_static(const void* ptr)
 {
-	lsl_scope_push_data(&ptr, sizeof(ptr));
+	lsl_scope_push_data(&ptr, sizeof ptr);
 }
 
 void lsl_scope_pop()
@@ -165,7 +165,7 @@ u32 lsl_getch()
 	if (wg->text_length <= 0) return -1;
 	u32 code = wg->text[0];
 	wg->text_length--;
-	memmove(wg->text, wg->text+1, wg->text_length * sizeof(wg->text));
+	memmove(wg->text, wg->text+1, wg->text_length * sizeof wg->text);
 	return code;
 }
 
@@ -317,7 +317,7 @@ int lsl_printf(const char* fmt, ...)
 	char buf[8192];
 	va_list ap;
 	va_start(ap, fmt);
-	int n = vsnprintf(buf, sizeof(buf), fmt, ap);
+	int n = vsnprintf(buf, sizeof buf, fmt, ap);
 	va_end(ap);
 
 	if (n < 0) return -1;
@@ -412,7 +412,7 @@ void lsl_clip_push(struct rect* r)
 
 	assert_valid_wframe_stack_top(++wframe_stack_top_index);
 	struct wframe* dst = &wframe_stack[wframe_stack_top_index];
-	memcpy(dst, src, sizeof(*dst));
+	memcpy(dst, src, sizeof *dst);
 	dst->rect = (struct rect) { .p0 = vec2_add(src->rect.p0, r->p0), .dim = r->dim };
 
 	dst->mpos = vec2_sub(dst->mpos, r->p0);
@@ -442,7 +442,7 @@ void lsl_bezier(float thickness, union vec2 p0, union vec2 p1, union vec2 p2, un
 
 void lsl_textedit_reset(struct lsl_textedit* te)
 {
-	memset(te, 0, sizeof(*te)); // XXX no reason to waste time clearing te->buffer actually?
+	memset(te, 0, sizeof *te); // XXX no reason to waste time clearing te->buffer actually?
 }
 
 static int txt_delete_at(struct lsl_textedit* t, int pos)
@@ -452,7 +452,7 @@ static int txt_delete_at(struct lsl_textedit* t, int pos)
 	if (t->buffer_len > 0) {
 		int to_move = t->buffer_len - pos;
 		if (to_move) {
-			if (to_move > 0) memmove(&t->buffer[pos], &t->buffer[pos+1], (t->buffer_len - pos) * sizeof(*t->buffer));
+			if (to_move > 0) memmove(&t->buffer[pos], &t->buffer[pos+1], (t->buffer_len - pos) * sizeof *t->buffer);
 			t->buffer_len--;
 			return 1;
 		} else {
@@ -468,7 +468,7 @@ static int txt_delete_selection(struct lsl_textedit* t)
 	if (t->select_start == t->select_end) return 0;
 	int select_min = t->select_start < t->select_end ? t->select_start : t->select_end;
 	int select_max = t->select_start > t->select_end ? t->select_start : t->select_end;
-	memmove(&t->buffer[select_min], &t->buffer[select_max], (t->buffer_len - select_max) * sizeof(*t->buffer));
+	memmove(&t->buffer[select_min], &t->buffer[select_max], (t->buffer_len - select_max) * sizeof *t->buffer);
 	t->buffer_len -= (select_max - select_min);
 	t->cursor = t->select_start = t->select_end = select_min;
 	return 1;
@@ -479,7 +479,7 @@ static int txt_insert_at(struct lsl_textedit* t, int pos, u32 ch)
 	if (pos < 0 || pos > t->buffer_len) return 0;
 	if (t->buffer_len < LSL_TEXTEDIT_BUFSZ) {
 		int to_move = t->buffer_len - pos;
-		if (to_move > 0) memmove(&t->buffer[pos+1], &t->buffer[pos], (t->buffer_len - pos) * sizeof(*t->buffer));
+		if (to_move > 0) memmove(&t->buffer[pos+1], &t->buffer[pos], (t->buffer_len - pos) * sizeof *t->buffer);
 		t->buffer[pos] = ch;
 		t->buffer_len++;
 		return 1;

@@ -21,7 +21,7 @@ void dya_init(struct dya* d, void** ptr, size_t element_sz)
 {
 	assert(d != NULL);
 	assert(element_sz < (1<<16));
-	memset(d, 0, sizeof(*d));
+	memset(d, 0, sizeof *d);
 	*ptr = NULL;
 	d->element_sz = element_sz;
 	dya_set_min_cap(d, 1<<min_cap_log2);
@@ -37,7 +37,7 @@ void dya_set_min_cap(struct dya* d, int min_cap)
 void dya_clone(struct dya* dst, void** dstptr, struct dya* src, void** srcptr)
 {
 	*dstptr = NULL;
-	memcpy(dst, src, sizeof(*src));
+	memcpy(dst, src, sizeof *src);
 	resize(dst, dstptr);
 	memcpy(*dstptr, *srcptr, src->n * src->element_sz);
 }

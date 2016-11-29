@@ -222,7 +222,7 @@ static void handle_key_event(XKeyEvent* e, struct win* lw)
 		}
 	} else if (is_keypress) {
 		char buf[16];
-		int len = Xutf8LookupString(lw->xic, e, buf, sizeof(buf), NULL, NULL);
+		int len = Xutf8LookupString(lw->xic, e, buf, sizeof buf, NULL, NULL);
 		if (len > 0) {
 			char* p = &buf[0];
 			int codepoint = utf8_decode(&p, &len);
@@ -386,7 +386,7 @@ int main(int argc, char** argv)
 {
 	{
 		// get path of executable
-		int n = readlink("/proc/self/exe", exe_path, sizeof(exe_path));
+		int n = readlink("/proc/self/exe", exe_path, sizeof exe_path);
 		assert(n != -1);
 		for (int i = n-1; i >= 0; i--) {
 			if (exe_path[i] == '/') {

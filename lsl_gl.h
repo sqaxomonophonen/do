@@ -237,10 +237,10 @@ static void draw_append(int n_vertices, int n_elements, struct draw_vertex* vert
 		ASSERT((draw_n_elements + n_elements) <= MAX_ELEMENTS);
 	}
 
-	memcpy(draw_vertices + draw_n_vertices, vertices, n_vertices * sizeof(*vertices));
+	memcpy(draw_vertices + draw_n_vertices, vertices, n_vertices * sizeof *vertices);
 
 	GLushort* ebase = draw_elements + draw_n_elements;
-	memcpy(ebase, elements, n_elements * sizeof(*ebase));
+	memcpy(ebase, elements, n_elements * sizeof *ebase);
 	for (int i = 0; i < n_elements; i++) ebase[i] += draw_n_vertices;
 
 	draw_n_vertices += n_vertices;
