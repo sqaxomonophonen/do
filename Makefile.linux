@@ -2,8 +2,13 @@ USE=-DUSE_GLX11
 OPT=-g -O0
 STD=-std=gnu99
 CFLAGS=$(OPT) $(STD) -Wall $(USE)
-LINK=-lm -lX11 -lGL -lrt -Wall
+LINK=-lm -lX11 -lGL -lrt -Wall $(shell pkg-config --libs jack)
+
+EXTRAOBJ=dd_jack.o
 
 BIN=do
 
 include Makefile.common
+
+dd_jack.o: dd_jack.c
+	$(CC) $(CFLAGS) $(shell pkg-config --cflags jack) -c $<

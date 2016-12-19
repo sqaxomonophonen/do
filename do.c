@@ -923,6 +923,8 @@ static struct atls* load_atlas(char* relpath)
 
 int lsl_main(int argc, char** argv)
 {
+	printf("dd_jack_init() = %d\n", dd_jack_init()); // XXX
+
 	char* load_file = NULL;
 
 	struct opt opts[] = {

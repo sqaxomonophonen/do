@@ -135,6 +135,11 @@ struct dd_port_it dd_node_outport_it(struct dd_node*);
 void dd_port_it_next(struct dd_port_it*);
 
 void dd_commit(struct dd*);
+void dd_configure_advance(struct dd*, int n_inputs, int n_outputs, int sample_rate, int buffer_size);
+void dd_advance(struct dd* /* TODO input/output buffers ... */);
+
+// backend-specific (XXX does this belong in dd.h?)
+int dd_jack_init();
 
 #define DD_H
 #endif
