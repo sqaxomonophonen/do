@@ -1,10 +1,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <jack/jack.h>
-#include <math.h>
 #include <string.h>
+#include <assert.h>
+
+#include "dd.h"
+
+int is_initialized = 0;
 
 int sample_rate;
+jack_nframes_t buffer_size;
 
 int n_inputs, n_outputs;
 jack_port_t** in_ports;
@@ -13,7 +18,8 @@ jack_port_t** out_ports;
 jack_default_audio_sample_t** in_bufs;
 jack_default_audio_sample_t** out_bufs;
 
-float T;
+struct dd* current_dd;
+
 
 static inline void clear_buf(jack_default_audio_sample_t* buf, jack_nframes_t nframes)
 {
@@ -29,16 +35,12 @@ static int process(jack_nframes_t nframes, void* arg)
 		clear_buf(out_bufs[i] = jack_port_get_buffer(out_ports[i], nframes), nframes);
 	}
 
+	if (current_dd == NULL) return 0;
+
 	for (int i = 0; i < n_inputs; i++) in_bufs[i] = jack_port_get_buffer(in_ports[i], nframes);
 	for (int i = 0; i < n_outputs; i++) out_bufs[i] = jack_port_get_buffer(out_ports[i], nframes);
 
-	for (int i = 0; i < nframes; i++) {
-		float f = sinf(T) * 0.1f;
-
-		for (int j = 0; j < n_outputs; j++) out_bufs[j][i] = f;
-		T += 0.04;
-		while (T > 6.2830f) T -= 6.2830f;
-	}
+	dd_advance(current_dd, in_bufs, out_bufs);
 
 	return 0;
 }
@@ -86,6 +88,8 @@ static int connect_ports(jack_client_t* client, int is_input, int n, jack_port_t
 
 static int init(int _n_inputs, int _n_outputs)
 {
+	assert(sizeof(jack_default_audio_sample_t) == sizeof(float)); // assumption
+
 	n_inputs = _n_inputs;
 	n_outputs = _n_outputs;
 
@@ -115,6 +119,7 @@ static int init(int _n_inputs, int _n_outputs)
 	jack_set_xrun_callback(client, xrun, NULL);
 
 	sample_rate = jack_get_sample_rate(client);
+	buffer_size = jack_get_buffer_size(client);
 
 	for (int i = 0; i < n_inputs; i++) {
 		in_ports[i] = register_port(client, "in_%d", i, JackPortIsInput);
@@ -133,10 +138,20 @@ static int init(int _n_inputs, int _n_outputs)
 	if (connect_ports(client, 1, n_inputs, in_ports) == -1) return -1;
 	if (connect_ports(client, 0, n_outputs, out_ports) == -1) return -1;
 
+	is_initialized = 1;
+
 	return 0;
 }
 
 int dd_jack_init()
 {
 	return init(2, 2);
+}
+
+int dd_jack_set_dd(struct dd* dd)
+{
+	if (!is_initialized) return -1;
+	dd_configure_advance(dd, n_inputs, n_outputs, sample_rate, buffer_size);
+	current_dd = dd;
+	return 0;
 }

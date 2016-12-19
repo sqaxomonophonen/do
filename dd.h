@@ -108,8 +108,16 @@ struct dd_port_it {
 	};
 };
 
+struct dd_backend {
+	int sample_rate;
+	int buffer_size;
+	int n_inputs, n_outputs;
+	float T;
+};
+
 struct dd {
 	struct dd_graph root;
+	struct dd_backend backend;
 };
 
 // initialization
@@ -136,10 +144,11 @@ void dd_port_it_next(struct dd_port_it*);
 
 void dd_commit(struct dd*);
 void dd_configure_advance(struct dd*, int n_inputs, int n_outputs, int sample_rate, int buffer_size);
-void dd_advance(struct dd* /* TODO input/output buffers ... */);
+void dd_advance(struct dd* dd, float** inputs, float** outputs);
 
 // backend-specific (XXX does this belong in dd.h?)
 int dd_jack_init();
+int dd_jack_set_dd(struct dd* dd);
 
 #define DD_H
 #endif

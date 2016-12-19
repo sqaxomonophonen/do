@@ -2,6 +2,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <assert.h>
+#include <math.h>
 
 #include "dd.h"
 #include "zz.h"
@@ -865,4 +866,27 @@ int dd_save_file(struct dd* dd, char* path, int flags)
 
 void dd_commit(struct dd* dd)
 {
+	// TODO
+}
+
+void dd_configure_advance(struct dd* dd, int n_inputs, int n_outputs, int sample_rate, int buffer_size)
+{
+	struct dd_backend* b = &dd->backend;
+	b->n_inputs = n_inputs;
+	b->n_outputs = n_outputs;
+	b->sample_rate = sample_rate;
+	b->buffer_size = buffer_size;
+}
+
+void dd_advance(struct dd* dd, float** inputs, float** outputs)
+{
+	struct dd_backend* b = &dd->backend;
+	int n = b->buffer_size;
+
+	for (int i = 0; i < n; i++) {
+		float v = sinf(b->T)*0.1f;
+		for (int j = 0; j < b->n_outputs; j++) outputs[j][i] = v;
+		b->T += 0.04f;
+		while (b->T > 6.2830f) b->T -= 6.2830f;
+	}
 }

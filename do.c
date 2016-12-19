@@ -944,6 +944,8 @@ int lsl_main(int argc, char** argv)
 		return 1;
 	}
 
+	atls = load_atlas("default.atls");
+
 	if (load_file) {
 		if (dd_load_file(load_file, &state.dd) == -1) {
 			fprintf(stderr, "dd_load_file(\"%s\") failed\n", load_file);
@@ -952,8 +954,10 @@ int lsl_main(int argc, char** argv)
 	} else {
 		dd_init(&state.dd);
 	}
-
-	atls = load_atlas("default.atls");
+	if (dd_jack_set_dd(&state.dd) == -1) {
+		fprintf(stderr, "dd_jack_set_dd failed (uninitialized?)\n");
+		return 1;
+	}
 
 	clone_win(NULL);
 	lsl_main_loop();
