@@ -27,10 +27,12 @@ Module["preInit"] = [
 			Module["pasted_text"] = data;
 		});
 
-		// using a contenteditable div overlay (see also do.html) to capture
+		// Using a contenteditable div overlay (see also do.html) to capture
 		// text input ("keydown" events alone cannot properly deal with dead
 		// keys, compose-key, and probably other input methods like pinyin
-		// input methods)
+		// input methods). The EditContext API could also be used, but 1) It's
+		// currently Chrome/Edge only, 2) I managed to crash Chrome with a tiny
+		// bit of EditContext code, so...
 		const handle_text_input = Module.cwrap("handle_text_input", "undefined", ["string"]);
 		const em_text_input_overlay = document.getElementById("text_input_overlay");
 		em_text_input_overlay.addEventListener("input", () => {
