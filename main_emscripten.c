@@ -125,8 +125,10 @@ static bool handle_key_event(int type, const EmscriptenKeyboardEvent* ev, void* 
 		#undef X
 	}
 
-	//keycode |= mod;
-	printf("TODO down=%d keycode=%d mod=%d\n", is_down, keycode, mod);
+	if (keycode > 0) {
+		//keycode |= mod;
+		printf("TODO down=%d keycode=%d mod=%d\n", is_down, keycode, mod);
+	}
 
 	return false;
 }
