@@ -1,0 +1,15 @@
+#CFLAGS+=-O0 -g
+CFLAGS+=-Os -g
+CFLAGS+=-Wall
+
+all: $(ARTIFACT)
+
+#OBJS+=do.o # application
+
+OBJS+=frontend_windowed.o utf8.o
+
+$(ARTIFACT): $(OBJS)
+	$(CC) -o $(ARTIFACT) $(OBJS) $(LDFLAGS)
+
+clean:
+	rm -f *.o *.wasm $(ARTIFACT)

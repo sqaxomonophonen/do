@@ -1,0 +1,15 @@
+
+# artifacts
+*.o
+/do.js
+/do.aw.js
+/do.wasm
+/do.ww.js
+/temporary_httpd
+/test_utf8
+
+# vim
+.*swp
+
+# for your convenience
+tmp/
