@@ -170,6 +170,7 @@ int main(int argc, char** argv)
 	);
 	#endif
 
+	frontend_init();
 	emscripten_set_main_loop(main_loop, 0, false);
 
 	return EXIT_SUCCESS;

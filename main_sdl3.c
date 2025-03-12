@@ -76,6 +76,8 @@ int main(int argc, char** argv)
 	printf("                  GL_VENDOR: %s\n", glGetString(GL_VENDOR));
 	printf("                GL_RENDERER: %s\n", glGetString(GL_RENDERER));
 
+	frontend_init();
+
 	int exiting = 0;
 	while (!exiting) {
 		SDL_Event event;

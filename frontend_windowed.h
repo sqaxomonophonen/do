@@ -67,6 +67,7 @@ enum key_state_flag {
 
 #define KEY_MASK ((1<<22)-1)
 
+void frontend_init(void);
 void frontend_emit_keypress_event(int);
 
 #define FRONTEND_WINDOWED_H
