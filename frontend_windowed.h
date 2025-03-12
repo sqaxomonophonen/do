@@ -43,7 +43,7 @@
 	X( CONTROL      ) \
 	X( ALT          ) \
 	X( SHIFT        ) \
-	X( META         )
+	X( GUI          )
 
 enum special_key {
 	// keys representing printable characters are encoded with their unicode
@@ -58,10 +58,16 @@ enum modifier_key_flag {
 	MOD_SHIFT   = (1<<22),
 	MOD_CONTROL = (1<<23),
 	MOD_ALT     = (1<<24),
-	MOD_META    = (1<<25),
+	MOD_GUI     = (1<<25),
+};
+
+enum key_state_flag {
+	KEY_IS_DOWN = (1<<30),
 };
 
 #define KEY_MASK ((1<<22)-1)
+
+void frontend_emit_keypress_event(int);
 
 #define FRONTEND_WINDOWED_H
 #endif

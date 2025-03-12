@@ -47,13 +47,13 @@ static bool handle_key_event(int type, const EmscriptenKeyboardEvent* ev, void* 
 	// (see handle_text_input()). Text input is when you enter "hællø wørld",
 	// and key events are when you press (or release) [Alt]+[Æ].
 
-	const bool is_down = (type == EMSCRIPTEN_EVENT_KEYDOWN);
+	const int is_down = (type == EMSCRIPTEN_EVENT_KEYDOWN);
 
 	int mod = 0;
 	if (ev->shiftKey) mod |= MOD_SHIFT;
 	if (ev->altKey)   mod |= MOD_ALT;
 	if (ev->ctrlKey)  mod |= MOD_CONTROL;
-	if (ev->metaKey)  mod |= MOD_META;
+	if (ev->metaKey)  mod |= MOD_GUI;
 
 	//printf("key [%s]\n", ev->key);
 
@@ -79,55 +79,56 @@ static bool handle_key_event(int type, const EmscriptenKeyboardEvent* ev, void* 
 	} else {
 		keycode = -1;
 		#define X(THEIRS,OURS) if (keycode == -1 && 0 == strcmp(ev->key, #THEIRS)) keycode = KEY_##OURS;
-		X( Escape      , ESCAPE       ) \
-		X( Backspace   , BACKSPACE    ) \
-		X( Tab         , TAB          ) \
-		X( Enter       , ENTER        ) \
-		X( Home        , HOME         ) \
-		X( End         , END          ) \
-		X( Insert      , INSERT       ) \
-		X( Delete      , DELETE       ) \
-		X( PageUp      , PAGE_UP      ) \
-		X( PageDown    , PAGE_DOWN    ) \
-		X( ArrowUp     , ARROW_UP     ) \
-		X( ArrowDown   , ARROW_DOWN   ) \
-		X( ArrowLeft   , ARROW_LEFT   ) \
-		X( ArrowRight  , ARROW_RIGHT  ) \
-		X( PrintScreen , PRINT_SCREEN ) \
-		X( F1          , F1           ) \
-		X( F2          , F2           ) \
-		X( F3          , F3           ) \
-		X( F4          , F4           ) \
-		X( F5          , F5           ) \
-		X( F6          , F6           ) \
-		X( F7          , F7           ) \
-		X( F8          , F8           ) \
-		X( F9          , F9           ) \
-		X( F10         , F10          ) \
-		X( F11         , F11          ) \
-		X( F12         , F12          ) \
-		X( F13         , F13          ) \
-		X( F14         , F14          ) \
-		X( F15         , F15          ) \
-		X( F16         , F16          ) \
-		X( F17         , F17          ) \
-		X( F18         , F18          ) \
-		X( F19         , F19          ) \
-		X( F20         , F20          ) \
-		X( F21         , F21          ) \
-		X( F22         , F22          ) \
-		X( F23         , F23          ) \
-		X( F24         , F24          ) \
-		X( Control     , CONTROL      ) \
-		X( Alt         , ALT          ) \
-		X( Shift       , SHIFT        ) \
-		X( Meta        , META         )
+		X( Escape      , ESCAPE       )
+		X( Backspace   , BACKSPACE    )
+		X( Tab         , TAB          )
+		X( Enter       , ENTER        )
+		X( Home        , HOME         )
+		X( End         , END          )
+		X( Insert      , INSERT       )
+		X( Delete      , DELETE       )
+		X( PageUp      , PAGE_UP      )
+		X( PageDown    , PAGE_DOWN    )
+		X( ArrowUp     , ARROW_UP     )
+		X( ArrowDown   , ARROW_DOWN   )
+		X( ArrowLeft   , ARROW_LEFT   )
+		X( ArrowRight  , ARROW_RIGHT  )
+		X( PrintScreen , PRINT_SCREEN )
+		X( F1          , F1           )
+		X( F2          , F2           )
+		X( F3          , F3           )
+		X( F4          , F4           )
+		X( F5          , F5           )
+		X( F6          , F6           )
+		X( F7          , F7           )
+		X( F8          , F8           )
+		X( F9          , F9           )
+		X( F10         , F10          )
+		X( F11         , F11          )
+		X( F12         , F12          )
+		X( F13         , F13          )
+		X( F14         , F14          )
+		X( F15         , F15          )
+		X( F16         , F16          )
+		X( F17         , F17          )
+		X( F18         , F18          )
+		X( F19         , F19          )
+		X( F20         , F20          )
+		X( F21         , F21          )
+		X( F22         , F22          )
+		X( F23         , F23          )
+		X( F24         , F24          )
+		X( Control     , CONTROL      )
+		X( Alt         , ALT          )
+		X( Shift       , SHIFT        )
+		X( Meta        , GUI          )
 		#undef X
 	}
 
 	if (keycode > 0) {
 		//keycode |= mod;
-		printf("TODO down=%d keycode=%d mod=%d\n", is_down, keycode, mod);
+		//printf("TODO down=%d keycode=%d mod=%d\n", is_down, keycode, mod);
+		frontend_emit_keypress_event((is_down ? KEY_IS_DOWN : 0) | keycode | mod);
 	}
 
 	return false;
