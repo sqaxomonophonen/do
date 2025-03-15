@@ -20,6 +20,33 @@ static struct {
 	stbrp_rect rect_pack_rects[ATLAS_MAX_GLYPHS];
 } g;
 
+union glyph_key {
+	uint32_t key;
+	struct {
+		uint32_t codepoint :21;
+		uint32_t plane     :3;
+		uint32_t level     :8;
+	};
+};
+static_assert(4==sizeof(union glyph_key), "expected u32 size");
+
+struct atlas_rect {
+	uint16_t x,y,w,h;
+};
+
+struct glyph_atlas_rect {
+	union glyph_key key;
+	struct atlas_rect rect;
+};
+static_assert(12==sizeof(struct glyph_atlas_rect), "bad size");
+
+struct dynamic_atlas_rect {
+	uint32_t key;
+	struct atlas_rect rect;
+};
+static_assert(12==sizeof(struct dynamic_atlas_rect), "bad size");
+
+
 static void set_font_data(uint8_t* font_data, int transfer_data_ownership)
 {
 	if (g.font_data_is_on_the_heap_and_owned_by_us && g.fontinfo.data != NULL) {
@@ -50,16 +77,18 @@ static int set_font_params(int px, const int* codepoint_ranges)
 
 		stbrp_init_target(&g.rect_pack_context, w, h, g.rect_pack_nodes, w);
 
-		int num_codepoints_in_ranges = 0;
+		int num_codepoints_requested = 0;
 		int num_codepoints_in_font = 0;
 		for (const int* p=codepoint_ranges; *p>=0; p+=2) {
 			for (int codepoint = p[0]; codepoint <= p[1]; ++codepoint) {
-				++num_codepoints_in_ranges;
+				++num_codepoints_requested;
 				const int glyph_index = stbtt_FindGlyphIndex(&g.fontinfo, codepoint);
 				if (glyph_index == 0) continue;
 				stbrp_rect* rect = &g.rect_pack_rects[num_codepoints_in_font++];
 				int x0,y0,x1,y1;
 				stbtt_GetGlyphBitmapBox(&g.fontinfo, glyph_index, scale, scale, &x0, &y0, &x1, &y1);
+
+				rect->id = codepoint;
 				rect->w = x1-x0;
 				rect->h = y1-y0;
 			}
@@ -75,8 +104,10 @@ static int set_font_params(int px, const int* codepoint_ranges)
 			continue;
 		}
 
-		printf("codepoints, font/requested: %d/%d\n", num_codepoints_in_font, num_codepoints_in_ranges);
+		printf("codepoints, font/requested: %d/%d\n", num_codepoints_in_font, num_codepoints_requested);
 		printf("atlas: %d×%d\n", w, h);
+
+		// TODO rasterize!
 
 		return 1;
 	}

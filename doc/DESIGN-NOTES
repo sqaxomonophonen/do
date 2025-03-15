@@ -1,0 +1,145 @@
+
+(lest we forget)
+
+language/runtime:
+
+ - "close to forth", but without much attempt to be "standards compliant"
+
+ - the program is repeatedly executed to keep event buffers full (so your
+   program gets asked to fill buffers within a time interval), but also to
+   "vet" pending changes against various errors? program execution is frequent
+   and execution time should be brief. besides event buffers your program also
+   describes the audio graph.
+
+ - besides the primary stack (stack) and the return stack (rstack) there is
+   also the state-id stack (sstack). this is used when you insert something
+   that's stateful (simple example: a biquad filter; has 4 state values [real].
+   a 1000-sample delay has at least 1000 real-valued state values) so that you
+   typically don't have to explicitly allocate and assign state.
+   - it'll (mostly?) be used when calling words that are tagged with a "state
+     auto assignment" flag, e.g. AUTOSTATE (like how words can be tagged with
+     "IMMEDIATE"). this causes a unique state id to be assigned /once/, the
+     first time the call is compiled, and the id gets invisibly "burned into"
+     the call in the source code (probably by using \033 escapes). the id is
+     pushed just before the call, and popped just after.
+   - auto-assignment doesn't work in a loop, so there should also be words for
+     manipulating the sstack directly
+   - (editor-integration) there'll also be some "common sense" semantics when
+     it comes to cut/copy-pasting code that contains invisible state tags: if
+     the same state tag is found in 2+ places; prefer the existing
+     (non-inserted) one, otherwise the first inserted one. the remaining get a
+     new/fresh state tag.
+   - abandoned syntax idea (just so I don't reinvent it): enter/leave a sstack
+     scope with:
+       <foo< ... >foo>
+     or shorter (but doesn't check value on stack):
+       <foo< ... >>
+     (the motivation was that I didn't believe state tag auto-assignment to be
+     possible for something like "bd*4", which then gets "garbage collected"
+     (later), which again built on the assumption that a sampler has to be
+     stateful?)
+
+ - there's a heap
+   - I think it should be allocate-only (no free). this is inspired by Forth
+     (allot) and Ada (new). also by the fact that your program is never
+     long-running (it runs in short event-buffer-filling bursts?). so freeing
+     is overrated? and, in any case, dangerous?
+   - by convention I think heap values should contain some kind of "cheap RTTI"
+     (like: first word at address is a type enum?). this includes strings
+     because they can often be used interchangably with patterns? so a word
+     that accepts a pattern should also accept a string. this is requires RTTI
+     (run-time type information).
+
+ - "garbage collection": values left on the stack when your program stops
+   (without errors) are "collected and promoted" if possible:
+     "bd*4"
+   becomes
+     "bd*4" sound (x -- x)
+   becomes
+     "bd*4" sound out (x --)
+   NOTE: i'm assuming it's possible to make a stateless sampler. if this isn't
+   the case, then promoting `"bd*4"` to `"bd*4" sound` is problematic.
+   (Q: what if a value cannot be promoted? like a number? throw a warning?)
+
+ - rich strings; strings contain invisible escape sequences that contain
+   additional data/metadata:
+   - original source location (used for rhythmic highlighting)
+   - characters can have different colors? (in general, you can choose/change
+     your text color, but it can only be used semantically inside strings; e.g.
+     you can make a filter that only play "redish notes", or plays them with
+     higher velocity, etc)
+
+
+
+editor:
+
+ - when you begin inserting/typing text, it'll have a green background. if you
+   delete text ([backspace]/[delete]) it'll be marked red (instead of actually
+   being deleted). these are "staged changes", not yet active. you'll have
+   keyboard shortcuts for:
+   - committing all staged edits
+   - committing one edit
+   - cancelling all staged edits
+   - cancelling one edit
+   (probably allow committing/cancelling other people's edits too?)
+   (I have a fear that deletes are going to be confusing because they just mark
+   text as red... but: try it out, and possibly allow/try aversion where "red
+   sections" are collapsed to a single line between two character cells)
+
+ - "obvious errors" should probably be prevented from being committed.
+   - syntax errors:
+     - comments that aren't closed, like `(hi!`
+     - strings that aren't closed, like `"hi!`
+     - word-defs that aren't closed, like `:hi ...`
+     - syntax errors in if/then/else, loops, etc
+   - runtime errors (if they're caught!)
+     - unit tests failing
+     - assertions failing
+     - out-of-bounds heap accesses
+     - divide-by-zeroes (unless they just make NaNs or something)
+
+
+
+ui (main):
+
+ - you can split your main window into areas. each area can be:
+   - editor/spectator
+   - debug info / "manpages"
+   - settings
+
+ - settings are probably also "powered" by a terminal display of a kind
+   (keeping it simple), and contains:
+   - font: face, size and codepoint sets
+   - hdr/graphics settings?
+   - audio settings? number of threads? I/O mapping?
+   - video synth settings?
+   - osc/midi setup/mapping?
+   - keymap, scroll sensitivity?
+   - editor modes?
+   - settings import/export/migration? (possibly allow importing/exporting a
+     subset)
+
+ - editor y-expand/shrink (inspired by The Ultimate Soundtracker). helps give
+   sections more or less focus. cursor line is probably y-expanded by default.
+
+ - inline curves: you can insert a "special character" (not really a character,
+   more like a keyboard shortcut) that represents a 1d curve. this curve is
+   editable after you've inserted it.
+   - it works inside pattern strings: length of curve (in number of character)
+     doesn't matter, except for data density (just like "bd" isn't shorter than
+     "piano")
+   - it works inside sequence strings: length of curve (in number of character)
+   - it works outside of strings: it pushes the curve object on the stack
+     (length is observable, but consumers can choose how to interpret it?)
+   - tecnically it's probably made with escape sequences..
+   - curves can probably be painted with a lot of input methods (maybe even
+     separate methods per axis): mouse, keyboard, foot pedal or tablet (osc?),
+     midi?
+
+ - maybe have other concepts similar to inline curves:
+   - mini piano roll: maybe only 1-4 rows, and no "note overlap"; for small
+     sequences where time isn't locked to a grid
+   - mini step sequencer: you can already do step sequences with strings, but a
+     mini step sequences could be: binary, 1-4 rows?
+
+
