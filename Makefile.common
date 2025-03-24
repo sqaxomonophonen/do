@@ -6,8 +6,8 @@ all: $(ARTIFACT)
 
 #OBJS+=do.o # application
 
-OBJS+=frontend_windowed.o editor_client.o utf8.o stb_truetype.o stb_rect_pack.o font0.o
-OBJS+=stb_image_resize2.o
+OBJS+=stb_ds.o stb_truetype.o stb_rect_pack.o stb_image_resize2.o
+OBJS+=frontend_windowed.o editor_client.o utf8.o font0.o
 
 LDFLAGS+=-lm
 
