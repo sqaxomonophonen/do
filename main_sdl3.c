@@ -5,6 +5,11 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_opengl.h>
 
+// this is fairly new?
+#ifndef SDLK_EXTENDED_MASK
+#define SDLK_EXTENDED_MASK          (1u << 29)
+#endif
+
 #include "frontend_windowed.h"
 
 static struct {
