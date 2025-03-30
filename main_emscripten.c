@@ -16,7 +16,10 @@
 #include "utf8.h"
 #include "gui.h"
 
-static int g_num_cores;
+static struct {
+	int num_cores;
+	double start_time;
+} g;
 
 #if 0
 void worker_worker(void)
@@ -151,16 +154,22 @@ static void main_loop(void)
 }
 
 
+int64_t get_nanoseconds(void)
+{
+	return (emscripten_get_now()-g.start_time)*1e6;
+}
+
 int main(int argc, char** argv)
 {
-	g_num_cores = emscripten_navigator_hardware_concurrency();
+	g.num_cores = emscripten_navigator_hardware_concurrency();
+	g.start_time = emscripten_get_now();
 
 	const char* window = EMSCRIPTEN_EVENT_TARGET_WINDOW;
 	emscripten_set_keydown_callback(window, NULL, false, handle_key_event);
 	emscripten_set_keyup_callback  (window, NULL, false, handle_key_event);
 
 	#if 1
-	printf("g_num_cores=%d\n", g_num_cores);
+	printf("g.num_cores=%d\n", g.num_cores);
 	#endif
 
 	#if 0
