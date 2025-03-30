@@ -91,33 +91,6 @@ static struct {
 	struct resize* resize_arr;
 } g;
 
-union glyph_key {
-	uint32_t key;
-	struct {
-		uint32_t codepoint :21;
-		uint32_t yexpand   :2;
-		uint32_t layer     :2;
-		uint32_t _reserved :7;
-	};
-};
-static_assert(4==sizeof(union glyph_key), "expected u32 size");
-
-struct atlas_rect {
-	uint16_t x,y,w,h;
-};
-
-struct glyph_atlas_rect {
-	union glyph_key key;
-	struct atlas_rect rect;
-};
-static_assert(12==sizeof(struct glyph_atlas_rect), "bad size");
-
-struct dynamic_atlas_rect {
-	uint32_t key;
-	struct atlas_rect rect;
-};
-static_assert(12==sizeof(struct dynamic_atlas_rect), "bad size");
-
 #define NUM_IDS_LOG2 (32-22)
 
 int get_atlas_lut_key(int num_y_expand_levels, int codepoint, int y_expand_index)
