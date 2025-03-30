@@ -14,7 +14,7 @@
 #include <EGL/egl.h>
 
 #include "utf8.h"
-#include "frontend_windowed.h"
+#include "gui.h"
 
 static int g_num_cores;
 
@@ -128,7 +128,7 @@ static bool handle_key_event(int type, const EmscriptenKeyboardEvent* ev, void* 
 	if (keycode > 0) {
 		//keycode |= mod;
 		//printf("TODO down=%d keycode=%d mod=%d\n", is_down, keycode, mod);
-		frontend_emit_keypress_event((is_down ? KEY_IS_DOWN : 0) | keycode | mod);
+		gui_emit_keypress_event((is_down ? KEY_IS_DOWN : 0) | keycode | mod);
 	}
 
 	return false;
@@ -170,7 +170,7 @@ int main(int argc, char** argv)
 	);
 	#endif
 
-	frontend_init();
+	gui_init();
 	emscripten_set_main_loop(main_loop, 0, false);
 
 	return EXIT_SUCCESS;

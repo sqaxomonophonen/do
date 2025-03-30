@@ -1,4 +1,4 @@
-#ifndef FRONTEND_WINDOWED_H
+#ifndef GUI_H
 
 #define EMIT_SPECIAL_KEYS \
 	X( ESCAPE       ) \
@@ -67,8 +67,9 @@ enum key_state_flag {
 
 #define KEY_MASK ((1<<22)-1)
 
-void frontend_init(void);
-void frontend_emit_keypress_event(int);
+void gui_init(void);
+void gui_emit_keypress_event(int);
+void gui_draw(void);
 
-#define FRONTEND_WINDOWED_H
+#define GUI_H
 #endif

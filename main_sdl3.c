@@ -10,7 +10,7 @@
 #define SDLK_EXTENDED_MASK          (1u << 29)
 #endif
 
-#include "frontend_windowed.h"
+#include "gui.h"
 
 static struct {
 	SDL_Window* window;
@@ -81,7 +81,7 @@ int main(int argc, char** argv)
 	printf("                  GL_VENDOR: %s\n", glGetString(GL_VENDOR));
 	printf("                GL_RENDERER: %s\n", glGetString(GL_RENDERER));
 
-	frontend_init();
+	gui_init();
 
 	int exiting = 0;
 	while (!exiting) {
@@ -170,7 +170,7 @@ int main(int argc, char** argv)
 					assert(keycode < SPECIAL_KEY_BEGIN);
 				}
 
-				frontend_emit_keypress_event((is_down ? KEY_IS_DOWN : 0) | keycode | mod);
+				gui_emit_keypress_event((is_down ? KEY_IS_DOWN : 0) | keycode | mod);
 
 			} else if (event.type == SDL_EVENT_WINDOW_RESIZED) {
 				populate_screen_globals();
@@ -180,6 +180,9 @@ int main(int argc, char** argv)
 		glViewport(0, 0, g.true_screen_width, g.true_screen_height);
 		glClearColor(.3,.1,0,1);
 		glClear(GL_COLOR_BUFFER_BIT);
+
+		gui_draw();
+
 		SDL_GL_SwapWindow(g.window);
 	}
 

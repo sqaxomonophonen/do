@@ -12,5 +12,8 @@
 # vim
 .*swp
 
+# core dumps
+*.core
+
 # for your convenience
 tmp/
