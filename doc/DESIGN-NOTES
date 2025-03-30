@@ -83,8 +83,9 @@ editor:
    - cancelling one edit
    (probably allow committing/cancelling other people's edits too?)
    (I have a fear that deletes are going to be confusing because they just mark
-   text as red... but: try it out, and possibly allow/try aversion where "red
-   sections" are collapsed to a single line between two character cells)
+   text as red... but: try it out, and possibly allow/try a version where "red
+   sections" are collapsed to a single line between two character cells,
+   although it only works for multiline deletes, which is weird?)
 
  - "obvious errors" should probably be prevented from being committed.
    - syntax errors:
@@ -106,6 +107,18 @@ ui (main):
    - editor/spectator
    - debug info / "manpages"
    - settings
+
+ - debug/manpages
+   - view stack under cursor; set an entrypoint (or choose entire program?); if
+     program passes 20 times under the cursor (a loop) it says "1/20" and you
+     can jump forth and back between iterations. is also cycle limited
+     (configurable?) to avoid getting stuck on infinite loops. maybe also show
+     "10000c/500000c": how many cycles have been executed under the cursor vs
+     the limit.
+   - words under cursor can have their documentation shown. might even be
+     possible to document mini notation under cursor? editor command to insert
+     short doc? e.g. "dup" => "dup (x -- x x)"
+   - heap view?
 
  - settings are probably also "powered" by a terminal display of a kind
    (keeping it simple), and contains:
