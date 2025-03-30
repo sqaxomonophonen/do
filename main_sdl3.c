@@ -5,6 +5,8 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_opengl.h>
 
+#include "main.h"
+
 // this is fairly new?
 #ifndef SDLK_EXTENDED_MASK
 #define SDLK_EXTENDED_MASK          (1u << 29)
@@ -36,6 +38,11 @@ static void populate_screen_globals()
 		return;
 	}
 	// TODO?
+}
+
+int64_t get_nanoseconds(void)
+{
+	return SDL_GetTicksNS();
 }
 
 int main(int argc, char** argv)

@@ -5,6 +5,7 @@
 #include <string.h>
 #include <math.h>
 
+#include "main.h"
 #include "util.h"
 #include"gui.h"
 #include "editor_client.h"
@@ -173,6 +174,8 @@ static int set_font(
 	int num_blur_levels,
 	const struct blur_level* blur_levels
 ) {
+	const int64_t t0 = get_nanoseconds();
+
 	if ((num_codepoint_ranges <= 0) || (num_y_expand_levels <= 0) || (num_blur_levels <= 0)) {
 		printf("warning: bad request (%d/%d/%d)\n", num_codepoint_ranges, num_y_expand_levels, num_blur_levels);
 		return 0;
@@ -440,6 +443,9 @@ static int set_font(
 		}
 	}
 
+	const int64_t dt = get_nanoseconds()-t0;
+	printf("atlas %d×%d, built in %.5fs\n", atlas_width, atlas_height, (double)dt*1e-9);
+
 	stbi_write_png("atlas.png", atlas_width, atlas_height, 1, atlas_bitmap, atlas_width);
 
 	return 1;
@@ -487,7 +493,7 @@ void gui_init(void)
 {
 	assert(set_font(
 		font0_data, 0,
-		40,
+		50,
 		ARRAY_LENGTH(default_y_expand_levels)/2, codepoint_ranges_latin1,
 		ARRAY_LENGTH(default_y_expand_levels), default_y_expand_levels,
 		ARRAY_LENGTH(default_blur_levels), default_blur_levels));
