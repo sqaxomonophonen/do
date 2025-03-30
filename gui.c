@@ -377,19 +377,14 @@ static int set_font(
 		}
 	}
 
-	const int n = arrlen(g.resize_arr);
-	mergesort(g.resize_arr, n, sizeof(g.resize_arr[0]), resize_compar);
-	printf("num resizes: %d\n", (int)arrlen(g.resize_arr));
+	const int num_resizes = arrlen(g.resize_arr);
+	mergesort(g.resize_arr, num_resizes, sizeof(g.resize_arr[0]), resize_compar);
 	STBIR_RESIZE re={0};
-	for (int i=0; i<n; ++i) {
+	int num_samplers=0;
+	for (int i=0; i<num_resizes; ++i) {
 		struct resize rz = g.resize_arr[i];
 		if (i==0 || resize_compar(&g.resize_arr[i-1], &rz) != 0) {
 			assert(rz.src_w>0 && rz.src_h>0 && rz.dst_w>0 && rz.dst_h>0);
-			printf("TODO new resizer %dx%d -> %dx%d\n",
-				rz.src_w,
-				rz.src_h,
-				rz.dst_w,
-				rz.dst_h);
 			stbir_free_samplers(&re); // safe when zero-initialized
 			stbir_resize_init(
 				&re,
@@ -397,7 +392,8 @@ static int set_font(
 				NULL, rz.dst_w, rz.dst_h, -1,
 				STBIR_1CHANNEL, STBIR_TYPE_UINT8);
 			stbir_set_edgemodes(&re, STBIR_EDGE_ZERO, STBIR_EDGE_ZERO);
-			stbir_build_samplers(&re); 
+			stbir_build_samplers(&re);
+			++num_samplers;
 		}
 
 		stbir_set_buffer_ptrs(
@@ -407,6 +403,7 @@ static int set_font(
 		stbir_resize_extended(&re);
 	}
 	stbir_free_samplers(&re);
+	printf("%d samplers, %d resizes\n", num_samplers, num_resizes);
 
 	for (int blur_index=1; blur_index<num_blur_levels; ++blur_index) {
 		const struct blur_level* bl = &g.blur_levels[blur_index];
