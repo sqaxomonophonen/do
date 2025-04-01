@@ -196,3 +196,11 @@ Hydra, i.e. low-res CPU-driven, rather than high-res GPU-driven. because:
 negatives:
  - it's more "pixellated" which is not in everybody's taste (ross scott of
    accursed farms has several times talked about his dislike for "shimmering")
+
+
+alternative video synth engine: textured triangle soup.
+ - fits into the existing cross-platform rendering engine I have in mind
+   (pretty much the same as what dear imgui does; textures and triangles)
+ - not pixellated/shimmering; allows for a different style
+ - could perhaps fit into the existing video synth, as its own "playfield" or
+   "video mode", so it can be mixed with pixellated graphics.
