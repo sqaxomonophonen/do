@@ -53,11 +53,8 @@ struct resize {
 	int dst_x, dst_y;
 };
 
-static int resize_compar(const void* va, const void* vb)
+static int resize_dim_compar(const struct resize* a, const struct resize* b)
 {
-	const struct resize* a = va;
-	const struct resize* b = vb;
-
 	const int d0 = a->src_w - b->src_w;
 	if (d0!=0) return d0;
 
@@ -68,6 +65,27 @@ static int resize_compar(const void* va, const void* vb)
 	if (d2!=0) return d2;
 
 	const int d3 = a->dst_h - b->dst_h;
+	return d3;
+}
+
+static int resize_compar(const void* va, const void* vb)
+{
+	const int dd = resize_dim_compar(va,vb);
+	if (dd!=0) return dd;
+
+	const struct resize* a = va;
+	const struct resize* b = vb;
+
+	const int d0 = a->src_x - b->src_x;
+	if (d0!=0) return d0;
+
+	const int d1 = a->src_y - b->src_y;
+	if (d1!=0) return d1;
+
+	const int d2 = a->dst_x - b->dst_x;
+	if (d2!=0) return d2;
+
+	const int d3 = a->dst_y - b->dst_y;
 	return d3;
 }
 
@@ -256,7 +274,7 @@ static int set_font(
 		}
 	}
 
-	printf("nlut=%d\n", (int)hmlen(g.atlas_lut));
+	//printf("nlut=%d\n", (int)hmlen(g.atlas_lut));
 
 	int atlas_width_log2  = ATLAS_MIN_SIZE_LOG2;
 	int atlas_height_log2 = ATLAS_MIN_SIZE_LOG2;
@@ -286,7 +304,6 @@ static int set_font(
 
 	const int atlas_width = 1 << atlas_width_log2;
 	const int atlas_height = 1 << atlas_height_log2;
-	printf("atlas: %d×%d n=%d\n", atlas_width, atlas_height, (int)arrlen(g.atlas_pack_rect_arr));
 	uint8_t* atlas_bitmap = calloc(atlas_width*atlas_height,1);
 
 	for (int ci=0; ci<num_codepoint_ranges; ++ci) {
@@ -351,12 +368,12 @@ static int set_font(
 	}
 
 	const int num_resizes = arrlen(g.resize_arr);
-	mergesort(g.resize_arr, num_resizes, sizeof(g.resize_arr[0]), resize_compar);
+	qsort(g.resize_arr, num_resizes, sizeof(g.resize_arr[0]), resize_compar);
 	STBIR_RESIZE re={0};
 	int num_samplers=0;
 	for (int i=0; i<num_resizes; ++i) {
 		struct resize rz = g.resize_arr[i];
-		if (i==0 || resize_compar(&g.resize_arr[i-1], &rz) != 0) {
+		if (i==0 || resize_dim_compar(&g.resize_arr[i-1], &rz) != 0) {
 			assert(rz.src_w>0 && rz.src_h>0 && rz.dst_w>0 && rz.dst_h>0);
 			stbir_free_samplers(&re); // safe when zero-initialized
 			stbir_resize_init(
@@ -376,17 +393,18 @@ static int set_font(
 		stbir_resize_extended(&re);
 	}
 	stbir_free_samplers(&re);
-	printf("%d samplers, %d resizes\n", num_samplers, num_resizes);
 
 	for (int blur_index=1; blur_index<num_blur_levels; ++blur_index) {
 		const struct blur_level* bl = &g.blur_levels[blur_index];
 		const int blurpx = get_blurpx(bl);
 		const int kernel_size = 1+2*blurpx;
-		arrsetlen(g.kernel_arr, blurpx);
+		arrsetlen(g.kernel_arr, kernel_size);
 		for (int i=0; i<=blurpx; ++i) {
 			const double x = ((double)(-blurpx+i)/(double)blurpx)*3.0;
 			const float y = (float)gaussian(bl->variance, x) * bl->pre_multiplier;
+			assert((0 <= i) && (i < kernel_size));
 			g.kernel_arr[i] = y;
+			assert((0 <= (kernel_size-i-1)) && ((kernel_size-i-1) < kernel_size));
 			g.kernel_arr[kernel_size-i-1] = y;
 		}
 		struct sep2dconv_kernel kernel = {
@@ -414,9 +432,16 @@ static int set_font(
 	}
 
 	const int64_t dt = get_nanoseconds()-t0;
-	printf("atlas %d×%d, built in %.5fs\n", atlas_width, atlas_height, (double)dt*1e-9);
 
+	printf("atlas %d×%d, %d rects, %d samplers, %d resizes, built in %.5fs\n",
+		atlas_width, atlas_height,
+		(int)arrlen(g.atlas_pack_rect_arr),
+		num_samplers, num_resizes,
+		(double)dt*1e-9);
+
+	#if 1
 	stbi_write_png("atlas.png", atlas_width, atlas_height, 1, atlas_bitmap, atlas_width);
+	#endif
 
 	return 1;
 }
