@@ -1,10 +1,21 @@
 #!/usr/bin/env bash
-allfilter() {
-	grep -vF font0.c | grep -vF doc/
+
+blacklist() {
+	grep -vF font0.c | grep -vF doc/ | grep -vF .git
 }
+
+3rd() {
+	grep -F $1 stb_
+}
+
+ours() {
+	3rd -v # not 3rd
+}
+
 echo
-echo ALL:
-wc $(git ls-files | allfilter)
+echo 3RD:
+wc -l $(git ls-files | 3rd | blacklist)
+
 echo
 echo OWN:
-wc $(git ls-files | grep -vF stb_ | allfilter)
+wc -l $(git ls-files | ours | blacklist)
