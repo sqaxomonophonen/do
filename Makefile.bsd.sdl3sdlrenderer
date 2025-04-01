@@ -1,0 +1,8 @@
+incroot=/usr/local/include
+CFLAGS+=-I$(incroot) -I$(incroot)/SDL3
+LDFLAGS+=-L/usr/local/lib -lSDL3
+
+ARTIFACT="do"
+OBJS+=main_sdl3sdlrenderer.o
+
+include Makefile.common

@@ -195,8 +195,9 @@ Hydra, i.e. low-res CPU-driven, rather than high-res GPU-driven. because:
    integrated via a common interface or protocol like OSC and websockets?
 negatives:
  - it's more "pixellated" which is not in everybody's taste (ross scott of
-   accursed farms has several times talked about his dislike for "shimmering")
-
+   accursed farms has talked about his dislike for "shimmering", although I
+   don't think he dislikes pixel art in general, just the aliasing effects)
+ - steals valuable CPU cycles from audio
 
 alternative video synth engine: textured triangle soup.
  - fits into the existing cross-platform rendering engine I have in mind

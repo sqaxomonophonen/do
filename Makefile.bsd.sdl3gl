@@ -3,6 +3,6 @@ CFLAGS+=-I$(incroot) -I$(incroot)/SDL3 -I$(incroot)/GL
 LDFLAGS+=-L/usr/local/lib -lSDL3 -lGL
 
 ARTIFACT="do"
-OBJS+=main_sdl3.o
+OBJS+=main_sdl3gl.o
 
 include Makefile.common
