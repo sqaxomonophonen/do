@@ -1,5 +1,7 @@
 #CFLAGS+=-O0 -g
-CFLAGS+=-Os -g
+#CFLAGS+=-Os -g
+CFLAGS+=-O3
+#CFLAGS+=-Os
 CFLAGS+=-Wall
 
 all: $(ARTIFACT)
