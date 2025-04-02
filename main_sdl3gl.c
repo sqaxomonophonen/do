@@ -49,6 +49,7 @@ int create_texture(int type, int width, int height)
 	}
 
 	glGenTextures(1, &tex->gl_texture);
+	glBindTexture(GL_TEXTURE_2D, tex->gl_texture);
 
 	switch (tex->type & TTMASK(1)) {
 	case TT_SMOOTH:
@@ -56,6 +57,9 @@ int create_texture(int type, int width, int height)
 		break;
 	default: assert(!"invalid TT(1)");
 	}
+
+	glTexParameteri(tex->gl_texture, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(tex->gl_texture, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
 	int num_comp;
 	switch (tex->type & TTMASK(0)) {

@@ -56,7 +56,7 @@ int create_texture(int type, int width, int height)
 		break;
 	case TT_PIXELATED:
 		SDL_SetTextureScaleMode(tex->texture, SDL_SCALEMODE_NEAREST);
-		//SDL_SetTextureScaleMode(tex->texture, SDL_SCALEMODE_PIXELART);
+		//SDL_SetTextureScaleMode(tex->texture, SDL_SCALEMODE_PIXELART); // XXX new!
 		break;
 	default: assert(!"invalid TT(1)");
 	}
