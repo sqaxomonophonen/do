@@ -1,3 +1,4 @@
+#include "stb_ds.h"
 #include <SDL3/SDL.h>
 #include "gui.h"
 

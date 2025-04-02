@@ -107,6 +107,7 @@ static struct {
 		struct atlas_lut_info value;
 	}* atlas_lut;
 	struct resize* resize_arr;
+	int atlas_texture_id;
 } g;
 
 #define NUM_IDS_LOG2 (32-22)
@@ -443,6 +444,11 @@ static int set_font(
 	stbi_write_png("atlas.png", atlas_width, atlas_height, 1, atlas_bitmap, atlas_width);
 	#endif
 
+	if (g.atlas_texture_id >= 0) destroy_texture(g.atlas_texture_id);
+	g.atlas_texture_id = create_texture(TT_R8+TT_SMOOTH+TT_STATIC, atlas_width, atlas_height);
+	update_texture(g.atlas_texture_id, 0, atlas_width, atlas_height, atlas_bitmap);
+	free(atlas_bitmap);
+
 	return 1;
 }
 
@@ -486,6 +492,7 @@ static const struct blur_level default_blur_levels[] = {
 
 void gui_init(void)
 {
+	g.atlas_texture_id = -1;
 	assert(set_font(
 		font0_data, 0,
 		50,
