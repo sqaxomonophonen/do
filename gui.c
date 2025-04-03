@@ -516,32 +516,33 @@ void gui_draw(void)
 	arrsetlen(g.vertex_index_arr, 0);
 
 	for (int i=0; i<10; ++i) {
-		uint32_t rgba=0xffffffff;
+		const uint32_t rgba0=0xff00ff00;
+		const uint32_t rgba1=0xffffffff;
 		const float S=24+1000*fabsf(sinf((float)get_nanoseconds()*1e-9*(float)(1+i)*1e-1));
 
 		const intptr_t v0 = arrlen(g.vertex_arr);
 		arrput(g.vertex_arr, ((struct vertex) {
 			.x=0    , .y=0  ,
 			.u=0    , .v=0  ,
-			.rgba=rgba,
+			.rgba=rgba0,
 		}));
 
 		arrput(g.vertex_arr, ((struct vertex) {
 			.x=S    , .y=0  ,
 			.u=1    , .v=0  ,
-			.rgba=rgba,
+			.rgba=rgba0,
 		}));
 
 		arrput(g.vertex_arr, ((struct vertex) {
 			.x=S    , .y=S  ,
 			.u=1    , .v=1  ,
-			.rgba=rgba,
+			.rgba=rgba1,
 		}));
 
 		arrput(g.vertex_arr, ((struct vertex) {
 			.x=0    , .y=S  ,
 			.u=0    , .v=1  ,
-			.rgba=rgba,
+			.rgba=rgba1,
 		}));
 
 		const intptr_t vi0 = arrlen(g.vertex_index_arr);

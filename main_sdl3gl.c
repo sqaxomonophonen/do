@@ -33,6 +33,8 @@ int main(int argc, char** argv)
 	SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 0);
 
 	SDL_GL_SetSwapInterval(1);
+	// XXX doesn't work? how about that 20 year old broken record :-/
+	// also notice that main_sdl3sdlrenderer.c has no tearing...
 
 	g0.window = SDL_CreateWindow("Do", 1280, 720, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
 	if (g0.window == NULL) {
