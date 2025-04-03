@@ -85,9 +85,9 @@ int create_texture(int type, int width, int height)
 
 	int internal_format;
 	switch (tex->type & TTMASK(0)) {
-	case TT_R8:
-		internal_format=GL_R8;
-		tex->gl_format=GL_RED;
+	case TT_LUMEN8:
+		internal_format=GL_LUMINANCE;
+		tex->gl_format=GL_LUMINANCE;
 		break;
 	case TT_RGBA8888:
 		internal_format=GL_RGBA;
@@ -293,11 +293,21 @@ static void gl_init(void)
 
 static void gl_render_gui_draw_lists(void)
 {
-	glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ZERO); // XXX?
 
 	for (int i=0;;++i) {
 		struct draw_list* list = gui_get_draw_list(i);
 		if (list == NULL) break;
+
+		switch (list->blend_mode) {
+		case ADDITIVE:
+			GLCALL(glEnable(GL_BLEND));
+			GLCALL(glBlendFunc(GL_SRC_ALPHA, GL_ONE));
+			break;
+		// XXX do we need premultiplied alpha? :
+		//glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ZERO);
+		default: assert(!"unhandled blend mode");
+		}
+
 		switch (list->type) {
 		case MESH_TRIANGLES: {
 

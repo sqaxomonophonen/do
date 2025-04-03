@@ -443,12 +443,12 @@ static int set_font(
 		num_samplers, num_resizes,
 		(double)dt*1e-9);
 
-	#if 1
+	#if 0
 	stbi_write_png("atlas.png", atlas_width, atlas_height, 1, atlas_bitmap, atlas_width);
 	#endif
 
 	if (g.atlas_texture_id >= 0) destroy_texture(g.atlas_texture_id);
-	g.atlas_texture_id = create_texture(TT_R8+TT_SMOOTH+TT_STATIC, atlas_width, atlas_height);
+	g.atlas_texture_id = create_texture(TT_LUMEN8 | TT_SMOOTH | TT_STATIC, atlas_width, atlas_height);
 	update_texture(g.atlas_texture_id, 0, atlas_width, atlas_height, atlas_bitmap);
 	free(atlas_bitmap);
 

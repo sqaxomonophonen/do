@@ -9,7 +9,7 @@ struct texture {
 	int type;
 	int width;
 	int height;
-	SDL_Texture* texture;
+	SDL_Texture* sdl_texture;
 };
 
 static struct {
@@ -54,22 +54,22 @@ int create_texture(int type, int width, int height)
 	default: assert(!"invalid TT(2)");
 	}
 
-	tex->texture = SDL_CreateTexture(g.renderer, SDL_PIXELFORMAT_RGBA32, access, width, height);
-	assert(tex->texture != NULL);
+	tex->sdl_texture = SDL_CreateTexture(g.renderer, SDL_PIXELFORMAT_RGBA32, access, width, height);
+	assert(tex->sdl_texture != NULL);
 
 	switch (tex->type & TTMASK(1)) {
 	case TT_SMOOTH:
-		SDL_SetTextureScaleMode(tex->texture, SDL_SCALEMODE_LINEAR);
+		SDL_SetTextureScaleMode(tex->sdl_texture, SDL_SCALEMODE_LINEAR);
 		break;
 	case TT_PIXELATED:
-		SDL_SetTextureScaleMode(tex->texture, SDL_SCALEMODE_NEAREST);
+		SDL_SetTextureScaleMode(tex->sdl_texture, SDL_SCALEMODE_NEAREST);
 		//SDL_SetTextureScaleMode(tex->texture, SDL_SCALEMODE_PIXELART); // XXX new!
 		break;
 	default: assert(!"invalid TT(1)");
 	}
 
 	switch (tex->type & TTMASK(0)) {
-	case TT_R8:
+	case TT_LUMEN8:
 	case TT_RGBA8888:
 		break;
 	default: assert(!"invalid TT(0)");
@@ -89,7 +89,7 @@ void update_texture(int id, int y0, int width, int height, void* data)
 
 	void* upload = NULL;
 	switch (t->type & TTMASK(0)) {
-	case TT_R8: {
+	case TT_LUMEN8: {
 		arrsetlen(g.u8_scratch_arr, 4*width*height);
 		uint8_t* rp = data;
 		uint8_t* wp = g.u8_scratch_arr;
@@ -115,7 +115,7 @@ void update_texture(int id, int y0, int width, int height, void* data)
 		.w=width,
 		.h=height,
 	};
-	SDL_UpdateTexture(t->texture, &rect, upload, width*4);
+	SDL_UpdateTexture(t->sdl_texture, &rect, upload, width*4);
 }
 
 int main(int argc, char** argv)
@@ -137,14 +137,23 @@ int main(int argc, char** argv)
 		exit(EXIT_FAILURE);
 	}
 
-	SDL_BlendMode blend_mode_premultiplied_alpha = SDL_ComposeCustomBlendMode(
+	#if 0
+	const SDL_BlendMode blend_mode_premultiplied_alpha = SDL_ComposeCustomBlendMode(
 		SDL_BLENDFACTOR_ONE,
 		SDL_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,
 		SDL_BLENDOPERATION_ADD,
 		SDL_BLENDFACTOR_ONE,
 		SDL_BLENDFACTOR_ZERO,
 		SDL_BLENDOPERATION_ADD);
-	SDL_SetRenderDrawBlendMode(g.renderer, blend_mode_premultiplied_alpha);
+	#endif
+
+	const SDL_BlendMode blend_mode_additive = SDL_ComposeCustomBlendMode(
+		SDL_BLENDFACTOR_ONE,
+		SDL_BLENDFACTOR_ONE,
+		SDL_BLENDOPERATION_ADD,
+		SDL_BLENDFACTOR_ONE,
+		SDL_BLENDFACTOR_ONE,
+		SDL_BLENDOPERATION_ADD);
 
 	SDL_StartTextInput(g0.window);
 	// see also:
@@ -167,6 +176,7 @@ int main(int argc, char** argv)
 		for (int i=0;;++i) {
 			struct draw_list* list = gui_get_draw_list(i);
 			if (list == NULL) break;
+
 			switch (list->type) {
 			case MESH_TRIANGLES: {
 				const int nv = list->mesh.num_vertices;
@@ -177,9 +187,21 @@ int main(int argc, char** argv)
 						g.f32_scratch_arr[i*4+ii] = (float)((vs[i].rgba >> (ii*8)) & 0xff) * (1.f / 255.f);
 					}
 				}
+
+				SDL_Texture* texture = get_texture(list->mesh.texture)->sdl_texture;
+
+				switch (list->blend_mode) {
+				case ADDITIVE:
+					// XXX not sure I like having to set the mode on the
+					// texture itself...
+					SDL_SetTextureBlendMode(texture, blend_mode_additive);
+					break;
+				default: assert(!"unhandled blend mode");
+				}
+
 				SDL_RenderGeometryRaw(
 					g.renderer,
-					get_texture(list->mesh.texture)->texture,
+					texture,
 
 					// xy,stride
 					(float*)vs,

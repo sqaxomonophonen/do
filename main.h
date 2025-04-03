@@ -11,7 +11,7 @@ int64_t get_nanoseconds(void);
 #define TTMASK(s)   (TT((s)+1)-1)
 #define TTGET(v,s)  (((v)>>TT(s))&TTMASK(s))
 
-#define TT_R8        (0<<TT(0))
+#define TT_LUMEN8    (0<<TT(0))
 #define TT_RGBA8888  (1<<TT(0))
 
 #define TT_SMOOTH    (0<<TT(1))
