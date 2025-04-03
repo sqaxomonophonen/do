@@ -1,5 +1,7 @@
 #ifndef GUI_H
 
+typedef uint16_t vertex_index;
+
 #define EMIT_SPECIAL_KEYS \
 	X( ESCAPE       ) \
 	X( BACKSPACE    ) \
@@ -70,6 +72,38 @@ enum key_state_flag {
 void gui_init(void);
 void gui_emit_keypress_event(int);
 void gui_draw(void);
+
+enum draw_list_type {
+	MESH_TRIANGLES,
+};
+
+enum blend_mode {
+	ADDITIVE,
+};
+
+struct vertex {
+	float x,y,u,v;
+	uint32_t rgba;
+};
+
+// TODO somewhere: if blend_mode==ADDITIVE, the ordering doesn't matter. so,
+// for a given draw_list interval where blend_mode==ADDITIVE there ought to be
+// only one of each `draw_list_type` to minimize the amount of mode switching
+struct draw_list {
+	enum blend_mode      blend_mode;
+	enum draw_list_type  type;
+	union {
+		struct {
+			int             texture;
+			int             num_vertices;
+			struct vertex*  vertices;
+			int             num_indices;
+			vertex_index*   indices;
+		} mesh;
+		// TODO optimized quads or something?
+	};
+};
+struct draw_list* gui_get_draw_list(int index);
 
 #define GUI_H
 #endif

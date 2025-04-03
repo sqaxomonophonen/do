@@ -108,6 +108,9 @@ static struct {
 	}* atlas_lut;
 	struct resize* resize_arr;
 	int atlas_texture_id;
+	struct draw_list* draw_list_arr;
+	struct vertex* vertex_arr;
+	vertex_index* vertex_index_arr;
 } g;
 
 #define NUM_IDS_LOG2 (32-22)
@@ -508,5 +511,76 @@ void gui_emit_keypress_event(int keycode)
 
 void gui_draw(void)
 {
+	arrsetlen(g.draw_list_arr, 0);
+	arrsetlen(g.vertex_arr, 0);
+	arrsetlen(g.vertex_index_arr, 0);
+
+	for (int i=0; i<10; ++i) {
+		uint32_t rgba=0xffffffff;
+		const float S=24+1000*fabsf(sinf((float)get_nanoseconds()*1e-9*(float)(1+i)*1e-1));
+
+		const intptr_t v0 = arrlen(g.vertex_arr);
+		arrput(g.vertex_arr, ((struct vertex) {
+			.x=0    , .y=0  ,
+			.u=0    , .v=0  ,
+			.rgba=rgba,
+		}));
+
+		arrput(g.vertex_arr, ((struct vertex) {
+			.x=S    , .y=0  ,
+			.u=1    , .v=0  ,
+			.rgba=rgba,
+		}));
+
+		arrput(g.vertex_arr, ((struct vertex) {
+			.x=S    , .y=S  ,
+			.u=1    , .v=1  ,
+			.rgba=rgba,
+		}));
+
+		arrput(g.vertex_arr, ((struct vertex) {
+			.x=0    , .y=S  ,
+			.u=0    , .v=1  ,
+			.rgba=rgba,
+		}));
+
+		const intptr_t vi0 = arrlen(g.vertex_index_arr);
+		arrput(g.vertex_index_arr,0);
+		arrput(g.vertex_index_arr,1);
+		arrput(g.vertex_index_arr,2);
+		arrput(g.vertex_index_arr,0);
+		arrput(g.vertex_index_arr,2);
+		arrput(g.vertex_index_arr,3);
+
+		struct draw_list* list = arraddnptr(g.draw_list_arr, 1);
+		list->blend_mode = ADDITIVE;
+		list->type = MESH_TRIANGLES;
+		list->mesh.texture = g.atlas_texture_id;
+		list->mesh.vertices = (struct vertex*)v0; // offset temporarily stored as ptr
+		list->mesh.num_vertices = arrlen(g.vertex_arr)-v0;
+		list->mesh.indices = (vertex_index*)vi0; // offset temporarily stored as ptr
+		list->mesh.num_indices = arrlen(g.vertex_index_arr)-vi0;
+	}
+
+
 	// TODO
+
+	// fixup pointers to dynamic arrays
+	for (int i=0; i<arrlen(g.draw_list_arr); ++i) {
+		struct draw_list* list = &g.draw_list_arr[i];
+		switch (list->type) {
+		case MESH_TRIANGLES: {
+			list->mesh.vertices = g.vertex_arr + (intptr_t)list->mesh.vertices;
+			list->mesh.indices  = g.vertex_index_arr + (intptr_t)list->mesh.indices;
+		}	break;
+		default: assert(!"unhandled draw list type");
+		}
+	}
+}
+
+struct draw_list* gui_get_draw_list(int index)
+{
+	assert(index >= 0);
+	if (index >= arrlen(g.draw_list_arr)) return NULL;
+	return &g.draw_list_arr[index];
 }

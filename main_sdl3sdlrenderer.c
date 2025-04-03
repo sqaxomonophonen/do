@@ -16,7 +16,8 @@ static struct {
 	SDL_Renderer* renderer;
 	struct texture* texture_arr;
 	int* texture_freelist_arr;
-	uint8_t* scratch_arr;
+	uint8_t* u8_scratch_arr;
+	float* f32_scratch_arr;
 } g;
 
 static int alloc_texture(void)
@@ -27,10 +28,16 @@ static int alloc_texture(void)
 	return id;
 }
 
+static struct texture* get_texture(int id)
+{
+	assert((0 <= id) && (id < arrlen(g.texture_arr)));
+	return &g.texture_arr[id];
+}
+
 int create_texture(int type, int width, int height)
 {
 	const int id = alloc_texture();
-	struct texture* tex = &g.texture_arr[id];
+	struct texture* tex = get_texture(id);
 	memset(tex, 0, sizeof *tex);
 	tex->type = type;
 	tex->width = width;
@@ -71,22 +78,21 @@ int create_texture(int type, int width, int height)
 	return id;
 }
 
-void destroy_texture(int texture)
+void destroy_texture(int id)
 {
-	arrput(g.texture_freelist_arr, texture);
+	arrput(g.texture_freelist_arr, id);
 }
 
-void update_texture(int texture, int y0, int width, int height, void* data)
+void update_texture(int id, int y0, int width, int height, void* data)
 {
-	assert((0 <= texture) && (texture < arrlen(g.texture_arr)));
-	struct texture* t = &g.texture_arr[texture];
+	struct texture* t = get_texture(id);
 
 	void* upload = NULL;
 	switch (t->type & TTMASK(0)) {
 	case TT_R8: {
-		arrsetlen(g.scratch_arr, 4*width*height);
+		arrsetlen(g.u8_scratch_arr, 4*width*height);
 		uint8_t* rp = data;
-		uint8_t* wp = g.scratch_arr;
+		uint8_t* wp = g.u8_scratch_arr;
 		for (int y=0; y<height; ++y) {
 			for (int x=0; x<width; ++x) {
 				const uint8_t v=*(rp++);
@@ -95,7 +101,7 @@ void update_texture(int texture, int y0, int width, int height, void* data)
 				}
 			}
 		}
-		upload = g.scratch_arr;
+		upload = g.u8_scratch_arr;
 	}	break;
 	case TT_RGBA8888:
 		upload = data;
@@ -157,6 +163,47 @@ int main(int argc, char** argv)
 		SDL_RenderClear(g.renderer);
 
 		gui_draw();
+
+		for (int i=0;;++i) {
+			struct draw_list* list = gui_get_draw_list(i);
+			if (list == NULL) break;
+			switch (list->type) {
+			case MESH_TRIANGLES: {
+				const int nv = list->mesh.num_vertices;
+				struct vertex* vs = list->mesh.vertices;
+				arrsetlen(g.f32_scratch_arr, 4*nv);
+				for (int i=0; i<nv; ++i) {
+					for (int ii=0; ii<4; ++ii) {
+						g.f32_scratch_arr[i*4+ii] = (float)((vs[i].rgba >> (ii*8)) & 0xff) * (1.f / 255.f);
+					}
+				}
+				SDL_RenderGeometryRaw(
+					g.renderer,
+					get_texture(list->mesh.texture)->texture,
+
+					// xy,stride
+					(float*)vs,
+					sizeof(vs[0]),
+
+					// color,stride
+					(SDL_FColor*)g.f32_scratch_arr,
+					4*sizeof(g.f32_scratch_arr[0]),
+
+					// uv,stride
+					(float*)((uint8_t*)vs + offsetof(struct vertex,u)),
+					sizeof(vs[0]),
+
+					list->mesh.num_vertices,
+
+					list->mesh.indices,
+					list->mesh.num_indices,
+					sizeof(list->mesh.indices[0]));
+
+			}	break;
+			default: assert(!"unhandled draw list type");
+			}
+			// TODO
+		}
 
 		SDL_RenderPresent(g.renderer);
 	}

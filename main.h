@@ -24,5 +24,6 @@ int create_texture(int type, int width, int height);
 void destroy_texture(int texture);
 void update_texture(int texture, int y0, int width, int height, void* data);
 
+
 #define MAIN_H
 #endif
