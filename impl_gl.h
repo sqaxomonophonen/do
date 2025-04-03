@@ -1,6 +1,7 @@
 #include "stb_ds.h"
 #include "util.h"
 #include "main.h"
+#include "gui.h"
 
 static void _glcheck(const char* file, const int line, const char* body)
 {

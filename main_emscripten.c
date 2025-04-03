@@ -13,10 +13,9 @@
 #include <GLES3/gl3.h>
 #include <EGL/egl.h>
 
-#include "impl_gl.h"
-
 #include "utf8.h"
 #include "gui.h"
+#include "impl_gl.h"
 
 static struct {
 	int num_cores;
@@ -149,6 +148,7 @@ static void main_loop(void)
 	const int canvas_width = canvas_get_width();
 	const int canvas_height = canvas_get_height();
 	gl_frame(canvas_width, canvas_height);
+	gui_draw();
 	gl_render_gui_draw_lists();
 }
 
