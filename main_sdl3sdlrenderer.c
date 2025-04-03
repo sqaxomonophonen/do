@@ -202,7 +202,6 @@ int main(int argc, char** argv)
 			}	break;
 			default: assert(!"unhandled draw list type");
 			}
-			// TODO
 		}
 
 		SDL_RenderPresent(g.renderer);

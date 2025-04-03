@@ -10,8 +10,10 @@
 
 #define GL_GLEXT_PROTOTYPES
 #define EGL_EGLEXT_PROTOTYPES
-#include <GLES2/gl2.h>
+#include <GLES3/gl3.h>
 #include <EGL/egl.h>
+
+#include "impl_gl.h"
 
 #include "utf8.h"
 #include "gui.h"
@@ -146,13 +148,9 @@ static void main_loop(void)
 {
 	const int canvas_width = canvas_get_width();
 	const int canvas_height = canvas_get_height();
-	//printf("%d %d\n", canvas_width, canvas_height);
-	glViewport(0, 0, canvas_width, canvas_height);
-	//glClearColor(0,.1,.2,1);
-	glClearColor(.3,.1,0,1);
-	glClear(GL_COLOR_BUFFER_BIT);
+	gl_frame(canvas_width, canvas_height);
+	gl_render_gui_draw_lists();
 }
-
 
 int64_t get_nanoseconds(void)
 {
@@ -179,6 +177,7 @@ int main(int argc, char** argv)
 	);
 	#endif
 
+	gl_init();
 	gui_init();
 	emscripten_set_main_loop(main_loop, 0, false);
 

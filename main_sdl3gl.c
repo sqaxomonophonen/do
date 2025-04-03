@@ -8,115 +8,13 @@
 // SDL_GL_GetProcAddress() is needed.
 #include <SDL3/SDL_opengl.h>
 
-#include "main.h"
+#include "impl_gl.h"
 
-struct texture {
-	int type;
-	int width;
-	int height;
-	GLuint gl_texture;
-	GLenum gl_format;
-};
+#include "main.h"
 
 static struct {
 	SDL_GLContext gl_context;
-	struct texture* texture_arr;
-	int* texture_freelist_arr;
 } g;
-
-static int alloc_texture(void)
-{
-	if (arrlen(g.texture_freelist_arr) > 0) return arrpop(g.texture_freelist_arr);
-	const int id = arrlen(g.texture_arr);
-	arrsetlen(g.texture_arr,id+1);
-	return id;
-}
-
-int create_texture(int type, int width, int height)
-{
-	const int id = alloc_texture();
-	struct texture* tex = &g.texture_arr[id];
-	memset(tex, 0, sizeof *tex);
-	tex->type = type;
-	tex->width = width;
-	tex->height = height;
-
-	switch (tex->type & TTMASK(2)) {
-	case TT_STATIC:
-	case TT_STREAM:
-		break;
-	default: assert(!"invalid TT(2)");
-	}
-
-	glGenTextures(1, &tex->gl_texture);
-	glBindTexture(GL_TEXTURE_2D, tex->gl_texture);
-
-	switch (tex->type & TTMASK(1)) {
-	case TT_SMOOTH:
-	case TT_PIXELATED:
-		break;
-	default: assert(!"invalid TT(1)");
-	}
-
-	glTexParameteri(tex->gl_texture, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-	glTexParameteri(tex->gl_texture, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-	int num_comp;
-	switch (tex->type & TTMASK(0)) {
-	case TT_R8:
-		num_comp=1;
-		tex->gl_format=GL_RED;
-		break;
-	case TT_RGBA8888:
-		num_comp=4;
-		tex->gl_format=GL_RGBA;
-		break;
-	default: assert(!"invalid TT(0)");
-	}
-
-	glTexImage2D(
-		GL_TEXTURE_2D,
-		0/*=level*/,
-		num_comp,
-		width,
-		height,
-		0,
-		tex->gl_format,
-		GL_UNSIGNED_BYTE,
-		NULL);
-
-	return id;
-}
-
-static struct texture* get_texture(int texture)
-{
-	assert((0 <= texture) && (texture < arrlen(g.texture_arr)));
-	return &g.texture_arr[texture];
-}
-
-void destroy_texture(int texture)
-{
-	struct texture* t = get_texture(texture);
-	glDeleteTextures(1, &t->gl_texture);
-	arrput(g.texture_freelist_arr, texture);
-}
-
-void update_texture(int texture, int y0, int width, int height, void* data)
-{
-	struct texture* t = get_texture(texture);
-	glBindTexture(GL_TEXTURE_2D, t->gl_texture);
-	glTexSubImage2D(
-		GL_TEXTURE_2D,
-		0/*=level*/,
-		0,
-		y0,
-		width,
-		height,
-		t->gl_format,
-		GL_UNSIGNED_BYTE,
-		data);
-}
-
 
 int main(int argc, char** argv)
 {
@@ -161,19 +59,14 @@ int main(int argc, char** argv)
 	printf("                  GL_VENDOR: %s\n", glGetString(GL_VENDOR));
 	printf("                GL_RENDERER: %s\n", glGetString(GL_RENDERER));
 
-	glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ZERO);
-
+	gl_init();
 	gui_init();
 
 	while (!g0.exiting) {
 		handle_events();
-
-		glViewport(0, 0, g0.true_screen_width, g0.true_screen_height);
-		glClearColor(.3,.1,0,1);
-		glClear(GL_COLOR_BUFFER_BIT);
-
+		gl_frame(g0.true_screen_width, g0.true_screen_height);
 		gui_draw();
-
+		gl_render_gui_draw_lists();
 		SDL_GL_SwapWindow(g0.window);
 	}
 
