@@ -34,6 +34,13 @@ static struct texture* get_texture(int id)
 	return &g.texture_arr[id];
 }
 
+void get_texture_dim(int texture, int* out_width, int* out_height)
+{
+	struct texture* t = get_texture(texture);
+	if (out_width)  *out_width  = t->width;
+	if (out_height) *out_height = t->height;
+}
+
 int create_texture(int type, int width, int height)
 {
 	const int id = alloc_texture();
@@ -188,12 +195,12 @@ int main(int argc, char** argv)
 					}
 				}
 
-				SDL_Texture* texture = get_texture(list->mesh.texture)->sdl_texture;
+				SDL_Texture* texture = get_texture(list->mesh.texture_id)->sdl_texture;
 
 				switch (list->blend_mode) {
 				case ADDITIVE:
 					// XXX not sure I like having to set the mode on the
-					// texture itself...
+					// texture itself? (not how it works in graphics apis?)
 					SDL_SetTextureBlendMode(texture, blend_mode_additive);
 					break;
 				default: assert(!"unhandled blend mode");

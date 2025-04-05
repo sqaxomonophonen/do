@@ -21,6 +21,7 @@ int64_t get_nanoseconds(void);
 #define TT_STREAM    (1<<TT(2))
 
 int create_texture(int type, int width, int height);
+void get_texture_dim(int texture, int* out_width, int* out_height);
 void destroy_texture(int texture);
 void update_texture(int texture, int y0, int width, int height, void* data);
 

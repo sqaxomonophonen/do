@@ -16,7 +16,7 @@ static void _glcheck(const char* file, const int line, const char* body)
 	}
 }
 #define GLCHECK      _glcheck(__FILE__, __LINE__, NULL)
-#define GLCALL(BODY) { BODY; _glcheck(__FILE__, __LINE__, #BODY); }
+#define GLCALL(BODY)  { BODY; _glcheck(__FILE__, __LINE__, #BODY); }
 
 struct texture {
 	int type;
@@ -116,6 +116,13 @@ static struct texture* get_texture(int texture)
 	return &gg.texture_arr[texture];
 }
 
+void get_texture_dim(int texture, int* out_width, int* out_height)
+{
+	struct texture* t = get_texture(texture);
+	if (out_width)  *out_width  = t->width;
+	if (out_height) *out_height = t->height;
+}
+
 void destroy_texture(int texture)
 {
 	struct texture* t = get_texture(texture);
@@ -146,7 +153,7 @@ static void gl_frame(int width, int height)
 	gg.frame_width = width;
 	gg.frame_height = height;
 	GLCALL(glViewport(gg.frame_x0, gg.frame_y0, gg.frame_width, gg.frame_height));
-	GLCALL(glClearColor(.3,.1,0,1));
+	GLCALL(glClearColor(0,0,0,0));
 	GLCALL(glClear(GL_COLOR_BUFFER_BIT));
 }
 
@@ -313,7 +320,7 @@ static void gl_render_gui_draw_lists(void)
 
 			GLCALL(glUseProgram(gg.mesh_shader.program));
 
-			GLCALL(glBindTexture(GL_TEXTURE_2D, get_texture(list->mesh.texture)->gl_texture));
+			GLCALL(glBindTexture(GL_TEXTURE_2D, get_texture(list->mesh.texture_id)->gl_texture));
 			GLCALL(glUniform1i(gg.mesh_shader.u_texture, 0));
 
 			const float left   = gg.frame_x0;

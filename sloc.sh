@@ -13,7 +13,7 @@ ours() {
 }
 
 echo
-echo 3RD:
+echo 3RD PARTY:
 wc -l $(git ls-files | 3rd | blacklist)
 
 echo

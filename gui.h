@@ -94,11 +94,17 @@ struct draw_list {
 	enum draw_list_type  type;
 	union {
 		struct {
-			int             texture;
-			int             num_vertices;
-			struct vertex*  vertices;
-			int             num_indices;
-			vertex_index*   indices;
+			int texture_id;
+			int num_vertices;
+			union {
+				struct vertex*  vertices;
+				intptr_t       _vertices_offset; // internal use
+			};
+			int num_indices;
+			union {
+				vertex_index*   indices;
+				intptr_t       _indices_offset; // internal use
+			};
 		} mesh;
 		// TODO optimized quads or something?
 	};

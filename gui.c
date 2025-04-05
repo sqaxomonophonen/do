@@ -42,7 +42,7 @@ struct blur_level {
 struct atlas_lut_info {
 	int index0;
 	int glyph_index;
-	int x0,y0,x1,y1;
+	int glyph_x0,glyph_y0,glyph_x1,glyph_y1;
 };
 
 
@@ -92,6 +92,8 @@ static int resize_compar(const void* va, const void* vb)
 static struct {
 	int font_data_is_on_the_heap_and_owned_by_us;
 	stbtt_fontinfo fontinfo;
+	float font_px_scale;
+	int font_spacing_x, font_spacing_y;
 	stbrp_context rect_pack_context;
 	stbrp_node rect_pack_nodes[1 << ATLAS_MAX_SIZE_LOG2];
 	stbrp_rect* atlas_pack_rect_arr;
@@ -111,6 +113,11 @@ static struct {
 	struct draw_list* draw_list_arr;
 	struct vertex* vertex_arr;
 	vertex_index* vertex_index_arr;
+	enum blend_mode current_blend_mode;
+	int current_texture_id;
+	int cursor_x, cursor_y;
+	int64_t last_frame_time;
+	float fps;
 } g;
 
 #define NUM_IDS_LOG2 (32-22)
@@ -234,21 +241,28 @@ static int set_font(
 
 	assert(g.fontinfo.data != NULL);
 
-	const float px_scale = stbtt_ScaleForPixelHeight(&g.fontinfo, px);
+	g.font_px_scale = stbtt_ScaleForPixelHeight(&g.fontinfo, px);
 
 	if (g.atlas_lut != NULL) hmfree(g.atlas_lut);
 
 	arrsetcap(g.atlas_pack_rect_arr, (num_codepoints_requested * num_y_expand_levels * num_blur_levels));
 	arrsetlen(g.atlas_pack_rect_arr, 0);
+	int max_advance = 0;
 	for (int ci=0; ci<num_codepoint_ranges; ++ci) {
 		for (int codepoint=codepoint_ranges[2*ci]; codepoint<=codepoint_ranges[1+2*ci]; ++codepoint) {
 			const int glyph_index = stbtt_FindGlyphIndex(&g.fontinfo, codepoint);
 			if (glyph_index == 0) continue;
+
+				int advance,lsb;
+				stbtt_GetGlyphHMetrics(&g.fontinfo, glyph_index, &advance, &lsb);
+				//printf("i=%d, adv=%d px=%f\n", glyph_index, advance, advance*g.font_px_scale);
+				if (advance > max_advance) max_advance = advance;
+
 			for (int y_expand_index=0; y_expand_index<num_y_expand_levels; ++y_expand_index) {
 				const struct y_expand_level* yx = &g.y_expand_levels[y_expand_index];
 
 				int x0,y0,x1,y1;
-				stbtt_GetGlyphBitmapBox(&g.fontinfo, glyph_index, px_scale, yx->y_scale*px_scale, &x0, &y0, &x1, &y1);
+				stbtt_GetGlyphBitmapBox(&g.fontinfo, glyph_index, g.font_px_scale, yx->y_scale*g.font_px_scale, &x0, &y0, &x1, &y1);
 
 				const int w0 = x1-x0;
 				const int h0 = y1-y0;
@@ -258,10 +272,10 @@ static int set_font(
 				hmput(g.atlas_lut, get_atlas_lut_key(num_y_expand_levels, codepoint, y_expand_index), ((struct atlas_lut_info){
 					.index0 = !has_pixels ? -1 : (int)arrlen(g.atlas_pack_rect_arr),
 					.glyph_index=glyph_index,
-					.x0=x0,
-					.y0=y0,
-					.x1=x1,
-					.y1=y1,
+					.glyph_x0=x0,
+					.glyph_y0=y0,
+					.glyph_x1=x1,
+					.glyph_y1=y1,
 				}));
 
 				if (!has_pixels) continue;
@@ -277,6 +291,9 @@ static int set_font(
 			}
 		}
 	}
+	g.font_spacing_x = ceilf(max_advance * g.font_px_scale);
+	g.font_spacing_y = 1; // XXX
+
 
 	//printf("nlut=%d\n", (int)hmlen(g.atlas_lut));
 
@@ -323,8 +340,8 @@ static int set_font(
 					&atlas_bitmap[r.x+(r.y << atlas_width_log2)],
 					r.w, r.h, // XXX these have margins? should I subtract them?
 					atlas_width,
-					px_scale,
-					yx->y_scale*px_scale,
+					g.font_px_scale,
+					yx->y_scale*g.font_px_scale,
 					info.glyph_index);
 			}
 		}
@@ -333,9 +350,10 @@ static int set_font(
 	arrsetlen(g.resize_arr, 0);
 	for (int ci=0; ci<num_codepoint_ranges; ++ci) {
 		for (int codepoint=codepoint_ranges[2*ci]; codepoint<=codepoint_ranges[1+2*ci]; ++codepoint) {
+
 		const struct atlas_lut_info info0 = hmget(g.atlas_lut, get_atlas_lut_key(num_y_expand_levels, codepoint, 0));
 		if (info0.index0 == -1) continue;
-		if (info0.x0==0 && info0.y0==0 && info0.x1==0 && info0.y1==0) continue;
+		if (info0.glyph_x0==0 && info0.glyph_y0==0 && info0.glyph_x1==0 && info0.glyph_y1==0) continue;
 
 		for (int y_expand_index=0; y_expand_index<num_y_expand_levels; ++y_expand_index) {
 				//const struct y_expand_level* yx = &g.y_expand_levels[y_expand_index];
@@ -343,8 +361,8 @@ static int set_font(
 				assert(info.index0 >= 0);
 				const stbrp_rect r0 = g.atlas_pack_rect_arr[info.index0];
 
-				const int src_w=info.x1-info.x0;
-				const int src_h=info.y1-info.y0;
+				const int src_w=info.glyph_x1-info.glyph_x0;
+				const int src_h=info.glyph_y1-info.glyph_y0;
 				assert(src_w>0 && src_h>0);
 				const int src_x=r0.x;
 				const int src_y=r0.y;
@@ -420,7 +438,7 @@ static int set_font(
 			for (int codepoint=codepoint_ranges[2*ci]; codepoint<=codepoint_ranges[1+2*ci]; ++codepoint) {
 				const struct atlas_lut_info info0 = hmget(g.atlas_lut, get_atlas_lut_key(num_y_expand_levels, codepoint, 0));
 				if (info0.index0 == -1) continue;
-				if (info0.x0==0 && info0.y0==0 && info0.x1==0 && info0.y1==0) continue;
+				if (info0.glyph_x0==0 && info0.glyph_y0==0 && info0.glyph_x1==0 && info0.glyph_y1==0) continue;
 				for (int y_expand_index=0; y_expand_index<num_y_expand_levels; ++y_expand_index) {
 					const struct atlas_lut_info info = hmget(g.atlas_lut, get_atlas_lut_key(num_y_expand_levels, codepoint, y_expand_index));
 					const stbrp_rect rn = g.atlas_pack_rect_arr[info.index0+blur_index];
@@ -472,6 +490,7 @@ static const struct y_expand_level default_y_expand_levels[] = {
 static const struct blur_level default_blur_levels[] = {
 	{
 		.scale = 1.0f,
+		.pre_multiplier = 1.0f,
 	},
 	{
 		.scale = 0.6f,
@@ -498,7 +517,7 @@ void gui_init(void)
 	g.atlas_texture_id = -1;
 	assert(set_font(
 		font0_data, 0,
-		50,
+		40,
 		ARRAY_LENGTH(default_y_expand_levels)/2, codepoint_ranges_latin1,
 		ARRAY_LENGTH(default_y_expand_levels), default_y_expand_levels,
 		ARRAY_LENGTH(default_blur_levels), default_blur_levels));
@@ -509,70 +528,164 @@ void gui_emit_keypress_event(int keycode)
 	// TODO
 }
 
+static void set_blend_mode(enum blend_mode blend_mode)
+{
+	g.current_blend_mode = blend_mode;
+}
+
+static void set_texture(int id)
+{
+	g.current_texture_id = id;
+}
+
+static struct draw_list* continue_draw_list(int num_vertices, int num_indices)
+{
+	const int max_vert = (sizeof(vertex_index)==2) ? (1<<16) : 0;
+	assert((max_vert>0) && "unhandled config?");
+	assert(num_vertices <= max_vert);
+
+	const int n = arrlen(g.draw_list_arr);
+	if (n==0) return NULL;
+	struct draw_list* list = &g.draw_list_arr[n-1];
+	if (list->type != MESH_TRIANGLES) return NULL;
+	if (list->blend_mode != g.current_blend_mode) return NULL;
+	if (list->mesh.texture_id != g.current_texture_id) return NULL;
+	if (sizeof(vertex_index) == 2) {
+		if ((list->mesh.num_vertices + num_vertices) > max_vert) return NULL;
+		return list;
+	} else {
+		assert(!"FIXME unhandled sizeof(vertex_index)");
+	}
+	assert(!"unreachable");
+}
+
+
+static void alloc_mesh(int num_vertices, int num_indices, struct vertex** out_vertices, vertex_index** out_indices)
+{
+	struct draw_list* list = continue_draw_list(num_vertices, num_indices);
+	if (list == NULL) {
+		list = arraddnptr(g.draw_list_arr, 1);
+		list->blend_mode = g.current_blend_mode;
+		list->type = MESH_TRIANGLES;
+		list->mesh.texture_id = g.current_texture_id;
+		list->mesh._vertices_offset = arrlen(g.vertex_arr);
+		list->mesh.num_vertices = 0;
+		list->mesh._indices_offset = arrlen(g.vertex_index_arr);
+		list->mesh.num_indices = 0;
+	}
+	*out_vertices = arraddnptr(g.vertex_arr, num_vertices);
+	*out_indices = arraddnptr(g.vertex_index_arr, num_indices);
+	const int i0=list->mesh.num_vertices;
+	for (int i=0; i<num_indices; ++i) (*out_indices)[i] = i0;
+	list->mesh.num_vertices += num_vertices;
+	list->mesh.num_indices += num_indices;
+}
+
+static struct vertex* alloc_mesh_quad(void)
+{
+	struct vertex* vertices;
+	vertex_index*  indices;
+	alloc_mesh(4, 6, &vertices, &indices);
+	indices[0]+=0; indices[1]+=1; indices[2]+=2;
+	indices[3]+=0; indices[4]+=2; indices[5]+=3;
+	return vertices;
+}
+
+static void push_mesh_quad(float dx, float dy, float dw, float dh, float sx, float sy, float sw, float sh, uint32_t rgba)
+{
+	int tw, th;
+	get_texture_dim(g.current_texture_id, &tw, &th);
+	const float mu = 1.0f / (float)tw;
+	const float mv = 1.0f / (float)th;
+
+	struct vertex* vertices = alloc_mesh_quad();
+	vertices[0] = ((struct vertex) {
+		.x=dx    , .y=dy    ,
+		.u=mu*sx , .v=mv*sy ,
+		.rgba=rgba,
+	});
+	vertices[1] = ((struct vertex) {
+		.x=dx+dw      , .y=dy    ,
+		.u=mu*(sx+sw) , .v=mv*sy ,
+		.rgba=rgba,
+	});
+	vertices[2] = ((struct vertex) {
+		.x=dx+dw      , .y=dy+dh      ,
+		.u=mu*(sx+sw) , .v=mv*(sy+sh) ,
+		.rgba=rgba,
+	});
+	vertices[3] = ((struct vertex) {
+		.x=dx    , .y=dy+dh      ,
+		.u=mu*sx , .v=mv*(sy+sh) ,
+		.rgba=rgba,
+	});
+}
+
+
+static void put_char(int codepoint, int y_expand_index, uint32_t rgba)
+{
+	const struct atlas_lut_info info = hmget(
+		g.atlas_lut,
+		get_atlas_lut_key(g.num_y_expand_levels, codepoint, y_expand_index));
+	const float w = info.glyph_x1 - info.glyph_x0;
+	const float h = info.glyph_y1 - info.glyph_y0;
+	for (int i=0; i<g.num_blur_levels; ++i) {
+		struct blur_level* b = &g.blur_levels[i];
+		const stbrp_rect rect = g.atlas_pack_rect_arr[i+info.index0];
+		const float s = 1.0f / b->scale;
+		const float r = b->radius;
+		push_mesh_quad(
+			g.cursor_x + ((float)info.glyph_x0) - r,
+			g.cursor_y + ((float)info.glyph_y0) - r,
+			w+r*2   , h+r*2 ,
+			rect.x   , rect.y ,
+			rect.w-1 , rect.h-1,
+			rgba
+		);
+	}
+	g.cursor_x += g.font_spacing_x;
+}
+
+static void gui_draw1(void)
+{
+	set_blend_mode(ADDITIVE);
+	set_texture(g.atlas_texture_id);
+
+	g.cursor_x = 200;
+	g.cursor_y = 300;
+	for (int i=0; i<26; ++i) put_char(i+'a'   , 0 , 0x88444444);
+	for (int i=0; i<26; ++i) put_char(i+'A'   , 1 , 0x88884444);
+	for (int i=0; i<26; ++i) put_char(i+' '+1 , 2 , 0x88448844);
+}
+
+static void update_fps(void)
+{
+	const int64_t t  = get_nanoseconds();
+	const int64_t dt = t - g.last_frame_time;
+	g.fps = 1.0f / ((float)dt * 1e-9f);
+	g.last_frame_time = t;
+}
+
 void gui_draw(void)
 {
+	update_fps();
 	arrsetlen(g.draw_list_arr, 0);
 	arrsetlen(g.vertex_arr, 0);
 	arrsetlen(g.vertex_index_arr, 0);
-
-	for (int i=0; i<10; ++i) {
-		const uint32_t rgba0=0xff00ff00;
-		const uint32_t rgba1=0xffffffff;
-		const float S=24+1000*fabsf(sinf((float)get_nanoseconds()*1e-9*(float)(1+i)*1e-1));
-
-		const intptr_t v0 = arrlen(g.vertex_arr);
-		arrput(g.vertex_arr, ((struct vertex) {
-			.x=0    , .y=0  ,
-			.u=0    , .v=0  ,
-			.rgba=rgba0,
-		}));
-
-		arrput(g.vertex_arr, ((struct vertex) {
-			.x=S    , .y=0  ,
-			.u=1    , .v=0  ,
-			.rgba=rgba0,
-		}));
-
-		arrput(g.vertex_arr, ((struct vertex) {
-			.x=S    , .y=S  ,
-			.u=1    , .v=1  ,
-			.rgba=rgba1,
-		}));
-
-		arrput(g.vertex_arr, ((struct vertex) {
-			.x=0    , .y=S  ,
-			.u=0    , .v=1  ,
-			.rgba=rgba1,
-		}));
-
-		const intptr_t vi0 = arrlen(g.vertex_index_arr);
-		arrput(g.vertex_index_arr,0);
-		arrput(g.vertex_index_arr,1);
-		arrput(g.vertex_index_arr,2);
-		arrput(g.vertex_index_arr,0);
-		arrput(g.vertex_index_arr,2);
-		arrput(g.vertex_index_arr,3);
-
-		struct draw_list* list = arraddnptr(g.draw_list_arr, 1);
-		list->blend_mode = ADDITIVE;
-		list->type = MESH_TRIANGLES;
-		list->mesh.texture = g.atlas_texture_id;
-		list->mesh.vertices = (struct vertex*)v0; // offset temporarily stored as ptr
-		list->mesh.num_vertices = arrlen(g.vertex_arr)-v0;
-		list->mesh.indices = (vertex_index*)vi0; // offset temporarily stored as ptr
-		list->mesh.num_indices = arrlen(g.vertex_index_arr)-vi0;
-	}
-
-
-	// TODO
-
-	// fixup pointers to dynamic arrays
+	gui_draw1();
+	// replace the "_"-prefixed variables in struct draw_list inner unions
+	// with corresponding pointer values in the same unions. we can't easily
+	// set the pointer values as we go because they must point at offsets in a
+	// larger dynamic array, and so a realloc() can potentially move the
+	// pointer and corrupt any number of draw_lists. this "fixup" happens last,
+	// when it it's safe to point into the dynamic array which won't be written
+	// to while it's being rendered.
 	for (int i=0; i<arrlen(g.draw_list_arr); ++i) {
 		struct draw_list* list = &g.draw_list_arr[i];
 		switch (list->type) {
 		case MESH_TRIANGLES: {
-			list->mesh.vertices = g.vertex_arr + (intptr_t)list->mesh.vertices;
-			list->mesh.indices  = g.vertex_index_arr + (intptr_t)list->mesh.indices;
+			list->mesh.vertices = g.vertex_arr       + list->mesh._vertices_offset;
+			list->mesh.indices  = g.vertex_index_arr + list->mesh._indices_offset;
 		}	break;
 		default: assert(!"unhandled draw list type");
 		}

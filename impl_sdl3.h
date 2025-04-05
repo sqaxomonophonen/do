@@ -20,6 +20,7 @@ static struct {
 	int screen_height;
 	float pixel_ratio;
 	int exiting;
+	int fullscreen;
 } g0;
 
 static void populate_screen_globals()
@@ -53,6 +54,11 @@ static void handle_events()
 			}
 
 			const int is_down = event.key.down;
+
+			if (is_down && event.key.key == 'f') {
+				g0.fullscreen = !g0.fullscreen;
+				SDL_SetWindowFullscreen(g0.window, g0.fullscreen ? SDL_WINDOW_FULLSCREEN : 0);
+			}
 
 			int mod = 0;
 			if (event.key.mod & SDL_KMOD_SHIFT) mod |= MOD_SHIFT;
