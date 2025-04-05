@@ -175,7 +175,7 @@ int main(int argc, char** argv)
 
 		//SDL_SetRenderViewport(g.renderer, ...)
 		//SDL_SetRenderClipRect(g.renderer, ...)
-		SDL_SetRenderDrawColorFloat(g.renderer,.3,.1,0,1);
+		SDL_SetRenderDrawColorFloat(g.renderer,0,0,0,0);
 		SDL_RenderClear(g.renderer);
 
 		gui_draw();

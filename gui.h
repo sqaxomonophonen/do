@@ -79,6 +79,9 @@ enum draw_list_type {
 
 enum blend_mode {
 	ADDITIVE,
+	// ADDITIVE_HDR,
+	// SUBTRACTIVE_HDR,
+	// PREMULTIPLIED_ALPHA,
 };
 
 struct vertex {

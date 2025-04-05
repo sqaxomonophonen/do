@@ -32,7 +32,8 @@ struct blur_level {
 	float radius;
 	float variance;
 	float scale; // must be 1.0 or less
-	float pre_multiplier;
+	float kernel_scalar;
+	float post_scalar;
 };
 
 #define MAX_Y_EXPAND_LEVELS (16)
@@ -113,11 +114,14 @@ static struct {
 	struct draw_list* draw_list_arr;
 	struct vertex* vertex_arr;
 	vertex_index* vertex_index_arr;
-	enum blend_mode current_blend_mode;
-	int current_texture_id;
-	int cursor_x, cursor_y;
 	int64_t last_frame_time;
 	float fps;
+
+	int cursor_x, cursor_y;
+	enum blend_mode current_blend_mode;
+	int current_texture_id;
+	int current_y_expand_index;
+	float current_color[4];
 } g;
 
 #define NUM_IDS_LOG2 (32-22)
@@ -423,12 +427,24 @@ static int set_font(
 		arrsetlen(g.kernel_arr, kernel_size);
 		for (int i=0; i<=blurpx; ++i) {
 			const double x = ((double)(-blurpx+i)/(double)blurpx)*3.0;
-			const float y = (float)gaussian(bl->variance, x) * bl->pre_multiplier;
+			//printf("y[%d]=%f\n", i, x);
+			const float y = (float)gaussian(bl->variance, x) * bl->kernel_scalar;
 			assert((0 <= i) && (i < kernel_size));
 			g.kernel_arr[i] = y;
 			assert((0 <= (kernel_size-i-1)) && ((kernel_size-i-1) < kernel_size));
 			g.kernel_arr[kernel_size-i-1] = y;
 		}
+
+		#if 0
+		float z=0;
+		for (int i=0; i<kernel_size; ++i) {
+			printf("x[%d]=%f\n", i, g.kernel_arr[i]);
+			z += g.kernel_arr[i];
+		}
+		printf("kernel sum: %f\n", z);
+		printf("predicted: %f\n", bl->variance*sqrtf(6.283185307179586f));
+		#endif
+
 		struct sep2dconv_kernel kernel = {
 			.radius = blurpx,
 			.coefficients = g.kernel_arr,
@@ -490,25 +506,28 @@ static const struct y_expand_level default_y_expand_levels[] = {
 static const struct blur_level default_blur_levels[] = {
 	{
 		.scale = 1.0f,
-		.pre_multiplier = 1.0f,
+		.post_scalar = 1.0f,
 	},
 	{
 		.scale = 0.6f,
 		.radius = 4.0f,
 		.variance = 1.0f,
-		.pre_multiplier = 1.0f,
+		.kernel_scalar = 1.0f,
+		.post_scalar = 0.7f,
 	},
 	{
 		.scale = 0.4f,
 		.radius = 10.0f,
 		.variance = 1.0f,
-		.pre_multiplier = 1.0f,
+		.kernel_scalar = 1.0f,
+		.post_scalar = 0.5f,
 	},
 	{
 		.scale = 0.2f,
 		.radius = 32.0f,
 		.variance = 1.0f,
-		.pre_multiplier = 1.0f,
+		.kernel_scalar = 1.0f,
+		.post_scalar = 0.3f,
 	},
 };
 
@@ -621,18 +640,73 @@ static void push_mesh_quad(float dx, float dy, float dw, float dh, float sx, flo
 	});
 }
 
+static inline int m33i(int a, int b)
+{
+	return b+a*3;
+}
 
-static void put_char(int codepoint, int y_expand_index, uint32_t rgba)
+static void v3_mul_m33(float* out_v3, float* v3, const float* m33)
+{
+	float x0 = v3[0]*m33[m33i(0,0)] + v3[1]*m33[m33i(0,1)] + v3[2]*m33[m33i(0,2)];
+	float x1 = v3[0]*m33[m33i(1,0)] + v3[1]*m33[m33i(1,1)] + v3[2]*m33[m33i(1,2)];
+	float x2 = v3[0]*m33[m33i(2,0)] + v3[1]*m33[m33i(2,1)] + v3[2]*m33[m33i(2,2)];
+	out_v3[0] = x0;
+	out_v3[1] = x1;
+	out_v3[2] = x2;
+}
+
+static void tonemap(float* in_out_color)
+{
+	const float ACES_input_transform[] = {
+		 0.59719f ,  0.35458f ,  0.04823f ,
+		 0.07600f ,  0.90834f ,  0.01566f ,
+		 0.02840f ,  0.13383f ,  0.83777f ,
+	};
+	const float ACES_output_transform[] = {
+		 1.60475f , -0.53108f , -0.07367f ,
+		-0.10208f ,  1.10813f , -0.00605f ,
+		-0.00327f , -0.07276f ,  1.07602f ,
+	};
+	v3_mul_m33(in_out_color, in_out_color, ACES_input_transform);
+	for (int i=0; i<3; ++i) {
+		float x = in_out_color[i];
+		x = (x * (x + 0.0245786f) - 0.000090537f) / (x * (0.983729f * x + 0.4329510f) + 0.238081f);
+		in_out_color[i] = x;
+	}
+	v3_mul_m33(in_out_color, in_out_color, ACES_output_transform);
+	for (int i=0; i<3; ++i)
+	for (int i=0; i<3; ++i) {
+		float x = in_out_color[i];
+		x = fminf(1.0f, fmaxf(0.0f, x));
+		in_out_color[i] = x;
+	}
+}
+
+static uint32_t make_hdr_rgba(int blur_level_index, float* color)
+{
+	assert((0 <= blur_level_index) && (blur_level_index < g.num_blur_levels));
+	const struct blur_level* bl = &g.blur_levels[blur_level_index];
+	float c[3];
+	c[0]=color[0]; c[1]=color[1]; c[2]=color[2];
+	for (int i=0; i<3; ++i) c[i] *= bl->post_scalar;
+	tonemap(c);
+	uint32_t cu = 0;
+	for (int i=0; i<3; ++i) {
+		cu += (uint8_t)fminf(255.0f, fmaxf(0.0f, floorf(c[i]*256.0f))) << (i*8);
+	}
+	return 0xff000000 | cu;
+}
+
+static void put_char(int codepoint)
 {
 	const struct atlas_lut_info info = hmget(
 		g.atlas_lut,
-		get_atlas_lut_key(g.num_y_expand_levels, codepoint, y_expand_index));
+		get_atlas_lut_key(g.num_y_expand_levels, codepoint, g.current_y_expand_index));
 	const float w = info.glyph_x1 - info.glyph_x0;
 	const float h = info.glyph_y1 - info.glyph_y0;
 	for (int i=0; i<g.num_blur_levels; ++i) {
 		struct blur_level* b = &g.blur_levels[i];
 		const stbrp_rect rect = g.atlas_pack_rect_arr[i+info.index0];
-		const float s = 1.0f / b->scale;
 		const float r = b->radius;
 		push_mesh_quad(
 			g.cursor_x + ((float)info.glyph_x0) - r,
@@ -640,10 +714,24 @@ static void put_char(int codepoint, int y_expand_index, uint32_t rgba)
 			w+r*2   , h+r*2 ,
 			rect.x   , rect.y ,
 			rect.w-1 , rect.h-1,
-			rgba
+			make_hdr_rgba(i, g.current_color)
 		);
 	}
 	g.cursor_x += g.font_spacing_x;
+}
+
+static void set_y_expand_index(int index)
+{
+	assert((0 <= index) && (index < g.num_y_expand_levels));
+	g.current_y_expand_index = index;
+}
+
+static void set_color3f(float red, float green, float blue)
+{
+	g.current_color[0] = red;
+	g.current_color[1] = green;
+	g.current_color[2] = blue;
+	g.current_color[3] = 1;
 }
 
 static void gui_draw1(void)
@@ -651,11 +739,22 @@ static void gui_draw1(void)
 	set_blend_mode(ADDITIVE);
 	set_texture(g.atlas_texture_id);
 
-	g.cursor_x = 200;
-	g.cursor_y = 300;
-	for (int i=0; i<26; ++i) put_char(i+'a'   , 0 , 0x88444444);
-	for (int i=0; i<26; ++i) put_char(i+'A'   , 1 , 0x88884444);
-	for (int i=0; i<26; ++i) put_char(i+' '+1 , 2 , 0x88448844);
+	g.cursor_x = 100;
+	g.cursor_y = 100;
+
+	const float m = fabsf(sinf(get_nanoseconds() * 2e-9)) * 5.0f;
+
+	set_y_expand_index(0);
+	set_color3f(1*m,1*m,1*m);
+	for (int i=0; i<26; ++i) put_char(i+'a');
+
+	set_y_expand_index(1);
+	set_color3f(1*m,.5*m,1*m);
+	for (int i=0; i<26; ++i) put_char(i+'A');
+
+	set_y_expand_index(2);
+	set_color3f(1*m,.5*m,.5*m);
+	for (int i=0; i<26; ++i) put_char(i+' '+1);
 }
 
 static void update_fps(void)
