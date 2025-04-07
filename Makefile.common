@@ -1,6 +1,6 @@
-#CFLAGS+=-O0 -g
+CFLAGS+=-O0 -g
 #CFLAGS+=-Os -g
-CFLAGS+=-O3
+#CFLAGS+=-O3
 #CFLAGS+=-Os
 CFLAGS+=-Wall
 

@@ -13,8 +13,27 @@
 #include "main.h"
 
 static struct {
-	SDL_GLContext gl_context;
+	SDL_GLContext shared_gl_context;
 } g;
+
+static void open_window(void)
+{
+	SDL_Window* sdl_window = SDL_CreateWindow("do", 1280, 720, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
+	if (sdl_window == NULL) {
+		fprintf(stderr, "SDL_CreateWindow() failed\n");
+		exit(EXIT_FAILURE);
+	}
+
+	if (g.shared_gl_context == NULL) {
+		g.shared_gl_context = SDL_GL_CreateContext(sdl_window);
+		if (g.shared_gl_context == NULL) {
+			fprintf(stderr, "SDL_GL_CreateContext() failed\n");
+			exit(EXIT_FAILURE);
+		 }
+	}
+
+	add_window(sdl_window);
+}
 
 int main(int argc, char** argv)
 {
@@ -24,6 +43,7 @@ int main(int argc, char** argv)
 	}
 
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, 0);
+	SDL_GL_SetAttribute(SDL_GL_SHARE_WITH_CURRENT_CONTEXT, 1);
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
 	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
@@ -36,25 +56,16 @@ int main(int argc, char** argv)
 	// XXX doesn't work? how about that 20 year old broken record :-/
 	// also notice that main_sdl3sdlrenderer.c has no tearing...
 
-	g0.window = SDL_CreateWindow("Do", 1280, 720, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
-	if (g0.window == NULL) {
-		fprintf(stderr, "SDL_CreateWindow() failed\n");
-		exit(EXIT_FAILURE);
-	}
+	open_window();
 
+	#if 0
+	// XXX do I want this here?
 	SDL_StartTextInput(g0.window);
 	// see also:
 	//   SDL_StartTextInputWithProperties
 	//   SDL_SetTextInputArea
 	//   SDL_StopTextInput
-
-	g.gl_context = SDL_GL_CreateContext(g0.window);
-	if (g.gl_context == NULL) {
-		fprintf(stderr, "SDL_GL_CreateContext() failed\n");
-		exit(EXIT_FAILURE);
-	 }
-
-	SDL_GL_MakeCurrent(g0.window, g.gl_context);
+	#endif
 
 	printf("                 GL_VERSION: %s\n", glGetString(GL_VERSION));
 	printf("GL_SHADING_LANGUAGE_VERSION: %s\n", glGetString(GL_SHADING_LANGUAGE_VERSION));
@@ -63,17 +74,22 @@ int main(int argc, char** argv)
 
 	gl_init();
 	gui_init();
+	gui_setup_gpu_resources();
 
 	while (!g0.exiting) {
 		handle_events();
-		gl_frame(g0.true_screen_width, g0.true_screen_height);
-		gui_draw();
-		gl_render_gui_draw_lists();
-		SDL_GL_SwapWindow(g0.window);
+		for (int i=0; i<arrlen(g0.window_arr); ++i) {
+			struct window* w = &g0.window_arr[i];
+			SDL_GL_MakeCurrent(w->sdl_window, g.shared_gl_context);
+			gl_frame(w->true_width, w->true_height);
+			gui_draw(w->true_width, w->true_height);
+			gl_render_gui_draw_lists();
+			SDL_GL_SwapWindow(w->sdl_window);
+		}
 	}
 
-	SDL_GL_DestroyContext(g.gl_context);
-	SDL_DestroyWindow(g0.window);
+	SDL_GL_DestroyContext(g.shared_gl_context);
+	close_all_windows();
 	SDL_Quit();
 
 	return EXIT_SUCCESS;

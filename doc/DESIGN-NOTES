@@ -205,3 +205,37 @@ alternative video synth engine: textured triangle soup.
  - not pixellated/shimmering; allows for a different style
  - could perhaps fit into the existing video synth, as its own "playfield" or
    "video mode", so it can be mixed with pixellated graphics.
+
+
+
+platforms:
+ - desktop (bsd, linux, windows, macos) using "gl" or "gpu" renderer
+ - web/webgl using "gl" renderer
+renderers:
+ - "gl" supports gles3/egl/webgl
+ - "gpu" (via SDL3 GPU) supports vulkan/dx12/metal
+ostensibly we don't need anything besides "gl" because:
+ - our GPU requirements are modest
+ - "gl" covers webgl on web
+ - and OpenGL on desktop is cross-platform, right? ...right?
+well,.. Dear ImGui also has modest requirements, yet its opengl3 backend source
+has a comment about glBufferSubData() (not the most fancy OpenGL call!) leaking
+memory on Windows using Intel GPU/driver. OpenGL support on Windows has always
+sucked (I think?), seemingly because graphics vendors would rather concentrate
+their efforts on d3d drivers? so the idea is that one of these renderers ought
+to work on your computer; use "gpu" if your computer supports it (not all cards
+support vulkan/dx12/metal), otherwise use "gl" on older hardware (I have a 2017
+iMac running FreeBSD and it doesn't support Vulkan and likely never will, but
+it has a fine CPU and I want to run Do on it).
+note, I also briefly considered using SDL_Renderer, but:
+ - I saw some subtle problems when trying to make a SDL_Renderer backend:
+   - screen flickers in fullscreen (I don't think it was a bug in my code)
+   - textures cannot be shared between multple windows
+   - vertex colors must be float[4] which is a bit overkill; 32B per vertex
+	 instead of 20B (this is also something that can be optimized even further
+	 on gl/gpu renderers)
+ - it has support for many backends, even software rendering, but I'm not sure
+   it has much value? (look at llvmpipe if software rendering has interest?)
+ - it's probably not too hard to add it again if desired (unless the the code
+   drifts out of "sdl renderer territory"; with sdl renderer you have to stick
+   to the basics, but with gl/gpu you have a lot more options)

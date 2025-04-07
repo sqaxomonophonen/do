@@ -148,7 +148,7 @@ static void main_loop(void)
 	const int canvas_width = canvas_get_width();
 	const int canvas_height = canvas_get_height();
 	gl_frame(canvas_width, canvas_height);
-	gui_draw();
+	gui_draw(canvas_width, canvas_height);
 	gl_render_gui_draw_lists();
 }
 

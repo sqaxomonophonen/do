@@ -1,9 +1,0 @@
-PKGS=sdl3
-
-CFLAGS+=$(shell pkg-config --cflags $(PKGS))
-LDFLAGS+=$(shell pkg-config --libs $(PKGS))
-
-ARTIFACT="do"
-OBJS+=main_sdl3sdlrenderer.o
-
-include Makefile.common

@@ -12,37 +12,70 @@ int64_t get_nanoseconds(void)
 	return SDL_GetTicksNS();
 }
 
-static struct {
-	SDL_Window* window;
-	int true_screen_width;
-	int true_screen_height;
-	int screen_width;
-	int screen_height;
+struct window {
+	SDL_Window* sdl_window;
+	int true_width;
+	int true_height;
+	int width;
+	int height;
 	float pixel_ratio;
-	int exiting;
 	int fullscreen;
+};
+
+static struct {
+	int exiting;
+	struct window* window_arr;
 } g0;
 
-static void populate_screen_globals()
+static void refresh_window_size(struct window* window)
 {
-	const int prev_width = g0.true_screen_width;
-	const int prev_height = g0.true_screen_height;
-	SDL_GetWindowSizeInPixels(g0.window, &g0.true_screen_width, &g0.true_screen_height);
+	assert(window != NULL);
+	const int prev_width = window->true_width;
+	const int prev_height = window->true_height;
+	SDL_GetWindowSizeInPixels(window->sdl_window, &window->true_width, &window->true_height);
 	int w, h;
-	SDL_GetWindowSize(g0.window, &w, &h);
-	g0.pixel_ratio = (float)g0.true_screen_width / (float)w;
-	g0.screen_width = g0.true_screen_width / g0.pixel_ratio;
-	g0.screen_height = g0.true_screen_height / g0.pixel_ratio;
-	if (g0.true_screen_width == prev_width && g0.true_screen_height == prev_height) {
+	SDL_GetWindowSize(window->sdl_window, &w, &h);
+	window->pixel_ratio = (float)window->true_width / (float)w;
+	window->width = window->true_width / window->pixel_ratio;
+	window->height = window->true_height / window->pixel_ratio;
+	if (window->true_width == prev_width && window->true_height == prev_height) {
 		return;
 	}
 	// TODO?
 }
 
+static struct window* get_window_by_sdl_id(SDL_WindowID id)
+{
+	for (int i=0; i<arrlen(g0.window_arr); ++i) {
+		struct window* w = &g0.window_arr[i];
+		if (id == SDL_GetWindowID(w->sdl_window)) {
+			return w;
+		}
+	}
+	return NULL;
+}
+
+static struct window* get_event_window(SDL_Event* ev)
+{
+	switch (ev->type) {
+	case SDL_EVENT_KEY_DOWN:
+	case SDL_EVENT_KEY_UP:
+		return get_window_by_sdl_id(ev->key.windowID);
+	case SDL_EVENT_WINDOW_RESIZED:
+		return get_window_by_sdl_id(ev->window.windowID);
+	default: return NULL;
+	}
+	assert(!"unreachable");
+}
+
+static void open_window(void);
+
 static void handle_events()
 {
 	SDL_Event event;
 	while (SDL_PollEvent(&event)) {
+		struct window* window = get_event_window(&event);
+
 		if (event.type == SDL_EVENT_QUIT) {
 			g0.exiting = 1;
 		} else if (event.type == SDL_EVENT_TEXT_INPUT) {
@@ -55,9 +88,15 @@ static void handle_events()
 
 			const int is_down = event.key.down;
 
-			if (is_down && event.key.key == 'f') {
-				g0.fullscreen = !g0.fullscreen;
-				SDL_SetWindowFullscreen(g0.window, g0.fullscreen ? SDL_WINDOW_FULLSCREEN : 0);
+			if (window != NULL && is_down && event.key.key == 'f') {
+				// XXX temp?
+				window->fullscreen = !window->fullscreen;
+				SDL_SetWindowFullscreen(window->sdl_window, window->fullscreen ? SDL_WINDOW_FULLSCREEN : 0);
+			}
+
+			if (is_down && event.key.key == 'w') {
+				// XXX temp?
+				open_window();
 			}
 
 			int mod = 0;
@@ -133,8 +172,24 @@ static void handle_events()
 
 			gui_emit_keypress_event((is_down ? KEY_IS_DOWN : 0) | keycode | mod);
 
-		} else if (event.type == SDL_EVENT_WINDOW_RESIZED) {
-			populate_screen_globals();
+		} else if (window != NULL && event.type == SDL_EVENT_WINDOW_RESIZED) {
+			refresh_window_size(window);
 		}
+	}
+}
+
+static void add_window(SDL_Window* sdl_window)
+{
+	arrput(g0.window_arr, ((struct window){
+		.sdl_window = sdl_window,
+	}));
+	refresh_window_size(&g0.window_arr[arrlen(g0.window_arr)-1]);
+}
+
+static void close_all_windows(void)
+{
+	for (int i=0; i<arrlen(g0.window_arr); ++i) {
+		struct window* w = &g0.window_arr[i];
+		SDL_DestroyWindow(w->sdl_window);
 	}
 }

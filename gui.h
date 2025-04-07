@@ -70,8 +70,9 @@ enum key_state_flag {
 #define KEY_MASK ((1<<22)-1)
 
 void gui_init(void);
+void gui_setup_gpu_resources(void);
 void gui_emit_keypress_event(int);
-void gui_draw(void);
+void gui_draw(int width, int height);
 
 enum draw_list_type {
 	MESH_TRIANGLES,

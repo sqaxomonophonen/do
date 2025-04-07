@@ -25,6 +25,9 @@ void get_texture_dim(int texture, int* out_width, int* out_height);
 void destroy_texture(int texture);
 void update_texture(int texture, int y0, int width, int height, void* data);
 
+void no_scissor(void);
+void scissor(int x0, int y0, int width, int height);
+
 
 #define MAIN_H
 #endif

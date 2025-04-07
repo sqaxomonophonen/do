@@ -390,3 +390,14 @@ static void gl_render_gui_draw_lists(void)
 		}
 	}
 }
+
+void scissor(int x0, int y0, int width, int height)
+{
+	GLCALL(glScissor(x0, y0, width, height));
+	GLCALL(glEnable(GL_SCISSOR_TEST));
+}
+
+void no_scissor(void)
+{
+	GLCALL(glDisable(GL_SCISSOR_TEST));
+}

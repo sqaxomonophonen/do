@@ -20,6 +20,27 @@
 #define ATLAS_MIN_SIZE_LOG2 (8)
 #define ATLAS_MAX_SIZE_LOG2 (13)
 
+enum pane_type {
+	CODE = 1,
+	WIZARD,
+	SETTINGS,
+	VIDEOSYNTH,
+};
+
+// panes are "sub windows" inside your parent window
+struct pane {
+	enum pane_type type;
+	float u0,v0,u1,v1;
+	union {
+		struct {
+			int document_id;
+		} code;
+		struct {
+			int output_id;
+		} videosynth;
+	};
+};
+
 struct y_expand_level {
 	float y_scale;
 	// TODO?
@@ -45,7 +66,6 @@ struct atlas_lut_info {
 	int glyph_index;
 	int glyph_x0,glyph_y0,glyph_x1,glyph_y1;
 };
-
 
 struct resize {
 	int src_w, src_h;
@@ -91,6 +111,7 @@ static int resize_compar(const void* va, const void* vb)
 }
 
 static struct {
+	int base_width, base_height;
 	int font_data_is_on_the_heap_and_owned_by_us;
 	stbtt_fontinfo fontinfo;
 	float font_px_scale;
@@ -116,6 +137,8 @@ static struct {
 	vertex_index* vertex_index_arr;
 	int64_t last_frame_time;
 	float fps;
+
+	struct pane* pane_arr;
 
 	int cursor_x, cursor_y;
 	enum blend_mode current_blend_mode;
@@ -534,6 +557,35 @@ static const struct blur_level default_blur_levels[] = {
 void gui_init(void)
 {
 	g.atlas_texture_id = -1;
+
+	arrput(g.pane_arr, ((struct pane){
+		.type = CODE,
+		.u0=0, .v0=0,
+		.u1=1, .v1=1,
+		.code = {
+			.document_id = 0,
+		},
+	}));
+
+	gui_setup_gpu_resources();
+}
+
+// XXX gui_setup_gpu_resources() is intended to be called once during init, or
+// if the GPU context is lost, however this is mysterious subject fraught with
+// subtleties and krakens. And therefore also not well-tested. Notes:
+//  - Some GL's seem to have a "create context robustness": the SDL code has a
+//    lot of this. Does that mean you won't lose context?
+//  - Maybe Vulkan has "robustness" features too? I'm not too familiar with it,
+//    just git-grepping the SDL source code here...
+//  - WebGL can fire a "webglcontextlost" event on the <canvas> element. In
+//    practice I've only seen this in Chrome which has a hardcoded context
+//    limit (16). Something like a render stall (taking too long) might also
+//    cause it? The event contains no "reason for loss of context".
+//  - SDL_Renderer can fire SDL_RenderEvents: SDL_EVENT_RENDER_DEVICE_RESET
+//    and SDL_EVENT_RENDER_DEVICE_LOST (also SDL_EVENT_RENDER_TARGETS_RESET?)
+void gui_setup_gpu_resources(void)
+{
+	// XXX should be current font instead of a hardcoded one
 	assert(set_font(
 		font0_data, 0,
 		40,
@@ -674,7 +726,6 @@ static void tonemap(float* in_out_color)
 		in_out_color[i] = x;
 	}
 	v3_mul_m33(in_out_color, in_out_color, ACES_output_transform);
-	for (int i=0; i<3; ++i)
 	for (int i=0; i<3; ++i) {
 		float x = in_out_color[i];
 		x = fminf(1.0f, fmaxf(0.0f, x));
@@ -734,29 +785,6 @@ static void set_color3f(float red, float green, float blue)
 	g.current_color[3] = 1;
 }
 
-static void gui_draw1(void)
-{
-	set_blend_mode(ADDITIVE);
-	set_texture(g.atlas_texture_id);
-
-	g.cursor_x = 100;
-	g.cursor_y = 100;
-
-	const float m = fabsf(sinf(get_nanoseconds() * 2e-9)) * 5.0f;
-
-	set_y_expand_index(0);
-	set_color3f(1*m,1*m,1*m);
-	for (int i=0; i<26; ++i) put_char(i+'a');
-
-	set_y_expand_index(1);
-	set_color3f(1*m,.5*m,1*m);
-	for (int i=0; i<26; ++i) put_char(i+'A');
-
-	set_y_expand_index(2);
-	set_color3f(1*m,.5*m,.5*m);
-	for (int i=0; i<26; ++i) put_char(i+' '+1);
-}
-
 static void update_fps(void)
 {
 	const int64_t t  = get_nanoseconds();
@@ -765,13 +793,71 @@ static void update_fps(void)
 	g.last_frame_time = t;
 }
 
-void gui_draw(void)
+static void render_code_pane(void)
 {
+}
+
+static void gui_draw1(void)
+{
+	// TODO render video synth background if configured?
+
+	for (int i=0; i<arrlen(g.pane_arr); ++i) {
+		struct pane* pane = &g.pane_arr[i];
+
+		const int x0 = (int)floorf(pane->u0 * (float)g.base_width);
+		const int y0 = (int)floorf(pane->v0 * (float)g.base_height);
+		const int x1 = (int)ceilf(pane->u1 * (float)g.base_width);
+		const int y1 = (int)ceilf(pane->v1 * (float)g.base_height);
+		const int w = x1-x0;
+		const int h = y1-y0;
+		if (w<=0 || h<=0) continue;
+
+		scissor(x0,y0,w,h);
+
+		switch (pane->type) {
+		case CODE:
+			render_code_pane();
+			break;
+		default: assert(!"unhandled pane type");
+		}
+
+		set_blend_mode(ADDITIVE);
+		set_texture(g.atlas_texture_id);
+
+		g.cursor_x = 100;
+		g.cursor_y = 100;
+
+		const float m = fabsf(sinf(get_nanoseconds() * 2e-9)) * 8.0f;
+
+		set_y_expand_index(0);
+		set_color3f(1*m,1*m,1*m);
+		for (int i=0; i<26; ++i) put_char(i+'a');
+
+		set_y_expand_index(1);
+		set_color3f(1*m,.3*m,1*m);
+		for (int i=0; i<26; ++i) put_char(i+'A');
+
+		set_y_expand_index(2);
+		set_color3f(1*m,.3*m,.3*m);
+		for (int i=0; i<26; ++i) put_char(i+' '+1);
+	}
+}
+
+void gui_draw(int width, int height)
+{
+	g.base_width = width;
+	g.base_height = height;
+
 	update_fps();
+
+	// reset draw lists
 	arrsetlen(g.draw_list_arr, 0);
 	arrsetlen(g.vertex_arr, 0);
 	arrsetlen(g.vertex_index_arr, 0);
+
+	// actually draw
 	gui_draw1();
+
 	// replace the "_"-prefixed variables in struct draw_list inner unions
 	// with corresponding pointer values in the same unions. we can't easily
 	// set the pointer values as we go because they must point at offsets in a
