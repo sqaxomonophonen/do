@@ -315,6 +315,13 @@ static void gl_render_gui_draw_lists(void)
 		default: assert(!"unhandled blend mode");
 		}
 
+		if (list->do_scissor) {
+			GLCALL(glScissor(list->scissor_x, list->scissor_y, list->scissor_w, list->scissor_h));
+			GLCALL(glEnable(GL_SCISSOR_TEST));
+		} else {
+			GLCALL(glDisable(GL_SCISSOR_TEST));
+		}
+
 		switch (list->type) {
 		case MESH_TRIANGLES: {
 
@@ -389,15 +396,4 @@ static void gl_render_gui_draw_lists(void)
 		default: assert(!"unhandled draw list type");
 		}
 	}
-}
-
-void scissor(int x0, int y0, int width, int height)
-{
-	GLCALL(glScissor(x0, y0, width, height));
-	GLCALL(glEnable(GL_SCISSOR_TEST));
-}
-
-void no_scissor(void)
-{
-	GLCALL(glDisable(GL_SCISSOR_TEST));
 }

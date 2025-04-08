@@ -96,6 +96,7 @@ struct vertex {
 struct draw_list {
 	enum blend_mode      blend_mode;
 	enum draw_list_type  type;
+	int do_scissor, scissor_x, scissor_y, scissor_w, scissor_h;
 	union {
 		struct {
 			int texture_id;

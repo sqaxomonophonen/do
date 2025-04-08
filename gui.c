@@ -145,6 +145,7 @@ static struct {
 	int current_texture_id;
 	int current_y_expand_index;
 	float current_color[4];
+	int current_do_scissor, current_scissor_x, current_scissor_y, current_scissor_w, current_scissor_h;
 } g;
 
 #define NUM_IDS_LOG2 (32-22)
@@ -609,6 +610,20 @@ static void set_texture(int id)
 	g.current_texture_id = id;
 }
 
+static void set_scissor(int x, int y, int w, int h)
+{
+	g.current_do_scissor = 1;
+	g.current_scissor_x = x;
+	g.current_scissor_y = y;
+	g.current_scissor_w = w;
+	g.current_scissor_h = h;
+}
+
+static void set_no_scissor(void)
+{
+	g.current_do_scissor = 0;
+}
+
 static struct draw_list* continue_draw_list(int num_vertices, int num_indices)
 {
 	const int max_vert = (sizeof(vertex_index)==2) ? (1<<16) : 0;
@@ -621,6 +636,13 @@ static struct draw_list* continue_draw_list(int num_vertices, int num_indices)
 	if (list->type != MESH_TRIANGLES) return NULL;
 	if (list->blend_mode != g.current_blend_mode) return NULL;
 	if (list->mesh.texture_id != g.current_texture_id) return NULL;
+	if (list->do_scissor != g.current_do_scissor) return NULL;
+	if (list->do_scissor) {
+		if (list->scissor_x != g.current_scissor_x) return NULL;
+		if (list->scissor_y != g.current_scissor_y) return NULL;
+		if (list->scissor_w != g.current_scissor_w) return NULL;
+		if (list->scissor_h != g.current_scissor_h) return NULL;
+	}
 	if (sizeof(vertex_index) == 2) {
 		if ((list->mesh.num_vertices + num_vertices) > max_vert) return NULL;
 		return list;
@@ -637,6 +659,11 @@ static void alloc_mesh(int num_vertices, int num_indices, struct vertex** out_ve
 	if (list == NULL) {
 		list = arraddnptr(g.draw_list_arr, 1);
 		list->blend_mode = g.current_blend_mode;
+		list->do_scissor = g.current_do_scissor;
+		list->scissor_x = g.current_scissor_x;
+		list->scissor_y = g.current_scissor_y;
+		list->scissor_w = g.current_scissor_w;
+		list->scissor_h = g.current_scissor_h;
 		list->type = MESH_TRIANGLES;
 		list->mesh.texture_id = g.current_texture_id;
 		list->mesh._vertices_offset = arrlen(g.vertex_arr);
@@ -795,6 +822,7 @@ static void update_fps(void)
 
 static void render_code_pane(void)
 {
+	// TODO
 }
 
 static void gui_draw1(void)
@@ -812,7 +840,7 @@ static void gui_draw1(void)
 		const int h = y1-y0;
 		if (w<=0 || h<=0) continue;
 
-		scissor(x0,y0,w,h);
+		set_scissor(x0,y0,w,h);
 
 		switch (pane->type) {
 		case CODE:
