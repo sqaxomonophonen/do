@@ -2,6 +2,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <assert.h>
+#include <string.h>
 #include <math.h>
 
 #include "sep2dconv.h"
@@ -19,8 +20,10 @@ void sep2dconv_execute(struct sep2dconv_kernel* kernel, uint8_t* image, int widt
 		f32_scratch_capacity_log2++;
 	}
 	if (do_allocate) {
-		f32_scratch = realloc(f32_scratch, sizeof(*f32_scratch)<<f32_scratch_capacity_log2);
+		const size_t size = sizeof(*f32_scratch) << f32_scratch_capacity_log2;
+		f32_scratch = realloc(f32_scratch, size);
 		assert(f32_scratch != NULL);
+		memset(f32_scratch, 0, size);
 	}
 
 	const int R = kernel->radius;

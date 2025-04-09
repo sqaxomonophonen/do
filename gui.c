@@ -272,6 +272,7 @@ static int set_font(
 	g.font_px_scale = stbtt_ScaleForPixelHeight(&g.fontinfo, px);
 
 	if (g.atlas_lut != NULL) hmfree(g.atlas_lut);
+	assert(g.atlas_lut == NULL);
 
 	arrsetcap(g.atlas_pack_rect_arr, (num_codepoints_requested * num_y_expand_levels * num_blur_levels));
 	arrsetlen(g.atlas_pack_rect_arr, 0);
@@ -321,9 +322,6 @@ static int set_font(
 	}
 	g.font_spacing_x = ceilf(max_advance * g.font_px_scale);
 	g.font_spacing_y = 1; // XXX
-
-
-	//printf("nlut=%d\n", (int)hmlen(g.atlas_lut));
 
 	int atlas_width_log2  = ATLAS_MIN_SIZE_LOG2;
 	int atlas_height_log2 = ATLAS_MIN_SIZE_LOG2;
@@ -436,10 +434,15 @@ static int set_font(
 			++num_samplers;
 		}
 
+		assert((0 <= rz.src_x) && (rz.src_x < atlas_width));
+		assert((0 <= rz.src_y) && (rz.src_y < atlas_height));
+		assert((0 <= (rz.src_x+rz.src_w)) && ((rz.src_x+rz.src_w) <= atlas_width));
+		assert((0 <= (rz.src_y+rz.src_h)) && ((rz.src_y+rz.src_h) <= atlas_height));
+
 		stbir_set_buffer_ptrs(
-				&re,
-				atlas_bitmap + rz.src_x + rz.src_y*atlas_width, atlas_width,
-				atlas_bitmap + rz.dst_x + rz.dst_y*atlas_width, atlas_width);
+			&re,
+			atlas_bitmap + rz.src_x + rz.src_y*atlas_width, atlas_width,
+			atlas_bitmap + rz.dst_x + rz.dst_y*atlas_width, atlas_width);
 		stbir_resize_extended(&re);
 	}
 	stbir_free_samplers(&re);
@@ -482,6 +485,7 @@ static int set_font(
 				for (int y_expand_index=0; y_expand_index<num_y_expand_levels; ++y_expand_index) {
 					const struct atlas_lut_info info = hmget(g.atlas_lut, get_atlas_lut_key(num_y_expand_levels, codepoint, y_expand_index));
 					const stbrp_rect rn = g.atlas_pack_rect_arr[info.index0+blur_index];
+
 					sep2dconv_execute(
 						&kernel,
 						atlas_bitmap + rn.x + rn.y * atlas_width,

@@ -74,7 +74,6 @@ int main(int argc, char** argv)
 
 	gl_init();
 	gui_init();
-	gui_setup_gpu_resources();
 
 	while (!g0.exiting) {
 		handle_events();
