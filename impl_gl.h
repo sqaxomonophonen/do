@@ -153,6 +153,7 @@ static void gl_frame(int width, int height)
 	gg.frame_width = width;
 	gg.frame_height = height;
 	GLCALL(glViewport(gg.frame_x0, gg.frame_y0, gg.frame_width, gg.frame_height));
+	GLCALL(glDisable(GL_SCISSOR_TEST));
 	GLCALL(glClearColor(0,0,0,0));
 	GLCALL(glClear(GL_COLOR_BUFFER_BIT));
 }

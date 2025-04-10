@@ -111,6 +111,9 @@ static int resize_compar(const void* va, const void* vb)
 }
 
 static struct {
+	struct window* window_arr;
+	struct pane* pane_arr;
+
 	int base_width, base_height;
 	int font_data_is_on_the_heap_and_owned_by_us;
 	stbtt_fontinfo fontinfo;
@@ -137,12 +140,43 @@ static struct {
 	vertex_index* vertex_index_arr;
 	int64_t last_frame_time;
 	float fps;
-	struct pane* pane_arr;
 	int cursor_x, cursor_y;
 	struct render_mode render_mode;
 	int current_y_expand_index;
 	float current_color[4];
 } g;
+
+int get_num_windows(void)
+{
+	return arrlen(g.window_arr);
+}
+
+struct window* get_window(int index)
+{
+	assert((0 <= index) && (index < get_num_windows()));
+	return &g.window_arr[index];
+}
+
+static int next_window_id=1;
+void open_window(void)
+{
+	arrput(g.window_arr, ((struct window){
+		.state = WINDOW_IS_NEW,
+		.id = next_window_id++,
+	}));
+}
+
+void remove_closed_windows(void)
+{
+	for (int i=0; i<get_num_windows(); ++i) {
+		struct window* w = get_window(i);
+		if (w->state == WINDOW_IS_CLOSING) {
+			assert((w->backend_extra == NULL) && "we expected the backend to have cleaned up by this point?");
+			arrdel(g.window_arr, i);
+			--i;
+		}
+	}
+}
 
 #define NUM_IDS_LOG2 (32-22)
 
@@ -596,6 +630,17 @@ void gui_init(void)
 		},
 	}));
 
+	#if 0
+	arrput(g.pane_arr, ((struct pane){
+		.type = CODE,
+		.u0=0.5, .v0=0,
+		.u1=1.0, .v1=1,
+		.code = {
+			.document_id = 1,
+		},
+	}));
+	#endif
+
 	gui_setup_gpu_resources();
 }
 
@@ -885,10 +930,10 @@ static void gui_draw1(void)
 	}
 }
 
-void gui_draw(int width, int height)
+void gui_draw(struct window* window)
 {
-	g.base_width = width;
-	g.base_height = height;
+	g.base_width = window->true_width;
+	g.base_height = window->true_height;
 
 	update_fps();
 

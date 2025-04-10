@@ -16,23 +16,36 @@ static struct {
 	SDL_GLContext shared_gl_context;
 } g;
 
-static void open_window(void)
+static void housekeep_our_windows(void)
 {
-	SDL_Window* sdl_window = SDL_CreateWindow("do", 1280, 720, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
-	if (sdl_window == NULL) {
-		fprintf(stderr, "SDL_CreateWindow() failed\n");
-		exit(EXIT_FAILURE);
-	}
+	const int num_windows = get_num_windows();
+	for (int i=0; i<num_windows; ++i) {
+		struct window* window = get_window(i);
+		if (window->state == WINDOW_IS_NEW && window->backend_extra == NULL) {
+			SDL_Window* sdl_window = SDL_CreateWindow("do", 1280, 720, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
+			if (sdl_window == NULL) {
+				fprintf(stderr, "SDL_CreateWindow() failed\n");
+				exit(EXIT_FAILURE);
+			}
 
-	if (g.shared_gl_context == NULL) {
-		g.shared_gl_context = SDL_GL_CreateContext(sdl_window);
-		if (g.shared_gl_context == NULL) {
-			fprintf(stderr, "SDL_GL_CreateContext() failed\n");
-			exit(EXIT_FAILURE);
-		 }
-	}
+			if (g.shared_gl_context == NULL) {
+				g.shared_gl_context = SDL_GL_CreateContext(sdl_window);
+				if (g.shared_gl_context == NULL) {
+					fprintf(stderr, "SDL_GL_CreateContext() failed\n");
+					exit(EXIT_FAILURE);
+				 }
+			}
 
-	add_window(sdl_window);
+			struct window_extra* extra = calloc(1, sizeof *extra);
+			extra->sdl_window = sdl_window;
+			window->backend_extra = extra;
+			window->state = WINDOW_IS_OPEN;
+		} else if (window->state == WINDOW_IS_CLOSING && window->backend_extra != NULL) {
+			SDL_Window* sdl_window = get_sdl_window(window);
+			SDL_DestroyWindow(sdl_window);
+			window->backend_extra = NULL;
+		}
+	}
 }
 
 int main(int argc, char** argv)
@@ -72,23 +85,37 @@ int main(int argc, char** argv)
 	printf("                  GL_VENDOR: %s\n", glGetString(GL_VENDOR));
 	printf("                GL_RENDERER: %s\n", glGetString(GL_RENDERER));
 
+	housekeep_our_windows();
+
 	gl_init();
 	gui_init();
 
-	while (!g0.exiting) {
+	while (!g0.exiting && get_num_windows() > 0) {
 		handle_events();
-		for (int i=0; i<arrlen(g0.window_arr); ++i) {
-			struct window* w = &g0.window_arr[i];
-			SDL_GL_MakeCurrent(w->sdl_window, g.shared_gl_context);
-			gl_frame(w->true_width, w->true_height);
-			gui_draw(w->true_width, w->true_height);
+		housekeep_our_windows();
+		remove_closed_windows();
+		// XXX subtlety: windows may be tail-appended by gui, and aren't valid
+		// until housekeep_our_windows() has been called, so don't roll
+		// get_num_windows() into the for-loop or we might begin
+		const int num_windows = get_num_windows();
+		for (int i=0; i<num_windows; ++i) {
+			struct window* window = get_window(i);
+			assert((window->state == WINDOW_IS_OPEN) && "we don't want new/closing windows at this point?");
+			SDL_Window* sdl_window = get_sdl_window(window);
+			SDL_GL_MakeCurrent(sdl_window, g.shared_gl_context);
+			gl_frame(window->true_width, window->true_height);
+			gui_draw(window);
 			gl_render_gui_draw_lists();
-			SDL_GL_SwapWindow(w->sdl_window);
+			SDL_GL_SwapWindow(sdl_window);
 		}
+		remove_closed_windows();
 	}
 
 	SDL_GL_DestroyContext(g.shared_gl_context);
-	close_all_windows();
+
+	for (int i=0; i<get_num_windows(); ++i) get_window(i)->state = WINDOW_IS_CLOSING;
+	housekeep_our_windows();
+
 	SDL_Quit();
 
 	return EXIT_SUCCESS;

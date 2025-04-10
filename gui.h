@@ -1,5 +1,29 @@
 #ifndef GUI_H
 
+enum window_state {
+	WINDOW_IS_NEW=1,
+	WINDOW_IS_OPEN,
+	WINDOW_IS_CLOSING,
+};
+
+struct window {
+	int id;
+	int true_width;
+	int true_height;
+	int width;
+	int height;
+	float pixel_ratio;
+	int is_fullscreen;
+	enum window_state state;
+	//int is_closing;
+	void* backend_extra;
+};
+
+int get_num_windows(void);
+struct window* get_window(int index);
+void open_window(void);
+void remove_closed_windows(void);
+
 typedef uint16_t vertex_index;
 
 #define EMIT_SPECIAL_KEYS \
@@ -72,7 +96,7 @@ enum key_state_flag {
 void gui_init(void);
 void gui_setup_gpu_resources(void);
 void gui_emit_keypress_event(int);
-void gui_draw(int width, int height);
+void gui_draw(struct window*);
 
 enum draw_list_type {
 	MESH_TRIANGLES,

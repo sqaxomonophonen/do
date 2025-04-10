@@ -12,29 +12,30 @@ int64_t get_nanoseconds(void)
 	return SDL_GetTicksNS();
 }
 
-struct window {
+struct window_extra {
 	SDL_Window* sdl_window;
-	int true_width;
-	int true_height;
-	int width;
-	int height;
-	float pixel_ratio;
-	int fullscreen;
 };
 
 static struct {
 	int exiting;
-	struct window* window_arr;
 } g0;
+
+static inline SDL_Window* get_sdl_window(struct window* window)
+{
+	assert(window->backend_extra != NULL);
+	return ((struct window_extra*)window->backend_extra)->sdl_window;
+}
 
 static void refresh_window_size(struct window* window)
 {
 	assert(window != NULL);
+
 	const int prev_width = window->true_width;
 	const int prev_height = window->true_height;
-	SDL_GetWindowSizeInPixels(window->sdl_window, &window->true_width, &window->true_height);
+	SDL_Window* sdl_window = get_sdl_window(window);
+	SDL_GetWindowSizeInPixels(sdl_window, &window->true_width, &window->true_height);
 	int w, h;
-	SDL_GetWindowSize(window->sdl_window, &w, &h);
+	SDL_GetWindowSize(sdl_window, &w, &h);
 	window->pixel_ratio = (float)window->true_width / (float)w;
 	window->width = window->true_width / window->pixel_ratio;
 	window->height = window->true_height / window->pixel_ratio;
@@ -46,10 +47,11 @@ static void refresh_window_size(struct window* window)
 
 static struct window* get_window_by_sdl_id(SDL_WindowID id)
 {
-	for (int i=0; i<arrlen(g0.window_arr); ++i) {
-		struct window* w = &g0.window_arr[i];
-		if (id == SDL_GetWindowID(w->sdl_window)) {
-			return w;
+	const int n = get_num_windows();
+	for (int i=0; i<n; ++i) {
+		struct window* window = get_window(i);
+		if (id == SDL_GetWindowID(get_sdl_window(window))) {
+			return window;
 		}
 	}
 	return NULL;
@@ -68,8 +70,6 @@ static struct window* get_event_window(SDL_Event* ev)
 	assert(!"unreachable");
 }
 
-static void open_window(void);
-
 static void handle_events()
 {
 	SDL_Event event;
@@ -81,17 +81,17 @@ static void handle_events()
 		} else if (event.type == SDL_EVENT_TEXT_INPUT) {
 			printf("text input [%s]\n", event.text.text);
 		} else if ((event.type == SDL_EVENT_KEY_DOWN) || (event.type == SDL_EVENT_KEY_UP)) {
-			if (event.key.key == SDLK_ESCAPE) {
-				// XXX temp?
-				g0.exiting = 1;
-			}
-
 			const int is_down = event.key.down;
+
+			if (window != NULL && is_down && event.key.key == SDLK_ESCAPE) {
+				// XXX temp?
+				window->state = WINDOW_IS_CLOSING;
+			}
 
 			if (window != NULL && is_down && event.key.key == 'f') {
 				// XXX temp?
-				window->fullscreen = !window->fullscreen;
-				SDL_SetWindowFullscreen(window->sdl_window, window->fullscreen ? SDL_WINDOW_FULLSCREEN : 0);
+				window->is_fullscreen = !window->is_fullscreen;
+				SDL_SetWindowFullscreen(get_sdl_window(window), window->is_fullscreen ? SDL_WINDOW_FULLSCREEN : 0);
 			}
 
 			if (is_down && event.key.key == 'w') {
@@ -175,21 +175,5 @@ static void handle_events()
 		} else if (window != NULL && event.type == SDL_EVENT_WINDOW_RESIZED) {
 			refresh_window_size(window);
 		}
-	}
-}
-
-static void add_window(SDL_Window* sdl_window)
-{
-	arrput(g0.window_arr, ((struct window){
-		.sdl_window = sdl_window,
-	}));
-	refresh_window_size(&g0.window_arr[arrlen(g0.window_arr)-1]);
-}
-
-static void close_all_windows(void)
-{
-	for (int i=0; i<arrlen(g0.window_arr); ++i) {
-		struct window* w = &g0.window_arr[i];
-		SDL_DestroyWindow(w->sdl_window);
 	}
 }
