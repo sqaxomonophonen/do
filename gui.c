@@ -932,6 +932,7 @@ static void gui_draw1(void)
 
 void gui_draw(struct window* window)
 {
+	assert(window->state == WINDOW_IS_OPEN);
 	g.base_width = window->true_width;
 	g.base_height = window->true_height;
 
