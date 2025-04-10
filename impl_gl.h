@@ -305,7 +305,7 @@ static void gl_render_gui_draw_lists(void)
 		struct draw_list* list = gui_get_draw_list(i);
 		if (list == NULL) break;
 
-		switch (list->blend_mode) {
+		switch (list->render_mode.blend_mode) {
 		case ADDITIVE:
 			GLCALL(glEnable(GL_BLEND));
 			GLCALL(glBlendFunc(GL_SRC_ALPHA, GL_ONE));
@@ -315,19 +315,23 @@ static void gl_render_gui_draw_lists(void)
 		default: assert(!"unhandled blend mode");
 		}
 
-		if (list->do_scissor) {
-			GLCALL(glScissor(list->scissor_x, list->scissor_y, list->scissor_w, list->scissor_h));
+		if (list->render_mode.do_scissor) {
+			GLCALL(glScissor(
+				list->render_mode.scissor_x,
+				list->render_mode.scissor_y,
+				list->render_mode.scissor_w,
+				list->render_mode.scissor_h));
 			GLCALL(glEnable(GL_SCISSOR_TEST));
 		} else {
 			GLCALL(glDisable(GL_SCISSOR_TEST));
 		}
 
-		switch (list->type) {
+		switch (list->render_mode.type) {
 		case MESH_TRIANGLES: {
 
 			GLCALL(glUseProgram(gg.mesh_shader.program));
 
-			GLCALL(glBindTexture(GL_TEXTURE_2D, get_texture(list->mesh.texture_id)->gl_texture));
+			GLCALL(glBindTexture(GL_TEXTURE_2D, get_texture(list->render_mode.texture_id)->gl_texture));
 			GLCALL(glUniform1i(gg.mesh_shader.u_texture, 0));
 
 			const float left   = gg.frame_x0;

@@ -90,16 +90,25 @@ struct vertex {
 	uint32_t rgba;
 };
 
+struct render_mode {
+	enum blend_mode blend_mode;
+	enum draw_list_type type;
+	int do_scissor;
+	int scissor_x;
+	int scissor_y;
+	int scissor_w;
+	int scissor_h;
+	int texture_id;
+	// NOTE update render_mode_same() if fields are added
+};
+
 // TODO somewhere: if blend_mode==ADDITIVE, the ordering doesn't matter. so,
 // for a given draw_list interval where blend_mode==ADDITIVE there ought to be
 // only one of each `draw_list_type` to minimize the amount of mode switching
 struct draw_list {
-	enum blend_mode      blend_mode;
-	enum draw_list_type  type;
-	int do_scissor, scissor_x, scissor_y, scissor_w, scissor_h;
+	struct render_mode render_mode;
 	union {
 		struct {
-			int texture_id;
 			int num_vertices;
 			union {
 				struct vertex*  vertices;

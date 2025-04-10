@@ -7,7 +7,7 @@
 
 #include "main.h"
 #include "util.h"
-#include"gui.h"
+#include "gui.h"
 #include "editor_client.h"
 #include "font0.h"
 #include "stb_rect_pack.h"
@@ -137,15 +137,11 @@ static struct {
 	vertex_index* vertex_index_arr;
 	int64_t last_frame_time;
 	float fps;
-
 	struct pane* pane_arr;
-
 	int cursor_x, cursor_y;
-	enum blend_mode current_blend_mode;
-	int current_texture_id;
+	struct render_mode render_mode;
 	int current_y_expand_index;
 	float current_color[4];
-	int current_do_scissor, current_scissor_x, current_scissor_y, current_scissor_w, current_scissor_h;
 } g;
 
 #define NUM_IDS_LOG2 (32-22)
@@ -165,6 +161,34 @@ struct blur_level_metrics {
 	int blurpx;
 	int padding;
 };
+
+// returns 1 if a/b are the same "render mode".
+static int render_mode_same(struct render_mode* a, struct render_mode* b)
+{
+	int num_tex = 0;
+	switch (a->type) {
+	case MESH_TRIANGLES: num_tex=1; break;
+	default: assert(!"unhandled case");
+	}
+
+	return
+		// compare simple fields
+		   (a->blend_mode == b->blend_mode)
+		&& (a->type       == b->type)
+		&& (a->do_scissor == b->do_scissor)
+
+		// compare scissor rect if enabled
+		&& (!a->do_scissor || (
+			   (a->scissor_x == b->scissor_x)
+			&& (a->scissor_y == b->scissor_y)
+			&& (a->scissor_w == b->scissor_w)
+			&& (a->scissor_h == b->scissor_h)
+		))
+
+		// compare textures if enabled
+		&& (num_tex==0 || (a->texture_id == b->texture_id))
+	;
+}
 
 static int get_blurpx(const struct blur_level* bl)
 {
@@ -606,26 +630,26 @@ void gui_emit_keypress_event(int keycode)
 
 static void set_blend_mode(enum blend_mode blend_mode)
 {
-	g.current_blend_mode = blend_mode;
-}
-
-static void set_texture(int id)
-{
-	g.current_texture_id = id;
+	g.render_mode.blend_mode = blend_mode;
 }
 
 static void set_scissor(int x, int y, int w, int h)
 {
-	g.current_do_scissor = 1;
-	g.current_scissor_x = x;
-	g.current_scissor_y = y;
-	g.current_scissor_w = w;
-	g.current_scissor_h = h;
+	g.render_mode.do_scissor = 1;
+	g.render_mode.scissor_x = x;
+	g.render_mode.scissor_y = y;
+	g.render_mode.scissor_w = w;
+	g.render_mode.scissor_h = h;
 }
 
 static void set_no_scissor(void)
 {
-	g.current_do_scissor = 0;
+	g.render_mode.do_scissor = 0;
+}
+
+static void set_texture(int id)
+{
+	g.render_mode.texture_id = id;
 }
 
 static struct draw_list* continue_draw_list(int num_vertices, int num_indices)
@@ -637,16 +661,9 @@ static struct draw_list* continue_draw_list(int num_vertices, int num_indices)
 	const int n = arrlen(g.draw_list_arr);
 	if (n==0) return NULL;
 	struct draw_list* list = &g.draw_list_arr[n-1];
-	if (list->type != MESH_TRIANGLES) return NULL;
-	if (list->blend_mode != g.current_blend_mode) return NULL;
-	if (list->mesh.texture_id != g.current_texture_id) return NULL;
-	if (list->do_scissor != g.current_do_scissor) return NULL;
-	if (list->do_scissor) {
-		if (list->scissor_x != g.current_scissor_x) return NULL;
-		if (list->scissor_y != g.current_scissor_y) return NULL;
-		if (list->scissor_w != g.current_scissor_w) return NULL;
-		if (list->scissor_h != g.current_scissor_h) return NULL;
-	}
+
+	if (!render_mode_same(&g.render_mode, &list->render_mode)) return NULL;
+
 	if (sizeof(vertex_index) == 2) {
 		if ((list->mesh.num_vertices + num_vertices) > max_vert) return NULL;
 		return list;
@@ -662,14 +679,7 @@ static void alloc_mesh(int num_vertices, int num_indices, struct vertex** out_ve
 	struct draw_list* list = continue_draw_list(num_vertices, num_indices);
 	if (list == NULL) {
 		list = arraddnptr(g.draw_list_arr, 1);
-		list->blend_mode = g.current_blend_mode;
-		list->do_scissor = g.current_do_scissor;
-		list->scissor_x = g.current_scissor_x;
-		list->scissor_y = g.current_scissor_y;
-		list->scissor_w = g.current_scissor_w;
-		list->scissor_h = g.current_scissor_h;
-		list->type = MESH_TRIANGLES;
-		list->mesh.texture_id = g.current_texture_id;
+		memcpy(&list->render_mode, &g.render_mode, sizeof g.render_mode);
 		list->mesh._vertices_offset = arrlen(g.vertex_arr);
 		list->mesh.num_vertices = 0;
 		list->mesh._indices_offset = arrlen(g.vertex_index_arr);
@@ -696,7 +706,7 @@ static struct vertex* alloc_mesh_quad(void)
 static void push_mesh_quad(float dx, float dy, float dw, float dh, float sx, float sy, float sw, float sh, uint32_t rgba)
 {
 	int tw, th;
-	get_texture_dim(g.current_texture_id, &tw, &th);
+	get_texture_dim(g.render_mode.texture_id, &tw, &th);
 	const float mu = 1.0f / (float)tw;
 	const float mv = 1.0f / (float)th;
 
@@ -887,6 +897,8 @@ void gui_draw(int width, int height)
 	arrsetlen(g.vertex_arr, 0);
 	arrsetlen(g.vertex_index_arr, 0);
 
+	memset(&g.render_mode, 0, sizeof g.render_mode);
+
 	// actually draw
 	gui_draw1();
 
@@ -899,7 +911,7 @@ void gui_draw(int width, int height)
 	// to while it's being rendered.
 	for (int i=0; i<arrlen(g.draw_list_arr); ++i) {
 		struct draw_list* list = &g.draw_list_arr[i];
-		switch (list->type) {
+		switch (list->render_mode.type) {
 		case MESH_TRIANGLES: {
 			list->mesh.vertices = g.vertex_arr       + list->mesh._vertices_offset;
 			list->mesh.indices  = g.vertex_index_arr + list->mesh._indices_offset;
