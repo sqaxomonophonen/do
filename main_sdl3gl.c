@@ -65,11 +65,13 @@ int main(int argc, char** argv)
 	SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 0);
 	SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 0);
 
+	open_window();
+	housekeep_our_windows(); // <= actually opens the OS window
+
 	SDL_GL_SetSwapInterval(1);
 	// XXX doesn't work? how about that 20 year old broken record :-/
 	// also notice that main_sdl3sdlrenderer.c has no tearing...
 
-	open_window();
 
 	#if 0
 	// XXX do I want this here?
@@ -85,8 +87,6 @@ int main(int argc, char** argv)
 	printf("                  GL_VENDOR: %s\n", glGetString(GL_VENDOR));
 	printf("                GL_RENDERER: %s\n", glGetString(GL_RENDERER));
 
-	housekeep_our_windows();
-
 	gl_init();
 	gui_init();
 
@@ -94,6 +94,7 @@ int main(int argc, char** argv)
 		handle_events();
 		housekeep_our_windows();
 		remove_closed_windows();
+		gui_begin_frame();
 		// XXX subtlety: windows may be tail-appended by gui, and aren't valid
 		// until housekeep_our_windows() has been called, so don't roll
 		// get_num_windows() into the for-loop or we might begin

@@ -15,7 +15,6 @@ struct window {
 	float pixel_ratio;
 	int is_fullscreen;
 	enum window_state state;
-	//int is_closing;
 	void* backend_extra;
 };
 
@@ -96,6 +95,7 @@ enum key_state_flag {
 void gui_init(void);
 void gui_setup_gpu_resources(void);
 void gui_emit_keypress_event(int);
+void gui_begin_frame(void);
 void gui_draw(struct window*);
 
 enum draw_list_type {

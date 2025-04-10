@@ -877,6 +877,9 @@ static void update_fps(void)
 	const int64_t dt = t - g.last_frame_time;
 	g.fps = 1.0f / ((float)dt * 1e-9f);
 	g.last_frame_time = t;
+	#if 0
+	printf("%f\n", g.fps);
+	#endif
 }
 
 static void render_code_pane(void)
@@ -930,13 +933,16 @@ static void gui_draw1(void)
 	}
 }
 
+void gui_begin_frame(void)
+{
+	update_fps();
+}
+
 void gui_draw(struct window* window)
 {
 	assert(window->state == WINDOW_IS_OPEN);
 	g.base_width = window->true_width;
 	g.base_height = window->true_height;
-
-	update_fps();
 
 	// reset draw lists
 	arrsetlen(g.draw_list_arr, 0);
