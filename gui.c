@@ -20,6 +20,14 @@
 #define ATLAS_MIN_SIZE_LOG2 (8)
 #define ATLAS_MAX_SIZE_LOG2 (13)
 
+enum special_codepoint {
+	SPECIAL_CODEPOINT0 = (1<<22),
+	SPECIAL_CODEPOINT_MISSING_CHARACTER,
+	SPECIAL_CODEPOINT_BLOCK,
+	SPECIAL_CODEPOINT_CARET,
+	SPECIAL_CODEPOINT1,
+};
+
 enum pane_type {
 	CODE = 1,
 	WIZARD,
@@ -50,16 +58,9 @@ struct blur_level {
 	float post_scalar;
 };
 
-#if 0
-#define MAX_Y_EXPAND_LEVELS (16)
-#define MAX_BLUR_LEVELS (8)
-#define MAX_CODEPOINT_RANGES (256)
-#endif
-
 struct atlas_lut_info {
-	int index0;
-	int glyph_index;
-	int glyph_x0,glyph_y0,glyph_x1,glyph_y1;
+	int rect_index0;
+	int x0,y0,x1,y1;
 };
 
 struct resize {
@@ -131,7 +132,8 @@ static_assert(sizeof(struct atlas_lut_key)==8, "unexpected size");
 struct font_spec {
 	int font_index;
 	int px;
-	int uses_y_stretch;
+	unsigned uses_y_stretch:1;
+
 	// derived
 	float _px_scale;
 	int _x_spacing;
@@ -140,8 +142,7 @@ struct font_spec {
 };
 
 struct font_config {
-	int num_codepoint_ranges;
-	const int* codepoint_ranges;
+	int* codepoint_range_pairs_arr;
 	float y_scalar_min, y_scalar_max;
 	int num_y_stretch_levels; // XXX maybe calculate automatically?
 	int num_blur_levels;
@@ -301,17 +302,20 @@ static int build_atlas(void)
 
 	struct font_config* fc = &g.font_config;
 
-	assert(fc->num_codepoint_ranges > 0);
+	const int nc = arrlen(fc->codepoint_range_pairs_arr);
+	assert(nc%2==0);
+	const int num_codepoint_ranges = nc/2;
+	assert(num_codepoint_ranges > 0);
 	assert(fc->num_y_stretch_levels > 0);
 	assert(fc->num_blur_levels > 0);
 
 	// check that codepoint ranges are ordered and don't overlap
 	int num_codepoints_requested = 0;
-	for (int i=0; i<fc->num_codepoint_ranges; ++i) {
-		const int r0 = fc->codepoint_ranges[i*2+0];
-		const int r1 = fc->codepoint_ranges[i*2+1];
+	for (int i=0; i<num_codepoint_ranges; ++i) {
+		const int r0 = fc->codepoint_range_pairs_arr[i*2+0];
+		const int r1 = fc->codepoint_range_pairs_arr[i*2+1];
 		assert((r0<=r1) && "bad range");
-		assert((i==0 || r0>fc->codepoint_ranges[i*2-1]) && "range not ordered");
+		assert((i==0 || r0>fc->codepoint_range_pairs_arr[i*2-1]) && "range not ordered");
 		num_codepoints_requested += (r1-r0+1);
 	}
 
@@ -327,27 +331,72 @@ static int build_atlas(void)
 	assert(g.atlas_lut == NULL);
 
 	arrsetlen(g.atlas_pack_rect_arr, 0);
+	static int* glyph_index_arr = NULL;
+	arrsetlen(glyph_index_arr, 0);
 	for (int fsi=0; fsi<fc->num_font_specs; ++fsi) {
 		struct font_spec* spec = &fc->font_specs[fsi];
 		struct font* font = get_font(spec->font_index);
 		stbtt_fontinfo* fontinfo = &font->fontinfo;
 		int max_advance = 0;
-		for (int ci=0; ci<fc->num_codepoint_ranges; ++ci) {
-			for (int codepoint=fc->codepoint_ranges[2*ci]; codepoint<=fc->codepoint_ranges[1+2*ci]; ++codepoint) {
-				const int glyph_index = stbtt_FindGlyphIndex(fontinfo, codepoint);
-				if (glyph_index == 0) continue;
 
-				int advance,lsb;
-				stbtt_GetGlyphHMetrics(fontinfo, glyph_index, &advance, &lsb);
-				//printf("i=%d, adv=%d px=%f\n", glyph_index, advance, advance*g.font_px_scale);
-				if (advance > max_advance) max_advance = advance;
+		// XXX "special codepoints" need a bbox related to the font, so we
+		// steal it from a "boxy character", but this isn't guaranteed to be
+		// present in the font? :)
+		const int boxy_codepoints[] = {'W'};
+		int boxy_glyph_index = -1;
+		for (int i=0; i<ARRAY_LENGTH(boxy_codepoints); ++i) {
+			const int index = stbtt_FindGlyphIndex(fontinfo, boxy_codepoints[i]);
+			if (index <= 0) continue;
+			boxy_glyph_index = index;
+			break;
+		}
+		assert((boxy_glyph_index > 0) && "found no 'boxy' glyph; maybe fix by adding more to `boxy_codepoints[]`?");
+
+		for (int ci=0; ci<num_codepoint_ranges; ++ci) {
+			for (int codepoint=fc->codepoint_range_pairs_arr[2*ci]; codepoint<=fc->codepoint_range_pairs_arr[1+2*ci]; ++codepoint) {
+
+				int glyph_index = -1;
+				if (codepoint < SPECIAL_CODEPOINT0) {
+					glyph_index = stbtt_FindGlyphIndex(fontinfo, codepoint);
+					arrput(glyph_index_arr, glyph_index);
+					if (glyph_index == 0) continue;
+
+					int advance,lsb;
+					stbtt_GetGlyphHMetrics(fontinfo, glyph_index, &advance, &lsb);
+					//printf("i=%d, adv=%d px=%f\n", glyph_index, advance, advance*g.font_px_scale);
+					if (advance > max_advance) max_advance = advance;
+				}
 
 				const int ny = spec->uses_y_stretch ? fc->num_y_stretch_levels : 1;
 				for (int ysi=0; ysi<ny; ++ysi) {
 					const float y_scale = spec->uses_y_stretch ? font_config_get_y_stretch_level_scale(fc, ysi) : 1.0f;
 
 					int x0,y0,x1,y1;
-					stbtt_GetGlyphBitmapBox(fontinfo, glyph_index, spec->_px_scale, y_scale * spec->_px_scale, &x0, &y0, &x1, &y1);
+					if (codepoint < SPECIAL_CODEPOINT0) {
+						assert(glyph_index > 0);
+						stbtt_GetGlyphBitmapBox(fontinfo, glyph_index, spec->_px_scale, y_scale * spec->_px_scale, &x0, &y0, &x1, &y1);
+					} else {
+						assert((SPECIAL_CODEPOINT0 < codepoint) && (codepoint < SPECIAL_CODEPOINT1));
+						stbtt_GetGlyphBitmapBox(
+							fontinfo,
+							boxy_glyph_index,
+							spec->_px_scale, y_scale * spec->_px_scale,
+							&x0, &y0, &x1, &y1);
+						switch (codepoint) {
+						case SPECIAL_CODEPOINT_MISSING_CHARACTER:
+						case SPECIAL_CODEPOINT_BLOCK:
+							// ok: use boxy glyph bbox
+							break;
+						case SPECIAL_CODEPOINT_CARET:
+							// use boxy height, but our own width for caret
+							// (XXX should the width be some fraction of the
+							// height?)
+							x0=0;
+							x1=2;
+							break;
+						default: assert(!"unhandled case");
+						}
+					}
 
 					const int w0 = x1-x0;
 					const int h0 = y1-y0;
@@ -360,12 +409,9 @@ static int build_atlas(void)
 						.codepoint = codepoint,
 					};
 					hmput(g.atlas_lut, key, ((struct atlas_lut_info){
-						.index0 = !has_pixels ? -1 : (int)arrlen(g.atlas_pack_rect_arr),
-						.glyph_index=glyph_index,
-						.glyph_x0=x0,
-						.glyph_y0=y0,
-						.glyph_x1=x1,
-						.glyph_y1=y1,
+						.rect_index0 = !has_pixels ? -1 : (int)arrlen(g.atlas_pack_rect_arr),
+						.x0=x0, .y0=y0,
+						.x1=x1, .y1=y1,
 					}));
 
 					if (!has_pixels) continue;
@@ -415,13 +461,16 @@ static int build_atlas(void)
 	const int atlas_height = 1 << atlas_height_log2;
 	uint8_t* atlas_bitmap = calloc(atlas_width*atlas_height,1);
 
+	int* pgi = glyph_index_arr;
 	for (int fsi=0; fsi<fc->num_font_specs; ++fsi) {
 		struct font_spec* spec = &fc->font_specs[fsi];
 		struct font* font = get_font(spec->font_index);
 		stbtt_fontinfo* fontinfo = &font->fontinfo;
-		for (int ci=0; ci<fc->num_codepoint_ranges; ++ci) {
-			for (int codepoint=fc->codepoint_ranges[2*ci]; codepoint<=fc->codepoint_ranges[1+2*ci]; ++codepoint) {
+		for (int ci=0; ci<num_codepoint_ranges; ++ci) {
+			for (int codepoint=fc->codepoint_range_pairs_arr[2*ci]; codepoint<=fc->codepoint_range_pairs_arr[1+2*ci]; ++codepoint) {
 				const int ny = spec->uses_y_stretch ? fc->num_y_stretch_levels : 1;
+				const int glyph_index = *(pgi++);
+				if (glyph_index == 0) continue;
 				for (int ysi=0; ysi<ny; ++ysi) {
 					const float y_scale = spec->uses_y_stretch ? font_config_get_y_stretch_level_scale(fc, ysi) : 1.0f;
 					struct atlas_lut_key key = {
@@ -430,17 +479,51 @@ static int build_atlas(void)
 						.codepoint = codepoint,
 					};
 					const struct atlas_lut_info info = hmget(g.atlas_lut, key);
-					if (info.index0 == -1) continue;
-					assert(info.index0 >= 0);
-					const stbrp_rect r = g.atlas_pack_rect_arr[info.index0];
-					stbtt_MakeGlyphBitmap(
-						fontinfo,
-						&atlas_bitmap[r.x+(r.y << atlas_width_log2)],
-						r.w, r.h, // XXX these have margins? should I subtract them?
-						atlas_width,
-						spec->_px_scale,
-						y_scale*spec->_px_scale,
-						info.glyph_index);
+					if (info.rect_index0 == -1) continue;
+					assert(info.rect_index0 >= 0);
+					const stbrp_rect r = g.atlas_pack_rect_arr[info.rect_index0];
+					uint8_t* p = &atlas_bitmap[r.x+(r.y << atlas_width_log2)];
+					const int stride = atlas_width;
+					if (codepoint < SPECIAL_CODEPOINT0) {
+						stbtt_MakeGlyphBitmap(
+							fontinfo,
+							p,
+							r.w, r.h, // XXX these have margins? should I subtract them?
+							stride,
+							spec->_px_scale, y_scale*spec->_px_scale,
+							glyph_index);
+					} else {
+						assert((SPECIAL_CODEPOINT0 < codepoint) && (codepoint < SPECIAL_CODEPOINT1));
+						switch (codepoint) {
+						case SPECIAL_CODEPOINT_MISSING_CHARACTER: {
+							const int thickness = 1;
+							for (int y=0; y<r.h; ++y) {
+								uint8_t* next_p = p+stride;
+								for (int x=0; x<r.w; ++x) {
+									const int is_border = 
+										   x<thickness
+										|| y<thickness
+										|| x>=(r.w-thickness-1)
+										|| y>=(r.h-thickness-1)
+										;
+									*(p++) = is_border ? 255 : 0;
+								}
+								p = next_p;
+							}
+						}	break;
+						case SPECIAL_CODEPOINT_BLOCK:
+						case SPECIAL_CODEPOINT_CARET: {
+							for (int y=0; y<r.h; ++y) {
+								uint8_t* next_p = p+stride;
+								for (int x=0; x<r.w; ++x) {
+									*(p++) = 255;
+								}
+								p = next_p;
+							}
+						}	break;
+						default: assert(!"unhandled case");
+						}
+					}
 				}
 			}
 		}
@@ -450,16 +533,16 @@ static int build_atlas(void)
 	arrsetlen(resize_arr, 0);
 	for (int fsi=0; fsi<fc->num_font_specs; ++fsi) {
 		struct font_spec* spec = &fc->font_specs[fsi];
-		for (int ci=0; ci<fc->num_codepoint_ranges; ++ci) {
-			for (int codepoint=fc->codepoint_ranges[2*ci]; codepoint<=fc->codepoint_ranges[1+2*ci]; ++codepoint) {
+		for (int ci=0; ci<num_codepoint_ranges; ++ci) {
+			for (int codepoint=fc->codepoint_range_pairs_arr[2*ci]; codepoint<=fc->codepoint_range_pairs_arr[1+2*ci]; ++codepoint) {
 				struct atlas_lut_key key0 = {
 					.font_spec_index = fsi,
 					.y_stretch_index = 0,
 					.codepoint = codepoint,
 				};
 				const struct atlas_lut_info info0 = hmget(g.atlas_lut, key0);
-				if (info0.index0 == -1) continue;
-				if (info0.glyph_x0==0 && info0.glyph_y0==0 && info0.glyph_x1==0 && info0.glyph_y1==0) continue;
+				if (info0.rect_index0 == -1) continue;
+				if (info0.x0==0 && info0.y0==0 && info0.x1==0 && info0.y1==0) continue;
 
 				const int ny = spec->uses_y_stretch ? fc->num_y_stretch_levels : 1;
 				for (int ysi=0; ysi<ny; ++ysi) {
@@ -469,18 +552,18 @@ static int build_atlas(void)
 						.codepoint = codepoint,
 					};
 					const struct atlas_lut_info info = ysi==0 ? info0 : hmget(g.atlas_lut, key);
-					assert(info.index0 >= 0);
-					const stbrp_rect r0 = g.atlas_pack_rect_arr[info.index0];
+					assert(info.rect_index0 >= 0);
+					const stbrp_rect r0 = g.atlas_pack_rect_arr[info.rect_index0];
 
-					const int src_w=info.glyph_x1-info.glyph_x0;
-					const int src_h=info.glyph_y1-info.glyph_y0;
+					const int src_w=info.x1-info.x0;
+					const int src_h=info.y1-info.y0;
 					assert(src_w>0 && src_h>0);
 					const int src_x=r0.x;
 					const int src_y=r0.y;
 
 					for (int blur_index=1; blur_index<fc->num_blur_levels; ++blur_index) {
 						const struct blur_level* bl = &fc->blur_levels[blur_index];
-						const stbrp_rect rn = g.atlas_pack_rect_arr[info.index0+blur_index];
+						const stbrp_rect rn = g.atlas_pack_rect_arr[info.rect_index0+blur_index];
 
 						const struct blur_level_metrics m = get_blur_level_metrics(bl, src_w, src_h);
 
@@ -566,16 +649,16 @@ static int build_atlas(void)
 
 		for (int fsi=0; fsi<fc->num_font_specs; ++fsi) {
 			struct font_spec* spec = &fc->font_specs[fsi];
-			for (int ci=0; ci<fc->num_codepoint_ranges; ++ci) {
-				for (int codepoint=fc->codepoint_ranges[2*ci]; codepoint<=fc->codepoint_ranges[1+2*ci]; ++codepoint) {
+			for (int ci=0; ci<num_codepoint_ranges; ++ci) {
+				for (int codepoint=fc->codepoint_range_pairs_arr[2*ci]; codepoint<=fc->codepoint_range_pairs_arr[1+2*ci]; ++codepoint) {
 					struct atlas_lut_key key0 = {
 						.font_spec_index = fsi,
 						.y_stretch_index = 0,
 						.codepoint = codepoint,
 					};
 					const struct atlas_lut_info info0 = hmget(g.atlas_lut, key0);
-					if (info0.index0 == -1) continue;
-					if (info0.glyph_x0==0 && info0.glyph_y0==0 && info0.glyph_x1==0 && info0.glyph_y1==0) continue;
+					if (info0.rect_index0 == -1) continue;
+					if (info0.x0==0 && info0.y0==0 && info0.x1==0 && info0.y1==0) continue;
 					const int ny = spec->uses_y_stretch ? fc->num_y_stretch_levels : 1;
 					for (int ysi=0; ysi<ny; ++ysi) {
 						struct atlas_lut_key key = {
@@ -584,7 +667,7 @@ static int build_atlas(void)
 							.codepoint = codepoint,
 						};
 						const struct atlas_lut_info info = hmget(g.atlas_lut, key);
-						const stbrp_rect rn = g.atlas_pack_rect_arr[info.index0+blur_index];
+						const stbrp_rect rn = g.atlas_pack_rect_arr[info.rect_index0+blur_index];
 
 						sep2dconv_execute(
 							&kernel,
@@ -617,8 +700,6 @@ static int build_atlas(void)
 
 	return 1;
 }
-
-static const int codepoint_ranges_latin1[] = {0x20, 0xff};
 
 static const struct blur_level default_blur_levels[] = {
 	{
@@ -659,6 +740,22 @@ static struct font_spec default_font_specs[] = {
 	},
 };
 
+static void fc_add_codepoint_range(struct font_config* fc, int first, int last)
+{
+	arrput(fc->codepoint_range_pairs_arr, first);
+	arrput(fc->codepoint_range_pairs_arr, last);
+}
+
+static void fc_add_latin1(struct font_config* fc)
+{
+	fc_add_codepoint_range(fc, 0x20, 0xff);
+}
+
+static void fc_add_special(struct font_config* fc)
+{
+	fc_add_codepoint_range(fc, (SPECIAL_CODEPOINT0+1), (SPECIAL_CODEPOINT1-1));
+}
+
 void gui_init(void)
 {
 	g.atlas_texture_id = -1;
@@ -675,8 +772,9 @@ void gui_init(void)
 	}));
 
 	struct font_config* fc = &g.font_config;
-	fc->num_codepoint_ranges = ARRAY_LENGTH(codepoint_ranges_latin1)/2;
-	fc->codepoint_ranges = codepoint_ranges_latin1;
+	arrsetlen(fc->codepoint_range_pairs_arr, 0);
+	fc_add_latin1(fc);
+	fc_add_special(fc);
 	fc->y_scalar_min = default_y_scalar_min;
 	fc->y_scalar_max = default_y_scalar_max;
 	fc->num_y_stretch_levels = 3;
@@ -900,19 +998,19 @@ static void put_char(int codepoint)
 	};
 	const struct atlas_lut_info info = hmget(g.atlas_lut, key);
 
-	const int has_pixels = (info.index0 >= 0);
+	const int has_pixels = (info.rect_index0 >= 0);
 	if (has_pixels) {
-		const float w = info.glyph_x1 - info.glyph_x0;
-		const float h = info.glyph_y1 - info.glyph_y0;
+		const float w = info.x1 - info.x0;
+		const float h = info.y1 - info.y0;
 
 		for (int i=0; i<fc->num_blur_levels; ++i) {
 			const struct blur_level* b = &fc->blur_levels[i];
-			const stbrp_rect rect = g.atlas_pack_rect_arr[i+info.index0];
+			const stbrp_rect rect = g.atlas_pack_rect_arr[i+info.rect_index0];
 			const float r = b->radius;
 			push_mesh_quad(
-				g.cursor_x + ((float)info.glyph_x0) - r,
+				g.cursor_x + ((float)info.x0) - r,
 				//g.cursor_y + ((float)info.glyph_y0) - r - ascent,
-				g.cursor_y + ((float)info.glyph_y0) - r,
+				g.cursor_y + ((float)info.y0) - r,
 				w+r*2   , h+r*2 ,
 				rect.x   , rect.y ,
 				rect.w-1 , rect.h-1,
@@ -1010,6 +1108,21 @@ static void render_code_pane(struct pane* pane)
 		// wrong... text formatting is hard!
 		put_char(c);
 	}
+
+	g.cursor_x = g.cursor_x0;
+	g.cursor_y += 40;
+	for (int i=0;i<4;++i) put_char(SPECIAL_CODEPOINT_MISSING_CHARACTER);
+	for (int i=0;i<4;++i) put_char(SPECIAL_CODEPOINT_BLOCK);
+	for (int i=0;i<4;++i) put_char(SPECIAL_CODEPOINT_CARET);
+
+	for (int j=0;j<5;j++) {
+		g.cursor_x = g.cursor_x0;
+		g.cursor_y += 40;
+		set_color3f(.9,j,.9);
+		for (int i=0;i<4;++i) put_char(SPECIAL_CODEPOINT_BLOCK);
+	}
+
+
 }
 
 static void gui_draw1(void)
