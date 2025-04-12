@@ -331,6 +331,7 @@ static int build_atlas(void)
 	arrsetlen(g.atlas_pack_rect_arr, 0);
 	static int* glyph_index_arr = NULL;
 	arrsetlen(glyph_index_arr, 0);
+
 	for (int fsi=0; fsi<fc->num_font_specs; ++fsi) {
 		struct font_spec* spec = &fc->font_specs[fsi];
 		struct font* font = get_font(spec->font_index);
@@ -356,23 +357,24 @@ static int build_atlas(void)
 				int glyph_index = -1;
 				if (codepoint < SPECIAL_CODEPOINT0) {
 					glyph_index = stbtt_FindGlyphIndex(fontinfo, codepoint);
-					arrput(glyph_index_arr, glyph_index);
-					if (glyph_index == 0) continue;
-
-					int advance,lsb;
-					stbtt_GetGlyphHMetrics(fontinfo, glyph_index, &advance, &lsb);
-					//printf("i=%d, adv=%d px=%f\n", glyph_index, advance, advance*g.font_px_scale);
-					if (advance > max_advance) max_advance = advance;
+					if (glyph_index > 0) {
+						int advance,lsb;
+						stbtt_GetGlyphHMetrics(fontinfo, glyph_index, &advance, &lsb);
+						//printf("i=%d, adv=%d px=%f\n", glyph_index, advance, advance*g.font_px_scale);
+						if (advance > max_advance) max_advance = advance;
+					}
 				}
+				arrput(glyph_index_arr, glyph_index);
 
 				const int ny = spec->uses_y_stretch ? fc->num_y_stretch_levels : 1;
 				for (int ysi=0; ysi<ny; ++ysi) {
 					const float y_scale = spec->uses_y_stretch ? font_config_get_y_stretch_level_scale(fc, ysi) : 1.0f;
 
-					int x0,y0,x1,y1;
+					int x0=0,y0=0,x1=0,y1=0;
 					if (codepoint < SPECIAL_CODEPOINT0) {
-						assert(glyph_index > 0);
-						stbtt_GetGlyphBitmapBox(fontinfo, glyph_index, spec->_px_scale, y_scale * spec->_px_scale, &x0, &y0, &x1, &y1);
+						if (glyph_index > 0) {
+							stbtt_GetGlyphBitmapBox(fontinfo, glyph_index, spec->_px_scale, y_scale * spec->_px_scale, &x0, &y0, &x1, &y1);
+						}
 					} else {
 						assert((SPECIAL_CODEPOINT0 < codepoint) && (codepoint < SPECIAL_CODEPOINT1));
 						stbtt_GetGlyphBitmapBox(
@@ -469,6 +471,7 @@ static int build_atlas(void)
 				const int ny = spec->uses_y_stretch ? fc->num_y_stretch_levels : 1;
 				const int glyph_index = *(pgi++);
 				if (glyph_index == 0) continue;
+
 				for (int ysi=0; ysi<ny; ++ysi) {
 					const float y_scale = spec->uses_y_stretch ? font_config_get_y_stretch_level_scale(fc, ysi) : 1.0f;
 					struct atlas_lut_key key = {
@@ -1112,7 +1115,7 @@ static void render_code_pane(struct pane* pane)
 	g.cursor_x = g.cursor_x0;
 	g.cursor_y += 40;
 	for (int i=0;i<4;++i) put_char(SPECIAL_CODEPOINT_MISSING_CHARACTER);
-	for (int i=0;i<4;++i) put_char(SPECIAL_CODEPOINT_BLOCK);
+	for (int i=0;i<2;++i) put_char(' ');
 	for (int i=0;i<4;++i) put_char(SPECIAL_CODEPOINT_CARET);
 
 	for (int j=0;j<5;j++) {
