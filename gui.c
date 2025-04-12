@@ -310,13 +310,11 @@ static int build_atlas(void)
 	assert(fc->num_blur_levels > 0);
 
 	// check that codepoint ranges are ordered and don't overlap
-	int num_codepoints_requested = 0;
 	for (int i=0; i<num_codepoint_ranges; ++i) {
 		const int r0 = fc->codepoint_range_pairs_arr[i*2+0];
 		const int r1 = fc->codepoint_range_pairs_arr[i*2+1];
 		assert((r0<=r1) && "bad range");
 		assert((i==0 || r0>fc->codepoint_range_pairs_arr[i*2-1]) && "range not ordered");
-		num_codepoints_requested += (r1-r0+1);
 	}
 
 	for (int i=0; i<fc->num_font_specs; ++i) {

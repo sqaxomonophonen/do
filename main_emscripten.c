@@ -14,7 +14,6 @@
 #include <EGL/egl.h>
 
 #include "utf8.h"
-#include "gui.h"
 #include "impl_gl.h"
 
 static struct {
@@ -148,7 +147,13 @@ static void main_loop(void)
 	const int canvas_width = canvas_get_width();
 	const int canvas_height = canvas_get_height();
 	gl_frame(canvas_width, canvas_height);
-	gui_draw(canvas_width, canvas_height);
+	struct window* w = get_window(0);
+	w->true_width = canvas_width;
+	w->true_height = canvas_height;
+	w->width = w->true_width;
+	w->height = w->true_height;
+	w->pixel_ratio = 1;
+	gui_draw(w);
 	gl_render_gui_draw_lists();
 }
 
@@ -161,6 +166,9 @@ int main(int argc, char** argv)
 {
 	g.num_cores = emscripten_navigator_hardware_concurrency();
 	g.start_time = emscripten_get_now();
+
+	open_window();
+	get_window(0)->state = WINDOW_IS_OPEN;
 
 	const char* window = EMSCRIPTEN_EVENT_TARGET_WINDOW;
 	emscripten_set_keydown_callback(window, NULL, false, handle_key_event);
@@ -178,7 +186,7 @@ int main(int argc, char** argv)
 	#endif
 
 	gl_init();
-	gui_init();
+	common_main_init();
 	emscripten_set_main_loop(main_loop, 0, false);
 
 	return EXIT_SUCCESS;

@@ -90,9 +90,7 @@ int main(int argc, char** argv)
 	printf("                GL_RENDERER: %s\n", glGetString(GL_RENDERER));
 
 	gl_init();
-	gig_init();
-	fonts_init();
-	gui_init();
+	common_main_init();
 
 	while (!g0.exiting && get_num_windows() > 0) {
 		handle_events();
