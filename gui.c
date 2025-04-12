@@ -1121,8 +1121,6 @@ static void render_code_pane(struct pane* pane)
 		set_color3f(.9,j,.9);
 		for (int i=0;i<4;++i) put_char(SPECIAL_CODEPOINT_BLOCK);
 	}
-
-
 }
 
 static void gui_draw1(void)

@@ -174,7 +174,6 @@ ui (main):
    contains lots of unassigned codepoints and such; these are trivial to skip
    with stb_truetype.h, but impossible to reliably skip with web.
 
-
 video synth engine: I'm seriously considering something more like TIC-80 than
 Hydra, i.e. low-res CPU-driven, rather than high-res GPU-driven. because:
  - it feels as if the gap between low-end and high-end CPUs is way smaller than
@@ -259,4 +258,21 @@ note, I also briefly considered using SDL_Renderer, but:
    to the basics, but with gl/gpu you have a lot more options)
 
 
+
+rule of thumb: the software should have the same reliability as you'd expect
+from a real instrument when playing live. this is more of a "soft rule", or a
+guideline:
+ - undo/redo is well-defined for a single user, but ill-defined in a multi-user
+   environment. this is similar to how you're unlikely to get merge conflicts
+   when you're the only committer on a repository, but the risk becomes real
+   when you start adding people. thus I'm considering not having undo/redo at
+   all (I don't want a ctrl+z that only works sometimes). going a little
+   deeper, Do is inspired by Flok/Strudel, and Flok uses Yjs for "collaborative
+   editing"; Yjs uses the "conflict-free replicated data type" (CRDT) model
+   which has a "magic step" you must provide: an algorithm that resolves
+   conflicts! I don't trust such magic to JustWork(tm), and even less when the
+   result must be not only human-readable but also machine-readable (a 1-in-100
+   glitch sounds more tolerable in a text document than in source code?). also,
+   undo/redo is less useful when you already have a "pending commits" system
+   like what I'm planning, because you can change your mind before committing.
 

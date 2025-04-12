@@ -17,5 +17,5 @@ echo 3RD PARTY:
 wc -l $(git ls-files | 3rd | blacklist)
 
 echo
-echo OWN:
+echo OURS:
 wc -l $(git ls-files | ours | blacklist)
