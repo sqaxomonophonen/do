@@ -11,6 +11,8 @@
 #include "impl_gl.h"
 
 #include "main.h"
+#include "gig.h"
+#include "fonts.h"
 
 static struct {
 	SDL_GLContext shared_gl_context;
@@ -88,6 +90,8 @@ int main(int argc, char** argv)
 	printf("                GL_RENDERER: %s\n", glGetString(GL_RENDERER));
 
 	gl_init();
+	gig_init();
+	fonts_init();
 	gui_init();
 
 	while (!g0.exiting && get_num_windows() > 0) {

@@ -5,6 +5,9 @@ language/runtime:
 
  - "close to forth", but without much attempt to be "standards compliant"
 
+ - word size is 32-bit? so stack elements are 32-bit. ops like + and * treat
+   them as float32, but variants like i+ i* for int32 also exists?
+
  - the program is repeatedly executed to keep event buffers full (so your
    program gets asked to fill buffers within a time interval), but also to
    "vet" pending changes against various errors? program execution is frequent
@@ -155,6 +158,21 @@ ui (main):
    - mini step sequencer: you can already do step sequences with strings, but a
      mini step sequences could be: binary, 1-4 rows?
 
+ - while it would be nice to support installed/OS fonts, and/or to load fonts
+   via file dialogs, I think it's initially sufficient to only allow people to
+   choose between a few "built-in" fonts. on desktop, maybe allow a font dir or
+   a fonts.txt. reasons:
+    - stb_truetype.h was not built with security in mind (see warning at top),
+      so being a little careful with the list of fonts may be a good thing?
+    - stb_truetype.h only supports TTF/OTF, but there are other font formats
+      (WOFF/WOFF2).
+    - support for OS/installed fonts, and/or file dialogs is complicated :)
+   web could actually use its own font renderer? but there's an annoying
+   problem: you can't ask the Font Loading API which glyphs are present/missing
+   in a font; the current design configures which codepoint ranges we want, and
+   renders the atlas up front, but codepoint ranges are typically simple and
+   contains lots of unassigned codepoints and such; these are trivial to skip
+   with stb_truetype.h, but impossible to reliably skip with web.
 
 
 video synth engine: I'm seriously considering something more like TIC-80 than
@@ -232,10 +250,13 @@ note, I also briefly considered using SDL_Renderer, but:
    - screen flickers in fullscreen (I don't think it was a bug in my code)
    - textures cannot be shared between multple windows
    - vertex colors must be float[4] which is a bit overkill; 32B per vertex
-	 instead of 20B (this is also something that can be optimized even further
-	 on gl/gpu renderers)
+     instead of 20B (this is also something that can be optimized even further
+     on gl/gpu renderers)
  - it has support for many backends, even software rendering, but I'm not sure
    it has much value? (look at llvmpipe if software rendering has interest?)
  - it's probably not too hard to add it again if desired (unless the the code
    drifts out of "sdl renderer territory"; with sdl renderer you have to stick
    to the basics, but with gl/gpu you have a lot more options)
+
+
+

@@ -29,7 +29,8 @@ if len(s)>0: print(s)
 */
 
 #include "font0.h"
-unsigned char font0_data[] = {
+const char* font0_name = "Roboto Mono - Regular";
+const unsigned char font0_data[] = {
 
 0,1,0,0,0,14,0,128,0,3,0,96,71,83,85,66,54,189,53,203,0,0,2,32,0,0,2,168,79,
 83,47,50,151,183,193,116,0,0,1,192,0,0,0,96,83,84,65,84,231,128,204,30,0,0,1,
@@ -3444,4 +3445,4 @@ unsigned char font0_data[] = {
 
 };
 
-size_t font0_size = sizeof(font0_data);
+const size_t font0_size = sizeof(font0_data);

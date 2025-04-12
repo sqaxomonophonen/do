@@ -1,0 +1,25 @@
+
+ - stb_ds.h dynamic arrays (using the arr*() macros) should have an `_arr`
+   suffix (I'm normally not fan of "type in variable name" conventions, but
+   confusing plain old pointers with dynamic arrays is bad)
+
+ - Prefix "out/return arguments" with `out_`. These are pointer arguments used
+   to return multiple/optional values. It should typically be valid to pass
+   NULL if you don't want a particular return value.
+
+ - Don't use `typedef` unless a type must be easily replaceable or
+   configurable. In particular don't typedef structs, enums, etc.
+
+ - It's hard to be 100% consistent with function argument ordering, but the
+   rough guideline is:
+   - For "struct methods", the struct type is the first argument, example:
+       void foo_set_x(struct foo* foo, int x) {...}
+   - For functions that have "sources" and a "destination", place the
+	 destination before source (like `memcpy(dst,src,n)`)
+   - Place "optional" arguments last (arguments that accepts a "nullish" value
+	 like NULL, -1, etc). This also includes out/return arguments because
+	 they're typically optional (although this is slightly inconsistent with
+	 the source/destination rule).
+
+ - As for "visual style" in general, you can do what you like unless it's
+   "invasive" (like using spaces instead of tabs)
