@@ -873,28 +873,24 @@ static uint32_t make_hdr_rgba(int blur_level_index, float* color)
 	return 0xff000000 | cu;
 }
 
-static void get_current_line_metrics(int* out_advance, int* out_ascent)
+static void get_current_line_metrics(float* out_ascent, float* out_descent, float* out_line_gap)
 {
 	struct font_spec* spec = get_current_font_spec();
-	const int advance_units = spec->_ascent - spec->_descent + spec->_line_gap;
 	const float scale = spec->_px_scale * get_current_y_stretch_scale();
-	const int advance = (int)ceilf((float)advance_units * scale);
-	const int ascent = (int)ceilf((float)spec->_ascent * scale);
-	if (out_advance) *out_advance = advance;
-	if (out_ascent) *out_ascent = ascent;
+	if (out_ascent) *out_ascent = (float)spec->_ascent * scale;
+	if (out_descent) *out_descent = (float)spec->_descent * scale;
+	if (out_line_gap) *out_line_gap = (float)spec->_line_gap * scale;
 }
 
 static void put_char(int codepoint)
 {
-	int line_advance, ascent;
-	get_current_line_metrics(&line_advance, &ascent);
-
 	struct font_config* fc = &g.font_config;
 	if (codepoint < ' ') {
-		if (codepoint == '\n') {
-			g.cursor_x = g.cursor_x0;
-			g.cursor_y += line_advance;
-		}
+		// XXX I might want a mode that handles '\n' here? The problem is that
+		// if font parameters (size, y stretch, etc) have a tendency to change
+		// in the middle of a line, then we need look-ahead because line
+		// spacing might be changed by the characters ahead. So for now we
+		// don't handle '\n' here.
 		return;
 	}
 	struct atlas_lut_key key = {
@@ -912,7 +908,8 @@ static void put_char(int codepoint)
 		const float r = b->radius;
 		push_mesh_quad(
 			g.cursor_x + ((float)info.glyph_x0) - r,
-			g.cursor_y + ((float)info.glyph_y0) - r - ascent,
+			//g.cursor_y + ((float)info.glyph_y0) - r - ascent,
+			g.cursor_y + ((float)info.glyph_y0) - r,
 			w+r*2   , h+r*2 ,
 			rect.x   , rect.y ,
 			rect.w-1 , rect.h-1,
@@ -974,25 +971,6 @@ static void render_code_pane(struct pane* pane)
 	set_blend_mode(ADDITIVE);
 	set_texture(g.atlas_texture_id);
 
-	#if 0
-	g.cursor_x = 50;
-	g.cursor_y = 50;
-
-	const float m = fabsf(sinf(get_nanoseconds() * 2e-9)) * 8.0f;
-
-	set_y_stretch_index(0);
-	set_color3f(1*m,1*m,1*m);
-	for (int i=0; i<26; ++i) put_char(i+'a');
-
-	set_y_stretch_index(1);
-	set_color3f(1*m,.3*m,1*m);
-	for (int i=0; i<26; ++i) put_char(i+'A');
-
-	set_y_stretch_index(2);
-	set_color3f(1*m,.3*m,.3*m);
-	for (int i=0; i<26; ++i) put_char(i+' '+1);
-	#endif
-
 	int px0,py0,px1,py1;
 	get_pane_position(pane, &px0, &py0, &px1, &py1, NULL, NULL);
 
@@ -1011,18 +989,20 @@ static void render_code_pane(struct pane* pane)
 		struct fat_char* fc = &doc->fat_char_arr[i];
 		const unsigned c = fc->codepoint;
 		if (c == '\n') {
-			set_y_stretch_index((line_index/2) % 3);
+			float /*ascent0,*/ descent0,   line_gap0;
+			float   ascent1, /*descent1,*/ line_gap1;
+			get_current_line_metrics(/*&ascent0*/NULL, &descent0, &line_gap0);
+			set_y_stretch_index((line_index/2) % 3); // XXX look up proper stretch index for current line
+			get_current_line_metrics(&ascent1, /*&descent1*/NULL, &line_gap1);
+			const float y_advance = ascent1 - descent0 + (line_gap0 + line_gap1)*.5f;
 			set_color3f(.9,line_index%4,.9);
 			line_index++;
+			g.cursor_x = g.cursor_x0;
+			g.cursor_y += (int)ceilf(y_advance);
 		}
-		#if 0
-		if (c < 32) {
-			if (c == '\n') {
-				++line_index;
-			}
-			continue;
-		}
-		#endif
+
+		// XXX ostensibly I also need to subtract "ascent" from y? but it looks
+		// wrong... text formatting is hard!
 		put_char(c);
 	}
 }
