@@ -899,23 +899,28 @@ static void put_char(int codepoint)
 		.codepoint = codepoint,
 	};
 	const struct atlas_lut_info info = hmget(g.atlas_lut, key);
-	const float w = info.glyph_x1 - info.glyph_x0;
-	const float h = info.glyph_y1 - info.glyph_y0;
 
-	for (int i=0; i<fc->num_blur_levels; ++i) {
-		const struct blur_level* b = &fc->blur_levels[i];
-		const stbrp_rect rect = g.atlas_pack_rect_arr[i+info.index0];
-		const float r = b->radius;
-		push_mesh_quad(
-			g.cursor_x + ((float)info.glyph_x0) - r,
-			//g.cursor_y + ((float)info.glyph_y0) - r - ascent,
-			g.cursor_y + ((float)info.glyph_y0) - r,
-			w+r*2   , h+r*2 ,
-			rect.x   , rect.y ,
-			rect.w-1 , rect.h-1,
-			make_hdr_rgba(i, g.current_color)
-		);
+	const int has_pixels = (info.index0 >= 0);
+	if (has_pixels) {
+		const float w = info.glyph_x1 - info.glyph_x0;
+		const float h = info.glyph_y1 - info.glyph_y0;
+
+		for (int i=0; i<fc->num_blur_levels; ++i) {
+			const struct blur_level* b = &fc->blur_levels[i];
+			const stbrp_rect rect = g.atlas_pack_rect_arr[i+info.index0];
+			const float r = b->radius;
+			push_mesh_quad(
+				g.cursor_x + ((float)info.glyph_x0) - r,
+				//g.cursor_y + ((float)info.glyph_y0) - r - ascent,
+				g.cursor_y + ((float)info.glyph_y0) - r,
+				w+r*2   , h+r*2 ,
+				rect.x   , rect.y ,
+				rect.w-1 , rect.h-1,
+				make_hdr_rgba(i, g.current_color)
+			);
+		}
 	}
+
 	struct font_spec* spec = &fc->font_specs[g.current_font_spec_index];
 	g.cursor_x += spec->_x_spacing;
 }
