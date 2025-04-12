@@ -494,17 +494,19 @@ static int build_atlas(void)
 							glyph_index);
 					} else {
 						assert((SPECIAL_CODEPOINT0 < codepoint) && (codepoint < SPECIAL_CODEPOINT1));
+						const int w = r.w-1;
+						const int h = r.h-1;
 						switch (codepoint) {
 						case SPECIAL_CODEPOINT_MISSING_CHARACTER: {
 							const int thickness = 1;
-							for (int y=0; y<r.h; ++y) {
+							for (int y=0; y<h; ++y) {
 								uint8_t* next_p = p+stride;
-								for (int x=0; x<r.w; ++x) {
-									const int is_border = 
+								for (int x=0; x<w; ++x) {
+									const int is_border =
 										   x<thickness
 										|| y<thickness
-										|| x>=(r.w-thickness-1)
-										|| y>=(r.h-thickness-1)
+										|| x>=(w-thickness)
+										|| y>=(h-thickness)
 										;
 									*(p++) = is_border ? 255 : 0;
 								}
@@ -513,9 +515,9 @@ static int build_atlas(void)
 						}	break;
 						case SPECIAL_CODEPOINT_BLOCK:
 						case SPECIAL_CODEPOINT_CARET: {
-							for (int y=0; y<r.h; ++y) {
+							for (int y=0; y<h; ++y) {
 								uint8_t* next_p = p+stride;
-								for (int x=0; x<r.w; ++x) {
+								for (int x=0; x<w; ++x) {
 									*(p++) = 255;
 								}
 								p = next_p;
