@@ -58,30 +58,38 @@ struct blur_level {
 	float post_scalar;
 };
 
+struct rect {
+	int x,y,w,h;
+};
+static inline struct rect make_rect(int x, int y, int w, int h)
+{
+	return (struct rect){
+		.x=x, .y=y,
+		.w=w, .h=h,
+	};
+}
+
 struct atlas_lut_info {
 	int rect_index0;
-	int x0,y0,x1,y1;
+	struct rect rect;
 };
 
 struct resize {
-	int src_w, src_h;
-	int dst_w, dst_h;
-	int src_x, src_y;
-	int dst_x, dst_y;
+	struct rect src, dst;
 };
 
 static int resize_dim_compar(const struct resize* a, const struct resize* b)
 {
-	const int d0 = a->src_w - b->src_w;
+	const int d0 = a->src.w - b->src.w;
 	if (d0!=0) return d0;
 
-	const int d1 = a->src_h - b->src_h;
+	const int d1 = a->src.h - b->src.h;
 	if (d1!=0) return d1;
 
-	const int d2 = a->dst_w - b->dst_w;
+	const int d2 = a->dst.w - b->dst.w;
 	if (d2!=0) return d2;
 
-	const int d3 = a->dst_h - b->dst_h;
+	const int d3 = a->dst.h - b->dst.h;
 	return d3;
 }
 
@@ -93,16 +101,16 @@ static int resize_compar(const void* va, const void* vb)
 	const struct resize* a = va;
 	const struct resize* b = vb;
 
-	const int d0 = a->src_x - b->src_x;
+	const int d0 = a->src.x - b->src.x;
 	if (d0!=0) return d0;
 
-	const int d1 = a->src_y - b->src_y;
+	const int d1 = a->src.y - b->src.y;
 	if (d1!=0) return d1;
 
-	const int d2 = a->dst_x - b->dst_x;
+	const int d2 = a->dst.x - b->dst.x;
 	if (d2!=0) return d2;
 
-	const int d3 = a->dst_y - b->dst_y;
+	const int d3 = a->dst.y - b->dst.y;
 	return d3;
 }
 
@@ -410,8 +418,7 @@ static int build_atlas(void)
 					};
 					hmput(g.atlas_lut, key, ((struct atlas_lut_info){
 						.rect_index0 = !has_pixels ? -1 : (int)arrlen(g.atlas_pack_rect_arr),
-						.x0=x0, .y0=y0,
-						.x1=x1, .y1=y1,
+						.rect = make_rect(x0,y0,w0,h0),
 					}));
 
 					if (!has_pixels) continue;
@@ -545,7 +552,7 @@ static int build_atlas(void)
 				};
 				const struct atlas_lut_info info0 = hmget(g.atlas_lut, key0);
 				if (info0.rect_index0 == -1) continue;
-				if (info0.x0==0 && info0.y0==0 && info0.x1==0 && info0.y1==0) continue;
+				if (info0.rect.w==0 || info0.rect.h==0) continue;
 
 				const int ny = spec->uses_y_stretch ? fc->num_y_stretch_levels : 1;
 				for (int ysi=0; ysi<ny; ++ysi) {
@@ -558,8 +565,8 @@ static int build_atlas(void)
 					assert(info.rect_index0 >= 0);
 					const stbrp_rect r0 = g.atlas_pack_rect_arr[info.rect_index0];
 
-					const int src_w=info.x1-info.x0;
-					const int src_h=info.y1-info.y0;
+					const int src_w=info.rect.w;
+					const int src_h=info.rect.h;
 					assert(src_w>0 && src_h>0);
 					const int src_x=r0.x;
 					const int src_y=r0.y;
@@ -576,10 +583,8 @@ static int build_atlas(void)
 						const int dst_y=rn.y + m.blurpx;
 
 						arrput(resize_arr, ((struct resize){
-							.src_w=src_w, .src_h=src_h,
-							.dst_w=dst_w, .dst_h=dst_h,
-							.src_x=src_x, .src_y=src_y,
-							.dst_x=dst_x, .dst_y=dst_y,
+							.src = make_rect(src_x, src_y, src_w, src_h),
+							.dst = make_rect(dst_x, dst_y, dst_w, dst_h),
 						}));
 					}
 				}
@@ -594,27 +599,27 @@ static int build_atlas(void)
 	for (int i=0; i<num_resizes; ++i) {
 		struct resize rz = resize_arr[i];
 		if (i==0 || resize_dim_compar(&resize_arr[i-1], &rz) != 0) {
-			assert(rz.src_w>0 && rz.src_h>0 && rz.dst_w>0 && rz.dst_h>0);
+			assert(rz.src.w>0 && rz.src.h>0 && rz.dst.w>0 && rz.dst.h>0);
 			stbir_free_samplers(&re); // safe when zero-initialized
 			stbir_resize_init(
 				&re,
-				NULL, rz.src_w, rz.src_h, -1,
-				NULL, rz.dst_w, rz.dst_h, -1,
+				NULL, rz.src.w, rz.src.h, -1,
+				NULL, rz.dst.w, rz.dst.h, -1,
 				STBIR_1CHANNEL, STBIR_TYPE_UINT8);
 			stbir_set_edgemodes(&re, STBIR_EDGE_ZERO, STBIR_EDGE_ZERO);
 			stbir_build_samplers(&re);
 			++num_samplers;
 		}
 
-		assert((0 <= rz.src_x) && (rz.src_x < atlas_width));
-		assert((0 <= rz.src_y) && (rz.src_y < atlas_height));
-		assert((0 <= (rz.src_x+rz.src_w)) && ((rz.src_x+rz.src_w) <= atlas_width));
-		assert((0 <= (rz.src_y+rz.src_h)) && ((rz.src_y+rz.src_h) <= atlas_height));
+		assert((0 <= rz.src.x) && (rz.src.x < atlas_width));
+		assert((0 <= rz.src.y) && (rz.src.y < atlas_height));
+		assert((0 <= (rz.src.x+rz.src.w)) && ((rz.src.x+rz.src.w) <= atlas_width));
+		assert((0 <= (rz.src.y+rz.src.h)) && ((rz.src.y+rz.src.h) <= atlas_height));
 
 		stbir_set_buffer_ptrs(
 			&re,
-			atlas_bitmap + rz.src_x + rz.src_y*atlas_width, atlas_width,
-			atlas_bitmap + rz.dst_x + rz.dst_y*atlas_width, atlas_width);
+			atlas_bitmap + rz.src.x + rz.src.y*atlas_width, atlas_width,
+			atlas_bitmap + rz.dst.x + rz.dst.y*atlas_width, atlas_width);
 		stbir_resize_extended(&re);
 	}
 	stbir_free_samplers(&re);
@@ -661,7 +666,7 @@ static int build_atlas(void)
 					};
 					const struct atlas_lut_info info0 = hmget(g.atlas_lut, key0);
 					if (info0.rect_index0 == -1) continue;
-					if (info0.x0==0 && info0.y0==0 && info0.x1==0 && info0.y1==0) continue;
+					if (info0.rect.w==0 || info0.rect.h==0) continue;
 					const int ny = spec->uses_y_stretch ? fc->num_y_stretch_levels : 1;
 					for (int ysi=0; ysi<ny; ++ysi) {
 						struct atlas_lut_key key = {
@@ -807,9 +812,14 @@ void gui_setup_gpu_resources(void)
 	build_atlas();
 }
 
-void gui_emit_keypress_event(int keycode)
+void gui_on_key(int keycode)
 {
-	// TODO
+	printf("TODO key [%d]\n", keycode);
+}
+
+void gui_on_text(const char* text)
+{
+	printf("TODO text [%s]\n", text);
 }
 
 static void set_blend_mode(enum blend_mode blend_mode)
@@ -817,13 +827,13 @@ static void set_blend_mode(enum blend_mode blend_mode)
 	g.render_mode.blend_mode = blend_mode;
 }
 
-static void set_scissor(int x, int y, int w, int h)
+static void set_scissor_rect(struct rect* r)
 {
 	g.render_mode.do_scissor = 1;
-	g.render_mode.scissor_x = x;
-	g.render_mode.scissor_y = y;
-	g.render_mode.scissor_w = w;
-	g.render_mode.scissor_h = h;
+	g.render_mode.scissor_x = r->x;
+	g.render_mode.scissor_y = r->y;
+	g.render_mode.scissor_w = r->w;
+	g.render_mode.scissor_h = r->h;
 }
 
 static void set_no_scissor(void)
@@ -1003,17 +1013,16 @@ static void put_char(int codepoint)
 
 	const int has_pixels = (info.rect_index0 >= 0);
 	if (has_pixels) {
-		const float w = info.x1 - info.x0;
-		const float h = info.y1 - info.y0;
+		const float w = info.rect.w;
+		const float h = info.rect.h;
 
 		for (int i=0; i<fc->num_blur_levels; ++i) {
 			const struct blur_level* b = &fc->blur_levels[i];
 			const stbrp_rect rect = g.atlas_pack_rect_arr[i+info.rect_index0];
 			const float r = b->radius;
 			push_mesh_quad(
-				g.cursor_x + ((float)info.x0) - r,
-				//g.cursor_y + ((float)info.glyph_y0) - r - ascent,
-				g.cursor_y + ((float)info.y0) - r,
+				g.cursor_x + ((float)info.rect.x) - r, // XXX should have `- ascent` too, but looks wrong?
+				g.cursor_y + ((float)info.rect.y) - r,
 				w+r*2   , h+r*2 ,
 				rect.x   , rect.y ,
 				rect.w-1 , rect.h-1,
@@ -1052,7 +1061,7 @@ static void update_fps(void)
 	#endif
 }
 
-static void get_pane_position(struct pane* pane, int* out_x0, int* out_y0, int* out_x1, int* out_y1, int* out_w, int* out_h)
+static struct rect get_pane_rect(struct pane* pane)
 {
 	const int base_width = g.current_window->true_width;
 	const int base_height = g.current_window->true_height;
@@ -1062,27 +1071,37 @@ static void get_pane_position(struct pane* pane, int* out_x0, int* out_y0, int* 
 	const int y1 = (int)ceilf(pane->v1 * (float)base_height);
 	const int w = x1-x0;
 	const int h = y1-y0;
-	if (out_x0) *out_x0 = x0;
-	if (out_y0) *out_y0 = y0;
-	if (out_x1) *out_x1 = x1;
-	if (out_y1) *out_y1 = y1;
-	if (out_w)  *out_w  = w;
-	if (out_h)  *out_h  = h;
+	return make_rect(x0,y0,w,h);
 }
 
-static void render_code_pane(struct pane* pane)
+#define FOCUSED   (1<<1)
+#define CLICKED   (1<<2)
+
+static int keyboard_input_area(struct rect* r)
+{
+	return 0; // XXX
+}
+
+static void draw_code_pane(struct pane* pane)
 {
 	assert(pane->type == CODE);
+
+	#if 0
+	int px0,py0,px1,py1;
+	get_pane_position(pane, &px0, &py0, &px1, &py1, NULL, NULL);
+	#endif
+
+	struct rect pr = get_pane_rect(pane);
+
+	const int st = keyboard_input_area(&pr);
+	(void)st;//XXX
 
 	set_blend_mode(ADDITIVE);
 	set_texture(g.atlas_texture_id);
 
-	int px0,py0,px1,py1;
-	get_pane_position(pane, &px0, &py0, &px1, &py1, NULL, NULL);
-
-	const int x0 = px0+30;
+	const int x0 = pr.x+30;
 	g.cursor_x0 = g.cursor_x = x0;
-	g.cursor_y = py0+50;
+	g.cursor_y = pr.y+50;
 
 	set_y_stretch_index(0);
 	//set_color3f(.7, 2.7, .7);
@@ -1114,8 +1133,15 @@ static void render_code_pane(struct pane* pane)
 
 	g.cursor_x = g.cursor_x0;
 	g.cursor_y += 40;
+	set_color3f(.8,.8,.8);
 	for (int i=0;i<4;++i) put_char(SPECIAL_CODEPOINT_MISSING_CHARACTER);
+	set_color3f(2,2,2);
+	for (int i=0;i<4;++i) put_char(SPECIAL_CODEPOINT_MISSING_CHARACTER);
+	set_color3f(9,9,9);
+	for (int i=0;i<4;++i) put_char(SPECIAL_CODEPOINT_MISSING_CHARACTER);
+	set_color3f(1,1,1);
 	for (int i=0;i<2;++i) put_char(' ');
+	put_char('W'); put_char(':');
 	for (int i=0;i<4;++i) put_char(SPECIAL_CODEPOINT_CARET);
 
 	for (int j=0;j<5;j++) {
@@ -1133,18 +1159,19 @@ static void gui_draw1(void)
 	for (int i=0; i<arrlen(g.pane_arr); ++i) {
 		struct pane* pane = &g.pane_arr[i];
 
-		int x0,y0,w,h;
-		get_pane_position(pane, &x0, &y0, NULL, NULL, &w, &h);
-		if (w<=0 || h<=0) continue;
+		//int x0,y0,w,h;
+		//get_pane_position(pane, &x0, &y0, NULL, NULL, &w, &h);
+		struct rect pr = get_pane_rect(pane);
+		if (pr.w<=0 || pr.h<=0) continue;
 
 		// TODO render pane underlay? (e.g. something that darkens the
 		// background or changes color)
 
-		set_scissor(x0,y0,w,h);
+		set_scissor_rect(&pr);
 
 		switch (pane->type) {
 		case CODE:
-			render_code_pane(pane);
+			draw_code_pane(pane);
 			break;
 		default: assert(!"unhandled pane type");
 		}

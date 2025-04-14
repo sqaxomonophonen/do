@@ -94,7 +94,9 @@ enum key_state_flag {
 
 void gui_init(void);
 void gui_setup_gpu_resources(void);
-void gui_emit_keypress_event(int);
+void gui_on_key(int);
+void gui_on_text(const char*);
+
 void gui_begin_frame(void);
 void gui_draw(struct window*);
 

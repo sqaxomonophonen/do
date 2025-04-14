@@ -79,7 +79,7 @@ static void handle_events()
 		if (event.type == SDL_EVENT_QUIT) {
 			g0.exiting = 1;
 		} else if (event.type == SDL_EVENT_TEXT_INPUT) {
-			printf("text input [%s]\n", event.text.text);
+			gui_on_text(event.text.text);
 		} else if ((event.type == SDL_EVENT_KEY_DOWN) || (event.type == SDL_EVENT_KEY_UP)) {
 			const int is_down = event.key.down;
 
@@ -170,7 +170,7 @@ static void handle_events()
 				assert(keycode < SPECIAL_KEY_BEGIN);
 			}
 
-			gui_emit_keypress_event((is_down ? KEY_IS_DOWN : 0) | keycode | mod);
+			gui_on_key((is_down ? KEY_IS_DOWN : 0) | keycode | mod);
 
 		} else if (window != NULL && event.type == SDL_EVENT_WINDOW_RESIZED) {
 			refresh_window_size(window);

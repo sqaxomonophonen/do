@@ -131,7 +131,7 @@ static bool handle_key_event(int type, const EmscriptenKeyboardEvent* ev, void* 
 	if (keycode > 0) {
 		//keycode |= mod;
 		//printf("TODO down=%d keycode=%d mod=%d\n", is_down, keycode, mod);
-		gui_emit_keypress_event((is_down ? KEY_IS_DOWN : 0) | keycode | mod);
+		gui_on_key((is_down ? KEY_IS_DOWN : 0) | keycode | mod);
 	}
 
 	return false;
@@ -139,7 +139,7 @@ static bool handle_key_event(int type, const EmscriptenKeyboardEvent* ev, void* 
 
 void handle_text_input(const char* s)
 {
-	printf("TODO HANDLE TEXT INPUT [%s]\n", s);
+	gui_on_text(s);
 }
 
 static void main_loop(void)

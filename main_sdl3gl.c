@@ -74,6 +74,9 @@ int main(int argc, char** argv)
 	// XXX doesn't work? how about that 20 year old broken record :-/
 	// also notice that main_sdl3sdlrenderer.c has no tearing...
 
+	// XXX what about multiple windows? should probably try to use window
+	// enter/leave events?
+	SDL_StartTextInput(get_sdl_window(get_window(0)));
 
 	#if 0
 	// XXX do I want this here?

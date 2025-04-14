@@ -226,8 +226,9 @@ alternative video synth engine: textured triangle soup.
 
 
 platforms:
- - desktop (bsd, linux, windows, macos) using "gl" or "gpu" renderer
- - web/webgl using "gl" renderer
+ - sdl3 desktop (bsd, linux, windows, macos) using "gl" or "gpu" renderer
+ - emscripten web/webgl using "gl" renderer
+ - sdl3 android/gles3(?) using "gl" renderer (and/or "gpu"? dunno if it works)
 renderers:
  - "gl" supports gles3/egl/webgl
  - "gpu" (via SDL3 GPU) supports vulkan/dx12/metal
@@ -259,9 +260,10 @@ note, I also briefly considered using SDL_Renderer, but:
 
 
 
+
 rule of thumb: the software should have the same reliability as you'd expect
 from a real instrument when playing live. this is more of a "soft rule", or a
-guideline:
+guideline, or an ideal:
  - undo/redo is well-defined for a single user, but ill-defined in a multi-user
    environment. this is similar to how you're unlikely to get merge conflicts
    when you're the only committer on a repository, but the risk becomes real
