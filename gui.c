@@ -42,6 +42,7 @@ struct pane {
 	union {
 		struct {
 			int document_id;
+			int focus_id;
 			// TODO presentation shader id? (can be built-in, or user-defined?)
 		} code;
 		struct {
@@ -194,7 +195,27 @@ static struct {
 	int current_y_stretch_index;
 	float current_color[4];
 	struct window* current_window;
+	int focus_sequence;
+	int current_focus_id;
+	int* key_buffer_arr;
+	char* text_buffer_arr;
 } g;
+
+static inline int make_focus_id(void)
+{
+	return ++g.focus_sequence;
+}
+
+static void focus(int focus_id)
+{
+	assert(focus_id>0);
+	g.current_focus_id = focus_id;
+}
+
+static void unfocus(void)
+{
+	g.current_focus_id = 0;
+}
 
 static struct font_spec* get_current_font_spec(void)
 {
@@ -770,14 +791,17 @@ void gui_init(void)
 
 	assert((get_num_documents() > 0) && "the following code is probably not the best if/when this changes");
 
+	const int focus_id = make_focus_id();
 	arrput(g.pane_arr, ((struct pane){
 		.type = CODE,
 		.u0=0, .v0=0,
 		.u1=1, .v1=1,
 		.code = {
+			.focus_id = focus_id,
 			.document_id = get_document_by_index(0)->id,
 		},
 	}));
+	focus(focus_id);
 
 	struct font_config* fc = &g.font_config;
 	arrsetlen(fc->codepoint_range_pairs_arr, 0);
@@ -814,12 +838,18 @@ void gui_setup_gpu_resources(void)
 
 void gui_on_key(int keycode)
 {
-	printf("TODO key [%d]\n", keycode);
+	arrput(g.key_buffer_arr, keycode);
 }
 
 void gui_on_text(const char* text)
 {
-	printf("TODO text [%s]\n", text);
+	const size_t n = strlen(text);
+	assert((arrlen(g.text_buffer_arr) > 0) && "empty array; length should always be 1 or longer");
+	assert((0 == arrpop(g.text_buffer_arr)) && "expected to pop cstr nul-terminator");
+	char* p = arraddnptr(g.text_buffer_arr, n);
+	memcpy(p, text, n);
+	arrput(g.text_buffer_arr, 0);
+	assert(arrlen(g.text_buffer_arr) == (1+strlen(g.text_buffer_arr)));
 }
 
 static void set_blend_mode(enum blend_mode blend_mode)
@@ -1074,27 +1104,89 @@ static struct rect get_pane_rect(struct pane* pane)
 	return make_rect(x0,y0,w,h);
 }
 
-#define FOCUSED   (1<<1)
-#define CLICKED   (1<<2)
+#define HAS_FOCUS    (1<<1)
+#define WAS_CLICKED  (1<<2)
 
-static int keyboard_input_area(struct rect* r)
+static int keyboard_input_area(struct rect* r, int focus_id)
 {
-	return 0; // XXX
+	int flags = 0;
+	if (focus_id == g.current_focus_id) flags |= HAS_FOCUS;
+	// TODO set flags |= WAS_CLICKED if it was
+	return flags;
+}
+
+void gui_begin_frame(void)
+{
+	gig_spool();
+	update_fps();
+	arrsetlen(g.key_buffer_arr, 0);
+	arrsetlen(g.text_buffer_arr, 0);
+	arrput(g.text_buffer_arr, 0); // terminate cstr
+}
+
+static void move_caret(int delta_column, int delta_line)
+{
+	struct command base = {
+		.type = COMMAND_MOVE_CARET,
+		.move_caret = {
+			.set_selection_begin = 1,
+			.set_selection_end = 1,
+		},
+	};
+
+	if (delta_column != 0) {
+		struct command c = base;
+		c.move_caret.target.type = TARGET_RELATIVE_COLUMN;
+		c.move_caret.target.relative_column.delta = delta_column;
+		ed_command(&c);
+	}
+
+	if (delta_line != 0) {
+		struct command c = base;
+		c.move_caret.target.type = TARGET_RELATIVE_LINE;
+		c.move_caret.target.relative_line.delta = delta_line;
+		ed_command(&c);
+	}
+}
+
+static void handle_editor_input(struct pane* pane)
+{
+	assert(pane->type == CODE);
+	for (int i=0; i<arrlen(g.key_buffer_arr); ++i) {
+		const int key = g.key_buffer_arr[i];
+		const int down = get_key_down(key);
+		const int mod = get_key_mod(key);
+		const int code = get_key_code(key);
+		if (down && mod==0) {
+			switch (code) {
+			case KEY_ARROW_LEFT:  move_caret(-1,0); break;
+			case KEY_ARROW_RIGHT: move_caret(1,0); break;
+			case KEY_ARROW_UP:    move_caret(0,-1); break;
+			case KEY_ARROW_DOWN:  move_caret(0,1); break;
+			default: break;
+			}
+		}
+		//if (get_key_down(key) && get_key_mod(key)==0 && get_key_code(key) == KEY_ARROW_LEFT
+	}
+
+	if (strlen(g.text_buffer_arr) > 0) {
+		printf("TODO focused text [%s]\n", g.text_buffer_arr); // TODO
+	}
 }
 
 static void draw_code_pane(struct pane* pane)
 {
 	assert(pane->type == CODE);
 
-	#if 0
-	int px0,py0,px1,py1;
-	get_pane_position(pane, &px0, &py0, &px1, &py1, NULL, NULL);
-	#endif
-
 	struct rect pr = get_pane_rect(pane);
 
-	const int st = keyboard_input_area(&pr);
-	(void)st;//XXX
+	const int flags = keyboard_input_area(&pr, pane->code.focus_id);
+	if (flags & WAS_CLICKED) {
+		focus(pane->code.focus_id);
+	}
+	if (flags & HAS_FOCUS) {
+		handle_editor_input(pane);
+	}
 
 	set_blend_mode(ADDITIVE);
 	set_texture(g.atlas_texture_id);
@@ -1178,11 +1270,6 @@ static void gui_draw1(void)
 
 		// TODO render pane overlay? (e.g. pane border lines)
 	}
-}
-
-void gui_begin_frame(void)
-{
-	update_fps();
 }
 
 void gui_draw(struct window* window)

@@ -2,11 +2,14 @@
 #include <stdlib.h>
 #include <assert.h>
 
+#include <SDL3/SDL_main.h> // required on Android, maybe other platforms?
+
 #include "impl_sdl3.h"
 #define GL_GLEXT_PROTOTYPES
 // XXX defining GL_GLEXT_PROTOTYPES works on unixes, but not on windows where
 // SDL_GL_GetProcAddress() is needed.
-#include <SDL3/SDL_opengl.h>
+//#include <SDL3/SDL_opengl.h>
+#include <SDL3/SDL_opengles2.h>
 
 #include "impl_gl.h"
 
@@ -42,6 +45,7 @@ static void housekeep_our_windows(void)
 			extra->sdl_window = sdl_window;
 			window->backend_extra = extra;
 			window->state = WINDOW_IS_OPEN;
+			refresh_window_size(window);
 		} else if (window->state == WINDOW_IS_CLOSING && window->backend_extra != NULL) {
 			SDL_Window* sdl_window = get_sdl_window(window);
 			SDL_DestroyWindow(sdl_window);
@@ -96,10 +100,10 @@ int main(int argc, char** argv)
 	common_main_init();
 
 	while (!g0.exiting && get_num_windows() > 0) {
+		gui_begin_frame();
 		handle_events();
 		housekeep_our_windows();
 		remove_closed_windows();
-		gui_begin_frame();
 		// XXX subtlety: windows may be tail-appended by gui, and aren't valid
 		// until housekeep_our_windows() has been called, so don't roll
 		// get_num_windows() into the for-loop or we might begin

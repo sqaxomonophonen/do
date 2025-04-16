@@ -90,7 +90,12 @@ enum key_state_flag {
 	KEY_IS_DOWN = (1<<30),
 };
 
+#define MOD_MASK (MOD_SHIFT | MOD_CONTROL | MOD_ALT | MOD_GUI)
 #define KEY_MASK ((1<<22)-1)
+
+static inline int get_key_mod(int key) { return key & MOD_MASK; }
+static inline int get_key_code(int key) { return key & KEY_MASK; }
+static inline int get_key_down(int key) { return !!(key & KEY_IS_DOWN); }
 
 void gui_init(void);
 void gui_setup_gpu_resources(void);

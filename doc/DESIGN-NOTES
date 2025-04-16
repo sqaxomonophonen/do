@@ -1,12 +1,44 @@
 
 (lest we forget)
 
-language/runtime:
+language(dolang)/runtime:
 
  - "close to forth", but without much attempt to be "standards compliant"
 
- - word size is 32-bit? so stack elements are 32-bit. ops like + and * treat
-   them as float32, but variants like i+ i* for int32 also exists?
+ - (not completely settled?) words are float64, maybe float32 on small systems?
+   - float64 can work as a 52-bit integer (float32 can work as a 23-bit
+     integer)
+   - IF I want something where the same word can contain both int32 and
+     float32, then I think integers MUST be explicitly suffixed, like 10i:
+       1.0 room
+       1   room (same as 1.0 room)
+       1i  room (uh oh, probably won't do what you expect; room expects float)
+     I'm still not convinced it's a good idea because now we have a problem in
+     the other end: if you have functions that want integer inputs, passing
+     "1.0" is now a runtime error (and not even necessarily a crashing one)
+   - I considered something like "fat values" that contains type info, maybe
+     like a [type,value] pair (both simple values), but:
+     - it's weird if the heap is NOT like that, and also weird if it is? a fat
+       value heap doesn't really support float32 arrays for instance.
+     - it "solves" the float-vs-int problem, but also introduces the problem
+       with "what happens if I add 'banana' and `OSC input #42`?"
+     - it probably performs significantly worse?
+   - I also considered "magic markers", values "safely outside of normal range"
+     that modify the next value. the usecase would be something like allowing
+     an OSC input for `room` even though the input is a kind of object instead
+     of a simple value, but:
+     - the problem arises when you're not satisfied with the OSC input value
+       as-is, you may want to do a little math on it? so now "+" needs to
+       support OSC inputs as well? oops, I've just re-invented fat values, and
+       now they're more complicated than ever
+     - it goes against efforts to automatically verify pre/post conditions...
+       e.g. `room` may be (x--y), but with magic markers it can also be
+       (x M--y), so it's hard to verify
+   - I think audio programs should be more or less "idempotent"; they're run
+     often to keep event buffers full, or to respond to changes. it feels a
+     little wrong to run the program 60 times a second in response to OSC
+     messages, but it might honestly be the best approach? so design choices
+     that make dolang fast are good? :)
 
  - the program is repeatedly executed to keep event buffers full (so your
    program gets asked to fill buffers within a time interval), but also to

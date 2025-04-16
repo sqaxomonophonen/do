@@ -77,3 +77,17 @@ struct document* get_document_by_id(int id)
 	assert((doc != NULL) && "document id not found");
 	return doc;
 }
+
+void gig_spool(void)
+{
+	// TODO spooling should go through new journal entries, and apply them so
+	// that documents are up-to-date. the purpose of having a function to do
+	// this is that you can do it when it's convenient, instead of using
+	// mutexes in the background to do it automatically. spool can be run once
+	// per video frame?
+}
+
+void ed_command(struct command* c)
+{
+	assert(!"TODO ed_command()");
+}

@@ -131,6 +131,7 @@ static bool handle_key_event(int type, const EmscriptenKeyboardEvent* ev, void* 
 	if (keycode > 0) {
 		//keycode |= mod;
 		//printf("TODO down=%d keycode=%d mod=%d\n", is_down, keycode, mod);
+		// FIXME gui_on_key() must be called before gui_begin_frame() and after gui_draw()
 		gui_on_key((is_down ? KEY_IS_DOWN : 0) | keycode | mod);
 	}
 
@@ -139,11 +140,13 @@ static bool handle_key_event(int type, const EmscriptenKeyboardEvent* ev, void* 
 
 void handle_text_input(const char* s)
 {
+	// FIXME gui_on_text() must be called before gui_begin_frame() and after gui_draw()
 	gui_on_text(s);
 }
 
 static void main_loop(void)
 {
+	gui_begin_frame();
 	const int canvas_width = canvas_get_width();
 	const int canvas_height = canvas_get_height();
 	gl_frame(canvas_width, canvas_height);

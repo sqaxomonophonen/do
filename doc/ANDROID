@@ -1,0 +1,83 @@
+
+tl;dr
+/path/to/create-android-project.py dodo.dodo.dodo $(ls *.c *.h | grep -v emscripten | grep -v test_)
+./gradlew installDebug
+
+TODO:
+ - add sdl3gpu to blacklist when I have it?
+ - app is called "Game"; how to change it? (the sdl article explains it I th
+
+NOTES:
+
+ - see https://wiki.libsdl.org/SDL3/README/android
+
+ - I couldn't get the Debian packages to work, but the official "Android
+   Studio" distribution seems to work
+
+ - you can run the emulator from the command-line:
+     ~/Android/Sdk/emulator/emulator
+   but it needs a system image (AVD). you can add these in the "studio app".
+   see which images are installed with:
+     emulator -list-avds
+
+ - export ANDROID_HOME=~/Android/Sdk
+
+ - I had a weird problem where gradle couldn't find "java.home", but after a
+   `./gradlew --sync` (where I aborted it by answering "no") it just started
+   working...
+
+ - adb tips
+   show logs:
+     adb logcat
+   upload files:
+     adb push <local path> <remote path>
+     adb push foo.txt /sdcard/foo.txt
+
+ - run on real device:
+   - device must be in developer mode and have usb debugging enabled:
+     - settings->about (bottom of my settings list)
+     - tap the software build version string repeatedly until it says you're a
+       developer
+     - now in settings you should have a developer page where you can enable
+       "usb debugging"
+   - adb should list your devices:
+        $ adb devices
+   - $ ./gradlew installDebug
+     this builds and runs program on your device (don't know how it chooses
+     between emulator and real device tbh)
+
+ - SDL_Log() works (see "adb logcat"), printf() doesn't
+
+ - changes I had to make before it started working on android:
+   - #include <SDL3/SDL_main.h>, otherwise I get a linker error
+   - #include <SDL3/SDL_opengles2.h> instead of <SDL3/SDL_opengl.h>
+   - had to put a refresh_window_size() call in housekeep_our_windows() (might
+     also be possible by listening for the proper mobile events?)
+
+
+
+DISTRIBUTION CHANNELS
+ [A]: play store
+ [B]: untrusted/third-party .apk
+ [C]: a laptop and a few minutes to spare
+ [D]: web app
+comments:
+ - [D] is not android-specific, but listed for comparison (if [D] was perfect,
+   [A]&[B]&[C] would be pointless)
+ - [D] is potentially the most convenient way to get started: scan a QR code
+   and you're in
+ - [D] may also be a good "gateway drug" to better options.
+ - problems with [D] could be: poorer battery life, worse overall performance,
+   "html5/browser problems", like, maybe multithreading doesn't work as well
+ - [A]&[B] requires signing your .apk files. I think you need to beg google for
+   a signing key.
+ - [A] requires publishing it to play store. I don't know how involved that is?
+ - [B]&[C] requires a bunch of steps that may not be exactly the same in all
+   cases (due to locale and version differences)
+ - [C] requires a laptop (and a USB cable?), and often more steps compared to
+   [B] (like activating developer mode unless it already is), but no .apk
+   signing is required!
+ - [B] requires you to go into settings and allow untrusted .apks.
+ - [B] may be preferrable to [A] if the publishing part is really bad.
+ - [A] benefits from a searchable name... so uhm, sorry, but not sorry for
+   calling it 'Do'" :-)

@@ -88,6 +88,7 @@ static void handle_events()
 				window->state = WINDOW_IS_CLOSING;
 			}
 
+			#if 0
 			if (window != NULL && is_down && event.key.key == 'f') {
 				// XXX temp?
 				window->is_fullscreen = !window->is_fullscreen;
@@ -98,6 +99,7 @@ static void handle_events()
 				// XXX temp?
 				open_window();
 			}
+			#endif
 
 			int mod = 0;
 			if (event.key.mod & SDL_KMOD_SHIFT) mod |= MOD_SHIFT;
