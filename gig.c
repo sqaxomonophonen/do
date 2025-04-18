@@ -3,7 +3,7 @@
 #include "stb_ds.h"
 #include "gig.h"
 #include "util.h"
-#include "varint.h"
+#include "leb128.h"
 
 static struct {
 	struct document* document_arr;
@@ -163,10 +163,10 @@ NO_DISCARD
 static int codec_int_io(int v)
 {
 	if (is_encoding()) {
-		varint_encode_int(codec_write_u8, v);
+		leb128_encode_int(codec_write_u8, v);
 		return v;
 	} else if (is_decoding()) {
-		return varint_decode_int(codec_read_u8);
+		return leb128_decode_int(codec_read_u8);
 	}
 	assert(!"bad state");
 }

@@ -7,7 +7,7 @@
 /do.ww.js
 /do
 /temporary_httpd
-/test_utf8
+/_test*
 
 # vim
 .*swp
