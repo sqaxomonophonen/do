@@ -1,5 +1,7 @@
 #ifndef GUI_H
 
+#include <stdint.h>
+
 enum window_state {
 	WINDOW_IS_NEW=1,
 	WINDOW_IS_OPEN,
@@ -105,6 +107,9 @@ void gui_on_text(const char*);
 void gui_begin_frame(void);
 void gui_draw(struct window*);
 
+void gui_set_dragging(struct window*, int is_dragging);
+void gui_drop_file(const char* name, size_t num_bytes, uint8_t* bytes);
+
 enum draw_list_type {
 	MESH_TRIANGLES,
 };
@@ -155,6 +160,9 @@ struct draw_list {
 	};
 };
 struct draw_list* gui_get_draw_list(int index);
+
+
+
 
 #define GUI_H
 #endif

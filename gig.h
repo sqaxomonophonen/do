@@ -1,5 +1,7 @@
 #ifndef GIG_H
 
+#include <stdint.h>
+
 struct fat_char {
 	unsigned codepoint;
 	unsigned timestamp;
@@ -106,7 +108,12 @@ struct command {
 			unsigned set_selection_end   :1;
 		} move_caret;
 		struct {
-			const char* text;
+			union {
+				// NOTE `text` is copied, so the pointer must only be valid for
+				// the duration of ed_do()
+				const char* text;
+				intptr_t   _text_offset;
+			};
 		} insert;
 		struct {
 			unsigned set_deferred          :1;
@@ -140,8 +147,9 @@ struct command {
 	};
 };
 
-void ed_command(struct command*);
-void ed_flush(void);
+void ed_begin(void);
+void ed_do(struct command*);
+int ed_commit(void);
 
 int get_num_documents(void);
 struct document* get_document_by_index(int);

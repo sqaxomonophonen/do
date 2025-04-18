@@ -13,7 +13,7 @@ LDFLAGS+=-sENVIRONMENT=web,worker
 LDFLAGS+=--pre-js main_emscripten_pre.js
 LDFLAGS+=-sDISABLE_EXCEPTION_CATCHING=1
 LDFLAGS+=-sEXPORTED_RUNTIME_METHODS=ccall,cwrap
-LDFLAGS+=-sEXPORTED_FUNCTIONS=_main,_handle_text_input
+LDFLAGS+=-sEXPORTED_FUNCTIONS=_main,_handle_text_input,_handle_file_drop,_set_drag_state,_heap_malloc
 LDFLAGS+=-sAUDIO_WORKLET=1
 LDFLAGS+=-sWASM_WORKERS=1
 

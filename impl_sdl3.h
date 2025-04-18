@@ -60,14 +60,36 @@ static struct window* get_window_by_sdl_id(SDL_WindowID id)
 static struct window* get_event_window(SDL_Event* ev)
 {
 	switch (ev->type) {
+
 	case SDL_EVENT_KEY_DOWN:
 	case SDL_EVENT_KEY_UP:
 		return get_window_by_sdl_id(ev->key.windowID);
+
 	case SDL_EVENT_WINDOW_RESIZED:
 		return get_window_by_sdl_id(ev->window.windowID);
+
+	case SDL_EVENT_DROP_FILE:
+	case SDL_EVENT_DROP_TEXT:
+	case SDL_EVENT_DROP_BEGIN:
+	case SDL_EVENT_DROP_COMPLETE:
+	case SDL_EVENT_DROP_POSITION:
+		return get_window_by_sdl_id(ev->drop.windowID);
+
 	default: return NULL;
 	}
 	assert(!"unreachable");
+}
+
+static void drop_path(const char* path)
+{
+	size_t num_bytes;
+	void* bytes = SDL_LoadFile(path, &num_bytes);
+	if (bytes != NULL) {
+		gui_drop_file(path, num_bytes, bytes);
+		SDL_free(bytes);
+	} else {
+		fprintf(stderr, "%s: could not read\n", path);
+	}
 }
 
 static void handle_events()
@@ -176,6 +198,41 @@ static void handle_events()
 
 		} else if (window != NULL && event.type == SDL_EVENT_WINDOW_RESIZED) {
 			refresh_window_size(window);
+		#if 0
+		} else if (event.type == SDL_EVENT_DROP_POSITION) {
+			gui_set_dragging(window, 1);
+		#endif
+		} else if (event.type == SDL_EVENT_DROP_BEGIN) {
+			gui_set_dragging(window, 1);
+		} else if (event.type == SDL_EVENT_DROP_COMPLETE) {
+			gui_set_dragging(window, 0);
+		} else if (event.type == SDL_EVENT_DROP_TEXT) {
+			const char* s = event.drop.data;
+			printf("text drop [%s]\n", s);
+			const size_t n = strlen(s);
+			const char* file_scheme = "file://";
+			const size_t n2 = strlen(file_scheme);
+			if (n>n2 && 0==memcmp(s,file_scheme,n2)) {
+				// XXX this doesn't really work :) need proper %20=>" "
+				// conversion and so on...
+				const char* path = s + n2;
+				drop_path(path);
+			} else {
+				printf("unhandled text drop [%s]\n", s);
+			}
+			gui_set_dragging(window, 0);
+		} else if (event.type == SDL_EVENT_DROP_FILE) {
+			// TODO a file was dragged into our window
+			//  - files can be be samples... and maybe images? curves? code?
+			//  - for "library resources", calculate file hash to see if we
+			//    already have it or know about it? the hash is going to be
+			//    used regardless (
+			//  - (shouldn't it be possible to do this in web too? just a
+			//    reminder to use common code where possible)
+			printf("TODO file drag'n'drop! path to file: [%s]\n", event.drop.data);
+			//if (event.drop.source != NULL) printf("source: [%s]!\n", event.drop.source);
+			drop_path(event.drop.data);
+			gui_set_dragging(window, 0);
 		}
 	}
 }

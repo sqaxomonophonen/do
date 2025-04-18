@@ -4,6 +4,8 @@
 
 #include <SDL3/SDL_main.h> // required on Android, maybe other platforms?
 
+#include "main.h"
+
 #include "impl_sdl3.h"
 #define GL_GLEXT_PROTOTYPES
 // XXX defining GL_GLEXT_PROTOTYPES works on unixes, but not on windows where
@@ -13,7 +15,6 @@
 
 #include "impl_gl.h"
 
-#include "main.h"
 #include "gig.h"
 #include "fonts.h"
 

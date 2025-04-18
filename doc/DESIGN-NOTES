@@ -292,6 +292,12 @@ note, I also briefly considered using SDL_Renderer, but:
 
 
 
+transports:
+ - UDP
+ - WebSockets
+(websockets do seem to improve latency compared to small http messages and long
+polling which I'd otherwise prefer due to server-side simplicity)
+
 
 rule of thumb: the software should have the same reliability as you'd expect
 from a real instrument when playing live. this is more of a "soft rule", or a

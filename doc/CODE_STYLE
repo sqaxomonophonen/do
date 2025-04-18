@@ -15,11 +15,11 @@
    - For "struct methods", the struct type is the first argument, example:
        void foo_set_x(struct foo* foo, int x) {...}
    - For functions that have "sources" and a "destination", place the
-	 destination before source (like `memcpy(dst,src,n)`)
+     destination before source (like `memcpy(dst,src,n)`)
    - Place "optional" arguments last (arguments that accepts a "nullish" value
-	 like NULL, -1, etc). This also includes out/return arguments because
-	 they're typically optional (although this is slightly inconsistent with
-	 the source/destination rule).
+     like NULL, -1, etc). This also includes out/return arguments because
+     they're typically optional (although this is slightly inconsistent with
+     the source/destination rule).
 
  - As for "visual style" in general, you can do what you like unless it's
    "invasive" (like using spaces instead of tabs)

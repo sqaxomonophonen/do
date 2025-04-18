@@ -199,6 +199,7 @@ static struct {
 	int current_focus_id;
 	int* key_buffer_arr;
 	char* text_buffer_arr;
+	int is_dragging;
 } g;
 
 static inline int make_focus_id(void)
@@ -1138,14 +1139,14 @@ static void move_caret(int delta_column, int delta_line)
 		struct command c = base;
 		c.move_caret.target.type = TARGET_RELATIVE_COLUMN;
 		c.move_caret.target.relative_column.delta = delta_column;
-		ed_command(&c);
+		ed_do(&c);
 	}
 
 	if (delta_line != 0) {
 		struct command c = base;
 		c.move_caret.target.type = TARGET_RELATIVE_LINE;
 		c.move_caret.target.relative_line.delta = delta_line;
-		ed_command(&c);
+		ed_do(&c);
 	}
 }
 
@@ -1159,18 +1160,22 @@ static void handle_editor_input(struct pane* pane)
 		const int code = get_key_code(key);
 		if (down && mod==0) {
 			switch (code) {
-			case KEY_ARROW_LEFT:  move_caret(-1,0); break;
-			case KEY_ARROW_RIGHT: move_caret(1,0); break;
-			case KEY_ARROW_UP:    move_caret(0,-1); break;
-			case KEY_ARROW_DOWN:  move_caret(0,1); break;
+			case KEY_ARROW_LEFT:  move_caret(-1 ,  0); break;
+			case KEY_ARROW_RIGHT: move_caret( 1 ,  0); break;
+			case KEY_ARROW_UP:    move_caret( 0 , -1); break;
+			case KEY_ARROW_DOWN:  move_caret( 0 ,  1); break;
 			default: break;
 			}
 		}
-		//if (get_key_down(key) && get_key_mod(key)==0 && get_key_code(key) == KEY_ARROW_LEFT
 	}
 
 	if (strlen(g.text_buffer_arr) > 0) {
-		printf("TODO focused text [%s]\n", g.text_buffer_arr); // TODO
+		ed_do(&((struct command){
+			.type = COMMAND_INSERT,
+			.insert = {
+				.text = g.text_buffer_arr,
+			},
+		}));
 	}
 }
 
@@ -1246,6 +1251,8 @@ static void draw_code_pane(struct pane* pane)
 
 static void gui_draw1(void)
 {
+	ed_begin();
+
 	// TODO render video synth background if configured?
 
 	for (int i=0; i<arrlen(g.pane_arr); ++i) {
@@ -1269,6 +1276,10 @@ static void gui_draw1(void)
 		}
 
 		// TODO render pane overlay? (e.g. pane border lines)
+	}
+
+	if (!ed_commit()) {
+		assert(!"TODO commands failed: user needs to know?");
 	}
 }
 
@@ -1324,3 +1335,27 @@ struct draw_char {
 	// TODO particle effects?
 	// TODO shakes/tremors or other effects based on affine transforms?
 };
+
+
+void gui_set_dragging(struct window* w, int is_dragging)
+{
+	if (g.is_dragging != is_dragging) {
+		// TODO! fun idea: anticipate the drop with love. you're about to drop
+		// the best .wav ever! (so particle effects?)
+		printf("dragging %d => %d\n", g.is_dragging, is_dragging);
+		g.is_dragging = is_dragging;
+	}
+}
+
+void gui_drop_file(const char* name, size_t num_bytes, uint8_t* bytes)
+{
+	printf("TODO file drop name=[%s] num_bytes=%zd data:", name, num_bytes);
+	for (size_t i=0; (i<10) && (i<num_bytes); ++i) {
+		printf(" %.2x", bytes[i]);
+	}
+	printf("\n");
+	// TODO!?
+	//  - should probably always hash file
+	//  - NOTE: bytes might be freed after we return?
+	//  
+}

@@ -43,5 +43,38 @@ Module["preInit"] = [
 			em_text_input_overlay.innerHTML = "";
 		});
 		em_text_input_overlay.focus();
+
+		const em_drop = document.body;
+
+		const set_drag_state = Module.cwrap("set_drag_state", "undefined", ["number"]);
+		em_drop.addEventListener("dragenter", ()=>{set_drag_state(1);});
+		//em_drop.addEventListener("dragover",  ()=>{set_drag_state(1);});
+		em_drop.addEventListener("dragleave",  ()=>{set_drag_state(0);});
+		em_drop.addEventListener("drop", ()=>{set_drag_state(0);});
+
+		const heap_malloc = Module.cwrap("heap_malloc", "number", ["number"]);
+		const handle_file_drop = Module.cwrap("handle_file_drop", "undefined", ["string", "number", "number"]);
+		em_drop.addEventListener("drop", function() {
+			const files = event.dataTransfer.files;
+			for (let i=0; i<files.length; ++i) {
+				const file = files[i];
+				const r = new FileReader();
+				((file) => {
+					r.onload = function(e) {
+						const b = new Uint8Array(e.target.result);
+						// XXX "b" is on the stack, so we don't have room for
+						// more than ~64kB it seems
+						const p = heap_malloc(b.length);
+						Module.HEAP8.set(b, p);
+						console.log([file.name, b, p]);
+						handle_file_drop(file.name, b.length, p);
+					}
+				})(file);
+				r.readAsArrayBuffer(file);
+			}
+		}, false);
+
+		console.log(Module);
+
 	}
 ];

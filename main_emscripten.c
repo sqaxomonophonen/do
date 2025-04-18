@@ -138,10 +138,30 @@ static bool handle_key_event(int type, const EmscriptenKeyboardEvent* ev, void* 
 	return false;
 }
 
-void handle_text_input(const char* s)
+// (NOTE _heap_malloc in Makefile.emscripten)
+void* heap_malloc(size_t s)
+{
+	return malloc(s);
+}
+
+// (NOTE _handle_text_input in Makefile.emscripten)
+void handle_text_input(const char* s) 
 {
 	// FIXME gui_on_text() must be called before gui_begin_frame() and after gui_draw()
 	gui_on_text(s);
+}
+
+// (NOTE _handle_file_drop in Makefile.emscripten)
+void handle_file_drop(const char* name, size_t num_bytes, uint8_t* bytes)
+{
+	gui_drop_file(name, num_bytes, bytes);
+	free(bytes);
+}
+
+// (NOTE _set_drag_state in Makefile.emscripten)
+void set_drag_state(int is_dragging)
+{
+	gui_set_dragging(get_window(0), is_dragging);
 }
 
 static void main_loop(void)
