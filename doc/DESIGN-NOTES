@@ -292,11 +292,18 @@ note, I also briefly considered using SDL_Renderer, but:
 
 
 
-transports:
- - UDP
- - WebSockets
-(websockets do seem to improve latency compared to small http messages and long
-polling which I'd otherwise prefer due to server-side simplicity)
+HTTP for:
+ - handshake
+ - state snapshot
+ - CDN download / upload
+UDP or WebSockets for:
+ - journal stream
+Secure connections (HTTPS/WSS) must be provided by a proxy in front of the
+do-server.
+WebSockets do seem to improve latency compared to small HTTP messages and long
+polling which I'd otherwise prefer due to server-side simplicity.
+
+internal/external protocol is journal based?
 
 
 rule of thumb: the software should have the same reliability as you'd expect

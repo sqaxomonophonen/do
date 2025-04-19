@@ -1,16 +1,48 @@
 #include <assert.h>
+#include <limits.h>
+#include <stdatomic.h>
+#include <stdalign.h>
 
 #include "stb_ds.h"
 #include "gig.h"
 #include "util.h"
 #include "leb128.h"
 
+struct ringbuf {
+	uint8_t* data;
+	int size_log2;
+	_Alignas(CACHE_LINE_SIZE) _Atomic(size_t) read_cursor;
+	_Alignas(CACHE_LINE_SIZE) _Atomic(size_t) write_cursor;
+};
+
+static void ringbuf_init(struct ringbuf* r, int size_log2)
+{
+	memset(r, 0, sizeof *r);
+	r->size_log2 = size_log2;
+	r->data = calloc(1L << size_log2, sizeof r->data[0]);
+}
+
+static void ringbuf_write_u8(struct ringbuf* r, uint8_t v)
+{
+	const size_t s = (1L << r->size_log2);
+	assert(r->write_cursor < (r->read_cursor + s));
+	r->data[r->write_cursor] = v;
+	r->write_cursor = (1 + r->write_cursor) & (s-1);
+}
+
 static struct {
 	struct document* document_arr;
 	int next_document_id;
 
 	//unsigned codec_version; // TODO?
+	#if 0
 	unsigned codec_bit_cursor;
+	#endif
+
+	struct ringbuf journal_ringbuf;
+	struct ringbuf command_ringbuf;
+
+	struct ringbuf* codec_writing_ringbuf;
 
 	// bits
 	unsigned ed_is_begun :1;
@@ -23,6 +55,9 @@ static struct {
 void gig_init(void)
 {
 	g.next_document_id = 1;
+	ringbuf_init(&g.journal_ringbuf, 20);
+	ringbuf_init(&g.command_ringbuf, 16);
+
 	new_document(DOC_AUDIO);
 	struct document* doc = get_document_by_id(1);
 	const char* code =
@@ -46,7 +81,7 @@ void gig_init(void)
 	for (int i=0; i<n; ++i) {
 		arrput(doc->fat_char_arr, ((struct fat_char){
 			.codepoint = code[i],
-			.color = {1,1,1,1},
+			.color = {100,100,100},
 		}));
 	}
 }
@@ -112,15 +147,20 @@ static int is_coding(void)
 	return is_encoding() || is_decoding();
 }
 
-static void codec_begin_encode(void)
+static void codec_begin_encode(struct ringbuf* r)
 {
 	assert(!is_coding());
+	assert(g.codec_writing_ringbuf == NULL);
+	g.codec_writing_ringbuf = r;
+	// TODO remember document revision we're editing against?
 	g.codec_is_encoding = 1;
 }
 
 static void codec_end_encode(void)
 {
 	assert(is_encoding());
+	assert(g.codec_writing_ringbuf != NULL);
+	g.codec_writing_ringbuf = NULL;
 	g.codec_is_encoding = 0;
 }
 
@@ -156,22 +196,45 @@ static uint8_t codec_read_u8(void)
 static void codec_write_u8(uint8_t v)
 {
 	assert(is_encoding());
-	assert(!"TODO");
+	assert(g.codec_writing_ringbuf != NULL);
+	ringbuf_write_u8(g.codec_writing_ringbuf, v);
+}
+
+static inline void codec_write_int(int v)
+{
+	leb128_encode_int(codec_write_u8, v);
+}
+
+static inline int codec_read_int(void)
+{
+	return leb128_decode_int(codec_read_u8);
 }
 
 NO_DISCARD
 static int codec_int_io(int v)
 {
 	if (is_encoding()) {
-		leb128_encode_int(codec_write_u8, v);
+		codec_write_int(v);
 		return v;
 	} else if (is_decoding()) {
-		return leb128_decode_int(codec_read_u8);
+		(void)v;
+		return codec_read_int();
 	}
 	assert(!"bad state");
 }
 #define CODEC_INT(V) (V)=codec_int_io(V)
 
+#if 0
+static void codec_magic(int magic)
+{
+	int magic2 = codec_int_io(magic);
+	if (magic2 != magic) {
+		assert(!"TODO error handling?"); // XXX
+	}
+}
+#endif
+
+#if 0
 static void codec_begin_bits(void)
 {
 	assert(!g.codec_doing_bits);
@@ -195,43 +258,83 @@ static unsigned codec_bit_io(unsigned bit)
 	return bit; // XXX
 }
 #define CODEC_BIT(V) (V)=codec_bit_io(V)
+#endif
+
+static inline int s2i(size_t x)
+{
+	assert(x <= INT_MAX);
+	return (int)x;
+}
 
 static void codec_cstr_ptr(const char** p)
 {
-	assert(!"TODO"); // TODO
+	if (is_encoding()) {
+		const int n = s2i(strlen(*p));
+		codec_write_int(n);
+		for (int i=0; i<n; ++i) codec_write_u8((*p)[i]);
+	} else if (is_decoding()) {
+		assert(!"TODO b"); // TODO
+	} else {
+		assert(!"bad state");
+	}
 }
 
-static void codec_target_ptr(struct target* t)
+static void codec_location_ptr(struct location* l)
 {
-	CODEC_INT(t->type);
-	switch (t->type) {
-	case TARGET_RELATIVE_COLUMN:
-		CODEC_INT(t->relative_column.delta);
-		break;
-	case TARGET_RELATIVE_LINE:
-		CODEC_INT(t->relative_line.delta);
-		break;
-	default: assert(!"unhandled target type");
-	}
+	CODEC_INT(l->line);
+	CODEC_INT(l->column);
+}
+
+static void codec_range_ptr(struct range* r)
+{
+	codec_location_ptr(&r->from);
+	codec_location_ptr(&r->to);
 }
 
 static void codec_command_ptr(struct command* c)
 {
+	#if 0
+	codec_magic(42); // XXX magic marker here? or how does that work?
+	#endif
+
 	CODEC_INT(c->type);
 	switch (c->type) {
-	case COMMAND_MOVE_CARET: {
-		codec_target_ptr(&c->move_caret.target);
-		codec_begin_bits();
-		CODEC_BIT(c->move_caret.add_caret);
-		CODEC_BIT(c->move_caret.clear_all_carets);
-		CODEC_BIT(c->move_caret.set_selection_begin);
-		CODEC_BIT(c->move_caret.set_selection_end);
-		codec_end_bits();
-	}	break;
-	case COMMAND_INSERT: {
+	case COMMAND_SET_CARET:
+		CODEC_INT(c->set_caret.id);
+		codec_range_ptr(&c->set_caret.range);
+		break;
+	case COMMAND_DELETE_CARET:
+		CODEC_INT(c->delete_caret.id);
+		break;
+	case COMMAND_INSERT:
+		codec_location_ptr(&c->insert.at);
 		codec_cstr_ptr(&c->insert.text);
-	}	break;
-	default: assert(!"unhandled command type");
+		break;
+	case COMMAND_DELETE:
+		codec_range_ptr(&c->delete.range);
+		break;
+	case COMMAND_COMMIT:
+		CODEC_INT(c->commit.author_id);
+		codec_range_ptr(&c->commit.range);
+		break;
+	case COMMAND_CANCEL:
+		CODEC_INT(c->cancel.author_id);
+		codec_range_ptr(&c->cancel.range);
+		break;
+	case COMMAND_DEFER:
+		CODEC_INT(c->defer.author_id);
+		codec_range_ptr(&c->defer.range);
+		break;
+	case COMMAND_UNDEFER:
+		CODEC_INT(c->undefer.author_id);
+		codec_range_ptr(&c->undefer.range);
+		break;
+	case COMMAND_SET_COLOR:
+		CODEC_INT(c->set_color.red);
+		CODEC_INT(c->set_color.green);
+		CODEC_INT(c->set_color.blue);
+		break;
+	default: assert(!"unhandled command");
 	}
 }
 
@@ -247,65 +350,26 @@ void gig_spool(void)
 void ed_begin(void)
 {
 	assert(!g.ed_is_begun);
-	#if 0
-	assert(0 == arrlen(g.command_arr));
-	assert(0 == arrlen(g.string_buffer_arr));
-	#endif
 	g.ed_is_begun = 1;
 }
 
 void ed_do(struct command* c)
 {
 	assert(g.ed_is_begun);
-
-	codec_begin_encode();
+	codec_begin_encode(&g.command_ringbuf);
 	codec_command_ptr(c);
 	codec_end_encode();
-
-	#if 0
-	struct command* cn = arraddnptr(g.command_arr, 1);
-	*cn = *c;
-	if (cn->type == COMMAND_INSERT) {
-		// copy text so that the caller of ed_do() is not obligated to
-		// keep the pointer alive after we return
-		const char* text = cn->insert.text;
-		// pointers are unstable, so store the stable string buffer offset
-		// instead (realloc() inside arraddnptr() may change the pointer).
-		// this overwrites `text`.
-		cn->insert._text_offset = arrlen(g.string_buffer_arr); // NOTE overwrites cn->insert.text
-		const size_t n = 1+strlen(text);
-		char* sn = arraddnptr(g.string_buffer_arr, n);
-		memcpy(sn, text, n);
-	}
-	#endif
 }
 
 int ed_commit(void)
 {
 	assert(g.ed_is_begun);
-
-	#if 0
-	const int num_commands = arrlen(g.command_arr);
-	for (int i=0; i<num_commands; ++i) {
-		struct command* c = &g.command_arr[i];
-		switch (c->type) {
-		case COMMAND_MOVE_CARET: {
-			assert(!"TODO CARET");
-		}	break;
-		case COMMAND_INSERT: {
-			// restore text pointer (this overwrites `_text_offset`)
-			c->insert.text = g.string_buffer_arr + c->insert._text_offset;
-			assert(!"TODO INSERT");
-		}	break;
-		default: assert(!"unhandled command type");
-		}
-	}
-
-	arrsetlen(g.command_arr, 0);
-	arrsetlen(g.string_buffer_arr, 0);
-	#endif
-
 	g.ed_is_begun = 0;
+	// TODO
 	return 1; // XXX
 }
 
+void gig_thread_tick(void)
+{
+	// TODO
+}

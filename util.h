@@ -3,8 +3,16 @@
 #define ARRAY_LENGTH(xs) (sizeof(xs)/sizeof((xs)[0]))
 
 // TODO non gcc/clang defines?
+#define NO_RETURN     __attribute__((noreturn))
 #define NO_DISCARD    __attribute__((warn_unused_result))
 #define ALWAYS_INLINE __attribute__((always_inline))
+
+//#define ALIGNAS(x) _Alignas(x)
+//#define ATOMIC(T) _Atomic(T)
+
+// XXX there's std::hardware_destructive_interference_size in C++, doesn't seem
+// to exist in C
+#define CACHE_LINE_SIZE (64)
 
 static inline int is_numeric(char ch) { return '0' <= ch && ch <= '9'; }
 

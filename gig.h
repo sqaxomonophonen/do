@@ -6,8 +6,10 @@ struct fat_char {
 	unsigned codepoint;
 	unsigned timestamp;
 	unsigned author;
-	unsigned flags;
-	unsigned color[4];
+	unsigned color[3];
+	unsigned insert :1;
+	unsigned delete :1;
+	unsigned defer  :1;
 };
 
 enum document_type {
@@ -30,120 +32,70 @@ struct document {
 };
 
 void gig_init(void);
+void gig_thread_tick(void);
 void gig_spool(void);
 
 enum command_type {
-	COMMAND_MOVE_CARET=1,
-	COMMAND_DELETE,
+	COMMAND_SET_CARET=1,
+	COMMAND_DELETE_CARET,
+
 	COMMAND_INSERT,
-	COMMAND_SELECT,
+	COMMAND_DELETE,
 	COMMAND_COMMIT,
-	COMMAND_FLAG,
+	COMMAND_CANCEL,
+	COMMAND_DEFER,
+	COMMAND_UNDEFER,
+
+	COMMAND_SET_COLOR,
 };
 
-enum target_type {
-	TARGET_NONE=0,
-	TARGET_RELATIVE_COLUMN,
-	TARGET_RELATIVE_LINE,
-	TARGET_ABSOLUTE,
-	TARGET_FIND_CHARACTER,
-	TARGET_WORD,
-	TARGET_FLAG_BOUNDARY,
-	TARGET_EVERYTHING,
+struct location {
+	int line;
+	int column;
 };
 
-struct target {
-	enum target_type type;
-	union {
-		struct {
-			int delta;
-		} relative_column;
-		struct {
-			int delta;
-		} relative_line;
-		struct {
-			unsigned line:20;
-			unsigned column:12;
-		} absolute;
-		struct {
-			unsigned codepoint:22;
-			unsigned forward:1;
-			unsigned num:8;
-		} find_character;
-		struct {
-			unsigned forward:1;
-			unsigned num:8;
-		} word;
-		struct {
-			// TODO?
-			unsigned stop_at_insert_begin:1;
-			unsigned stop_at_insert_end:1;
-			unsigned stop_at_delete_begin:1;
-			unsigned stop_at_delete_end:1;
-			unsigned stop_at_mine:1;
-			unsigned stop_at_theirs:1;
-			unsigned stop_at_deferred_begin:1;
-			unsigned stop_at_deferred_end:1;
-			// XXX fun idea: stop at flashing? jump to the action?
-			unsigned forward:1;
-			unsigned num:8;
-		} flag_boundary;
-		struct {
-		} flood_fill;
-		struct {
-		} section_fill;
-		struct {
-		} line;
-	};
+struct range {
+	struct location from, to;
 };
 
 struct command {
 	enum command_type type;
+	//int document_id;
+	//int document_serial;
 	union {
 		struct {
-			struct target target;
-			unsigned add_caret           :1;
-			unsigned clear_all_carets    :1;
-			unsigned set_selection_begin :1;
-			unsigned set_selection_end   :1;
-		} move_caret;
+			int id;
+			struct range range;
+		} set_caret;
 		struct {
-			union {
-				// NOTE `text` is copied, so the pointer must only be valid for
-				// the duration of ed_do()
-				const char* text;
-				intptr_t   _text_offset;
-			};
+			int id;
+		} delete_caret;
+		struct {
+			struct location at;
+			const char* text;
 		} insert;
 		struct {
-			unsigned set_deferred          :1;
-			unsigned clear_deferred        :1;
-			unsigned clear_delete          :1;
-			unsigned clear_insert          :1;
-			unsigned set_secondary_caret   :1;
-			unsigned clear_secondary_caret :1;
-		} flag;
-
-		#if 0
-		struct {
-			struct target target;
+			struct range range;
 		} delete;
-		#endif
-		#if 0
 		struct {
-			struct target from, to;
-			unsigned add :1; // adds to existing selection
-			unsigned cut :1; // removes from existing selection
-			// "disjoint islands" are allowed
-		} select;
-		struct {
-			unsigned deferred     :1; // also commit/fill deferred
-			unsigned line         :1; // expand commit to entire line or lines
-			unsigned flood_fill   :1; // flood fill diffs
-			unsigned section_fill :1; // commit everything in section (delimited by empty lines)
-			// XXX hvorfor er dette ikke targets?
+			int author_id;
+			struct range range;
 		} commit;
-		#endif
+		struct {
+			int author_id;
+			struct range range;
+		} cancel;
+		struct {
+			int author_id;
+			struct range range;
+		} defer;
+		struct {
+			int author_id;
+			struct range range;
+		} undefer;
+		struct {
+			int red, green, blue;
+		} set_color;
 	};
 };
 

@@ -115,21 +115,6 @@ static int resize_compar(const void* va, const void* vb)
 	return d3;
 }
 
-#if 0
-struct font {
-	#if 0
-	int font_data_is_on_the_heap_and_owned_by_us;
-	stbtt_fontinfo fontinfo;
-	float font_px_scale;
-	int font_spacing_x, font_spacing_y;
-	#endif
-	int font_data_is_on_the_heap_and_owned_by_us;
-	stbtt_fontinfo fontinfo;
-	float px_scale;
-	int spacing_x, spacing_y;
-};
-#endif
-
 struct atlas_lut_key {
 	uint8_t font_spec_index;
 	uint8_t y_stretch_index;
@@ -1127,27 +1112,7 @@ void gui_begin_frame(void)
 
 static void move_caret(int delta_column, int delta_line)
 {
-	struct command base = {
-		.type = COMMAND_MOVE_CARET,
-		.move_caret = {
-			.set_selection_begin = 1,
-			.set_selection_end = 1,
-		},
-	};
-
-	if (delta_column != 0) {
-		struct command c = base;
-		c.move_caret.target.type = TARGET_RELATIVE_COLUMN;
-		c.move_caret.target.relative_column.delta = delta_column;
-		ed_do(&c);
-	}
-
-	if (delta_line != 0) {
-		struct command c = base;
-		c.move_caret.target.type = TARGET_RELATIVE_LINE;
-		c.move_caret.target.relative_line.delta = delta_line;
-		ed_do(&c);
-	}
+	// TODO for each caret, calculate new position
 }
 
 static void handle_editor_input(struct pane* pane)
@@ -1258,8 +1223,6 @@ static void gui_draw1(void)
 	for (int i=0; i<arrlen(g.pane_arr); ++i) {
 		struct pane* pane = &g.pane_arr[i];
 
-		//int x0,y0,w,h;
-		//get_pane_position(pane, &x0, &y0, NULL, NULL, &w, &h);
 		struct rect pr = get_pane_rect(pane);
 		if (pr.w<=0 || pr.h<=0) continue;
 

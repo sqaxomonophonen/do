@@ -1,20 +1,20 @@
-#!/usr/bin/env bash
+#!/bin/sh
 
 blacklist() {
 	grep -vF font0.c | grep -vF doc/ | grep -vF .git
 }
 
-3rd() {
+third() {
 	grep -F $1 stb_
 }
 
 ours() {
-	3rd -v # not 3rd
+	third -v # not third
 }
 
 echo
 echo 3RD PARTY:
-wc -l $(git ls-files | 3rd | blacklist)
+wc -l $(git ls-files | third | blacklist)
 
 echo
 echo OURS:

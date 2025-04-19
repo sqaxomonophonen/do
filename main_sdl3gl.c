@@ -55,6 +55,16 @@ static void housekeep_our_windows(void)
 	}
 }
 
+static int gig_thread_run(void* usr)
+{
+	(void)usr;
+	for (;;) {
+		gig_thread_tick();
+		SDL_DelayNS(2000000L);
+	}
+	return 0;
+}
+
 int main(int argc, char** argv)
 {
 	if (!SDL_Init(SDL_INIT_VIDEO)) {
@@ -99,6 +109,7 @@ int main(int argc, char** argv)
 
 	gl_init();
 	common_main_init();
+	SDL_DetachThread(SDL_CreateThread(gig_thread_run, "gig", NULL));
 
 	while (!g0.exiting && get_num_windows() > 0) {
 		gui_begin_frame();

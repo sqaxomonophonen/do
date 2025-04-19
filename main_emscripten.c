@@ -21,13 +21,6 @@ static struct {
 	double start_time;
 } g;
 
-#if 0
-void worker_worker(void)
-{
-	printf("worker worker id: %u\n", emscripten_wasm_worker_self_id());
-}
-#endif
-
 EM_JS(int, canvas_get_width, (void), {
 	const e = document.getElementById("canvas");
 	const v = e.width = e.offsetWidth;
@@ -185,6 +178,14 @@ int64_t get_nanoseconds(void)
 	return (emscripten_get_now()-g.start_time)*1e6;
 }
 
+static void gig_thread_run(void)
+{
+	for (;;) {
+		gig_thread_tick();
+		emscripten_wasm_worker_sleep(2000000L);
+	}
+}
+
 int main(int argc, char** argv)
 {
 	g.num_cores = emscripten_navigator_hardware_concurrency();
@@ -201,15 +202,9 @@ int main(int argc, char** argv)
 	printf("g.num_cores=%d\n", g.num_cores);
 	#endif
 
-	#if 0
-	emscripten_wasm_worker_post_function_v(
-		emscripten_malloc_wasm_worker(/*stacksize=*/1<<12),
-		worker_worker
-	);
-	#endif
-
 	gl_init();
 	common_main_init();
+	emscripten_wasm_worker_post_function_v(emscripten_malloc_wasm_worker(1L<<20), gig_thread_run);
 	emscripten_set_main_loop(main_loop, 0, false);
 
 	return EXIT_SUCCESS;
