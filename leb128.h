@@ -46,31 +46,31 @@ static inline void leb128_encode_##NAME(void(*write_fn)(uint8_t,void*), TYPE val
 ALWAYS_INLINE \
 static inline TYPE leb128_decode_##NAME(uint8_t(*read_fn)(void*), void* userdata) \
 { \
-	UTYPE value = 0; \
-	TYPE shift = 0; \
+	UTYPE uvalue = 0; \
+	int shift = 0; \
 	for (;;) { \
 		const uint8_t b = read_fn(userdata); \
-		value |= (b & 0x7f) << shift; \
+		uvalue |= (UTYPE)(b & 0x7f) << shift; \
 		shift += 7; \
 		if ((b & 0x80) == 0) { \
 			if (shift < NUMBITS && (b & 0x40)) { \
-				value |= (U1 << shift); \
+				uvalue |= (U1 << shift); \
 			} \
 			break; \
 		} \
 	} \
- \
+\
 	/* convert unsigned two's complement to signed value (should be equivalent */ \
 	/* to a cast-to-int  on two's complement hardware) */ \
 	const UTYPE m = UHALF; \
-	if (value < m) { \
-		return (TYPE)value; \
+	if (uvalue < m) { \
+		return (TYPE)uvalue; \
 	} else { \
 		/* XXX I think this is slightly "implementation defined" because the */ \
 		/* minimum value is one lower for two's complement than compared to */ \
 		/* one's complement and sign+magnitude. nevertheless it does the right */ \
 		/* thing on two's complement. */ \
-		return NEG0 + (TYPE)((value & ~m)-1); \
+		return NEG0 + (TYPE)((uvalue & ~m)-(TYPE)1); \
 	} \
 }
 
@@ -86,7 +86,7 @@ static inline TYPE leb128_decode_##NAME(uint8_t(*read_fn)(void*), void* userdata
 LEB128_DEFINE_FOR_TYPE(
 	/*TYPE=*/int,
 	/*UTYPE=*/unsigned,
-	/*U1=*/(~0u),
+	/*U1=*/(~0U),
 	/*NUMBITS=*/(32),
 	/*UHALF=*/(0x80000000),
 	/*NEG0=*/(-0x7fffffff),
@@ -95,7 +95,7 @@ LEB128_DEFINE_FOR_TYPE(
 LEB128_DEFINE_FOR_TYPE(
 	/*TYPE=*/int64_t,
 	/*UTYPE=*/uint64_t,
-	/*U1=*/(~0ull),
+	/*U1=*/(~0ULL),
 	/*NUMBITS=*/(64),
 	/*UHALF=*/(0x8000000000000000LL),
 	/*NEG0=*/(-0x7fffffffffffffffLL),
@@ -136,6 +136,12 @@ static uint8_t read_fn(void* userdata)
 static void _test_l128u(int64_t value, int num_bytes, ...)
 {
 	for (int pass=0; pass<2; ++pass) {
+		if (pass == 0 && !((INT_MIN <= value) && (value <= INT_MAX))) {
+			// skip 32-bit tests of 64-bit values (a little icky because a
+			// passed test is silent, but as always, to test the test, break
+			// the test:)
+			continue;
+		}
 
 		int fail = 0;
 
@@ -181,13 +187,11 @@ static void _test_l128u(int64_t value, int num_bytes, ...)
 		}
 
 		_g_l128u.cursor = 0;
-		int decoded_value;
+		int64_t decoded_value;
 		if (pass == 0) {
 			decoded_value = leb128_decode_int(read_fn, (void*)42);
 		} else if (pass == 1) {
-			const int64_t decoded_value64 = leb128_decode_int64(read_fn, (void*)42);
-			assert((INT_MIN <= decoded_value64) && (decoded_value64 <= INT_MAX));
-			decoded_value = (int)decoded_value64;
+			decoded_value = leb128_decode_int64(read_fn, (void*)42);
 		} else {
 			assert(!"bad state");
 		}
@@ -196,45 +200,61 @@ static void _test_l128u(int64_t value, int num_bytes, ...)
 			fprintf(stderr, "LEB128 ROUNDTRIP FAIL: expected to read %d byte(s), but read %d\n", num_written_bytes, num_read_bytes);
 		}
 		if (decoded_value != value) {
-			fprintf(stderr, "LEB128 ROUNDTRIP FAIL: expected to decode %ld, but decoded %d\n", value, decoded_value);
+			fprintf(stderr, "LEB128 ROUNDTRIP FAIL: expected to decode %ld, but decoded %ld\n", value, decoded_value);
 		}
 	}
 }
 
 static void leb128_unit_test(void)
 {
-	// test non-negative
-    _test_l128u(0x00l        , 1, 0x00);
-    _test_l128u(0x01l        , 1, 0x01);
-    _test_l128u(0x02l        , 1, 0x02);
-    _test_l128u(0x3fl        , 1, 0x3f);
-    _test_l128u(0x40l        , 2, 0xc0, 0x00);
-    _test_l128u(0x41l        , 2, 0xc1, 0x00);
-    _test_l128u(0x80l        , 2, 0x80, 0x01);
-    _test_l128u(0x81l        , 2, 0x81, 0x01);
-    _test_l128u(0x100l       , 2, 0x80, 0x02);
-    _test_l128u(0x200l       , 2, 0x80, 0x04);
-    _test_l128u(0x42424l     , 3, 0xa4, 0xc8, 0x10);
-    _test_l128u(0x123abcl    , 4, 0xbc, 0xf5, 0xc8, 0x00);
-    _test_l128u(0x234bcdl    , 4, 0xcd, 0x97, 0x8d, 0x01);
-    _test_l128u(0x7ffffffel  , 5, 0xfe, 0xff, 0xff, 0xff, 0x07);
-    _test_l128u(0x7fffffffl  , 5, 0xff, 0xff, 0xff, 0xff, 0x07); // maximum value
+	// test non-negative 32/64bit
+    _test_l128u(0x00L        , 1, 0x00);
+    _test_l128u(0x01L        , 1, 0x01);
+    _test_l128u(0x02L        , 1, 0x02);
+    _test_l128u(0x3fL        , 1, 0x3f);
+    _test_l128u(0x40L        , 2, 0xc0, 0x00);
+    _test_l128u(0x41L        , 2, 0xc1, 0x00);
+    _test_l128u(0x80L        , 2, 0x80, 0x01);
+    _test_l128u(0x81L        , 2, 0x81, 0x01);
+    _test_l128u(0x100L       , 2, 0x80, 0x02);
+    _test_l128u(0x200L       , 2, 0x80, 0x04);
+    _test_l128u(0x42424L     , 3, 0xa4, 0xc8, 0x10);
+    _test_l128u(0x123abcL    , 4, 0xbc, 0xf5, 0xc8, 0x00);
+    _test_l128u(0x234bcdL    , 4, 0xcd, 0x97, 0x8d, 0x01);
+    _test_l128u(0x7ffffffeL  , 5, 0xfe, 0xff, 0xff, 0xff, 0x07);
+    _test_l128u(0x7fffffffL  , 5, 0xff, 0xff, 0xff, 0xff, 0x07); // maximum int value
+
+	// test non-negative 64bit
+    _test_l128u(0x424242424L,         6, 0xa4, 0xc8, 0x90, 0xa1, 0xc2, 0x00);
+    _test_l128u(0x123456bcdef0L,      7, 0xf0, 0xbd, 0xf3, 0xb5, 0xc5, 0xc6, 0x04);
+    _test_l128u(0x1234567abcdef0L,    8, 0xf0, 0xbd, 0xf3, 0xd5, 0xe7, 0x8a, 0x8d, 0x09);
+    _test_l128u(0x123456789abcdef0L,  9, 0xf0, 0xbd, 0xf3, 0xd5, 0x89, 0xcf, 0x95, 0x9a, 0x12);
+    _test_l128u(0x7ffffffffffffffeL, 10, 0xfe, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00);
+    _test_l128u(0x7fffffffffffffffL, 10, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00);
 
 	// test negative
-    _test_l128u(-0x01l       , 1, 0x7f);
-    _test_l128u(-0x02l       , 1, 0x7e);
-    _test_l128u(-0x3fl       , 1, 0x41);
-    _test_l128u(-0x40l       , 1, 0x40);
-    _test_l128u(-0x41l       , 2, 0xbf, 0x7f);
-    _test_l128u(-0x42424l    , 3, 0xdc, 0xb7, 0x6f);
-    _test_l128u(-0x123abcl   , 4, 0xc4, 0x8a, 0xb7, 0x7f);
-    _test_l128u(-0x234bcdl   , 4, 0xb3, 0xe8, 0xf2, 0x7e);
-    _test_l128u(-0xfffffel   , 4, 0x82, 0x80, 0x80, 0x78);
-    _test_l128u(-0xffffffl   , 4, 0x81, 0x80, 0x80, 0x78);
-    _test_l128u(-0xffffffel  , 5, 0x82, 0x80, 0x80, 0x80, 0x7f);
-    _test_l128u(-0xfffffffl  , 5, 0x81, 0x80, 0x80, 0x80, 0x7f);
-    _test_l128u(-0x7fffffffl , 5, 0x81, 0x80, 0x80, 0x80, 0x78);
-    _test_l128u(-0x80000000l , 5, 0x80, 0x80, 0x80, 0x80, 0x78); // minimum value
+    _test_l128u(-0x01L       , 1, 0x7f);
+    _test_l128u(-0x02L       , 1, 0x7e);
+    _test_l128u(-0x3fL       , 1, 0x41);
+    _test_l128u(-0x40L       , 1, 0x40);
+    _test_l128u(-0x41L       , 2, 0xbf, 0x7f);
+    _test_l128u(-0x42424L    , 3, 0xdc, 0xb7, 0x6f);
+    _test_l128u(-0x123abcL   , 4, 0xc4, 0x8a, 0xb7, 0x7f);
+    _test_l128u(-0x234bcdL   , 4, 0xb3, 0xe8, 0xf2, 0x7e);
+    _test_l128u(-0xfffffeL   , 4, 0x82, 0x80, 0x80, 0x78);
+    _test_l128u(-0xffffffL   , 4, 0x81, 0x80, 0x80, 0x78);
+    _test_l128u(-0xffffffeL  , 5, 0x82, 0x80, 0x80, 0x80, 0x7f);
+    _test_l128u(-0xfffffffL  , 5, 0x81, 0x80, 0x80, 0x80, 0x7f);
+    _test_l128u(-0x7fffffffL , 5, 0x81, 0x80, 0x80, 0x80, 0x78); // minimum safe int value
+    _test_l128u(-0x80000000L , 5, 0x80, 0x80, 0x80, 0x80, 0x78); // minimum int value
+
+	// test negative 64bit
+    _test_l128u(-0x424242424L,         6, 0xdc, 0xb7, 0xef, 0xde, 0xbd, 0x7f);
+    _test_l128u(-0x123456bcdef0L,      7, 0x90, 0xc2, 0x8c, 0xca, 0xba, 0xb9, 0x7b);
+    _test_l128u(-0x1234567abcdef0L,    8, 0x90, 0xc2, 0x8c, 0xaa, 0x98, 0xf5, 0xf2, 0x76);
+    _test_l128u(-0x123456789abcdef0L,  9, 0x90, 0xc2, 0x8c, 0xaa, 0xf6, 0xb0, 0xea, 0xe5, 0x6d);
+    _test_l128u(-0x7fffffffffffffffL, 10, 0x81, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x7f);
+    _test_l128u(-0x8000000000000000L, 10, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x7f);
 
 	// fuzz test
 	uint32_t z = 654654;
