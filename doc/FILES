@@ -1,0 +1,37 @@
+
+========================
+Overview of source files
+========================
+
+(When both foo.c and foo.h exists, the most notable is mentioned and the other
+is omitted)
+
+gig.c - "state of the gig", shared, collaborative state, and an interface to it
+
+gui.c - main GUI code (cross-platform)
+
+main_*.c - entrypoint (main) for GUI frontends
+  main_emscripten.c - web app, using emscripten/webgl
+  main_sdl3gl.c     - desktop app, using SDL3 + OpenGL ES 3
+  main.h            - shared code / interface for main_*.c
+
+impl_*.h - "backend implementations" for various stuff
+  impl_sdl3.h - SDL3
+  impl_gl.h   - GL code (OpenGL ES 3 / WebGL)
+
+fonts
+  fonts.c - font list
+  font0.c - embedded system font
+
+utility code
+  utf8.c      - UTF-8 implementation
+  sep2dconv.c - separable 2D convolution (used for HDR blur)
+  util.h      - misc shared utility code
+  leb128.h    - LEB128 variable-length integer codec
+
+tests
+  test_*.c   - stand-alone tests
+  selftest.c - self-test that is executed when program starts
+
+third-party code
+  stb_*.h - single-header libraries from https://github.com/nothings/stb
