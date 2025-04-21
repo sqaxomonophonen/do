@@ -16,6 +16,7 @@
 #include "sep2dconv.h"
 #include "gig.h"
 #include "fonts.h"
+#include "utf8.h"
 
 #define ATLAS_MIN_SIZE_LOG2 (8)
 #define ATLAS_MAX_SIZE_LOG2 (13)
@@ -1110,38 +1111,97 @@ void gui_begin_frame(void)
 	arrput(g.text_buffer_arr, 0); // terminate cstr
 }
 
-static void move_caret(int delta_column, int delta_line)
-{
-	// TODO for each caret, calculate new position
-}
-
 static void handle_editor_input(struct pane* pane)
 {
 	assert(pane->type == CODE);
-	ed_begin(pane->code.document_id);
+	const int doc_id = pane->code.document_id;
+	ed_begin(doc_id);
+	struct document* doc = get_document_by_id(doc_id);
+	const int my_artist_id = get_my_artist_id();
+	const int num_carets = arrlen(doc->caret_arr);
+
 	for (int i=0; i<arrlen(g.key_buffer_arr); ++i) {
 		const int key = g.key_buffer_arr[i];
 		const int down = get_key_down(key);
 		const int mod = get_key_mod(key);
 		const int code = get_key_code(key);
 		if (down && mod==0) {
+			int dcol=0, dline=0;
 			switch (code) {
-			case KEY_ARROW_LEFT:  move_caret(-1 ,  0); break;
-			case KEY_ARROW_RIGHT: move_caret( 1 ,  0); break;
-			case KEY_ARROW_UP:    move_caret( 0 , -1); break;
-			case KEY_ARROW_DOWN:  move_caret( 0 ,  1); break;
+			case KEY_ARROW_LEFT:  dcol  = -1; break;
+			case KEY_ARROW_RIGHT: dcol  =  1; break;
+			case KEY_ARROW_UP:    dline = -1; break;
+			case KEY_ARROW_DOWN:  dline =  1; break;
 			default: break;
+			}
+
+			if (dcol || dline) {
+				int num_motions = 0;
+				for (int i=0; i<num_carets; ++i) {
+					struct caret* caret = &doc->caret_arr[i];
+					if (caret->artist_id != my_artist_id) continue;
+					++num_motions;
+					struct location newloc = {
+						.line = caret->range.from.line + dline,
+						.column = caret->range.from.column + dcol,
+					};
+					#if 0
+					printf("newloc %d %d\n", newloc.line, newloc.column);
+					#endif
+					ed_do(&((struct command){
+						.type = COMMAND_SET_CARET,
+						.set_caret = {
+							.id = caret->id,
+							.range = { .from = newloc, .to = newloc },
+						},
+					}));
+				}
+
+				if (num_motions == 0) {
+					// XXX FIXME hack? I think the proper approach is:
+					//  set caret if click in code
+					//  if tabbing into window remember last caret position?
+					printf("XXXHACK: setting caret because we have none\n");
+					ed_do(&((struct command){
+						.type = COMMAND_SET_CARET,
+						.set_caret = {
+							.id = 1,
+							.range = {
+								.from = { .line = 1, .column = 1, },
+								.to =   { .line = 1, .column = 1, },
+							},
+						},
+					}));
+				}
 			}
 		}
 	}
 
-	if (strlen(g.text_buffer_arr) > 0) {
-		ed_do(&((struct command){
-			.type = COMMAND_INSERT,
-			.insert = {
-				.text = g.text_buffer_arr,
-			},
-		}));
+	const int num_chars = utf8_strlen(g.text_buffer_arr);
+	if (num_chars > 0) {
+		for (int i=0; i<num_carets; ++i) {
+			struct caret* caret = &doc->caret_arr[i];
+			if (caret->artist_id != my_artist_id) continue;
+			ed_do(&((struct command){
+				.type = COMMAND_INSERT,
+				.insert = {
+					.text = g.text_buffer_arr,
+					.at = caret->range.from,
+					// XXX handle caret ranges?
+				},
+			}));
+			struct location newloc = {
+				.line = caret->range.from.line,
+				.column = caret->range.from.column + num_chars,
+			};
+			ed_do(&((struct command){
+				.type = COMMAND_SET_CARET,
+				.set_caret = {
+					.id = caret->id,
+					.range = { .from = newloc, .to = newloc, },
+				},
+			}));
+		}
 	}
 	ed_end();
 }

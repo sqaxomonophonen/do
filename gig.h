@@ -33,8 +33,8 @@ enum document_type {
 };
 
 struct caret {
-	int author_id;
-	int caret_id;
+	int id;
+	int artist_id;
 	struct range range;
 };
 
@@ -112,19 +112,19 @@ struct command {
 			struct range range;
 		} delete; // for COMMAND_DELETE
 		struct {
-			int author_id;
+			int artist_id;
 			struct range range;
 		} commit; // for COMMAND_COMMIT
 		struct {
-			int author_id;
+			int artist_id;
 			struct range range;
 		} cancel; // for COMMAND_CANCEL
 		struct {
-			int author_id;
+			int artist_id;
 			struct range range;
 		} defer; // for COMMAND_DEFER
 		struct {
-			int author_id;
+			int artist_id;
 			struct range range;
 		} undefer; // for COMMAND_UNDEFER
 		struct {
@@ -149,6 +149,8 @@ int get_num_documents(void);
 struct document* get_document_by_index(int);
 struct document* get_document_by_id(int);
 struct document* find_document_by_id(int);
+
+int get_my_artist_id(void);
 
 #define GIG_H
 #endif

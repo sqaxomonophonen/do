@@ -126,8 +126,29 @@ struct snapshot {
 	struct document* document_arr;
 };
 
+static int snapshot_get_num_documents(struct snapshot* ss)
+{
+	return arrlen(ss->document_arr);
+}
+
+struct document* snapshot_get_document_by_index(struct snapshot* ss, int index)
+{
+	assert((0 <= index) && (index < get_num_documents()));
+	return &ss->document_arr[index];
+}
+
+struct document* snapshot_find_document_by_id(struct snapshot* ss, int id)
+{
+	const int n = snapshot_get_num_documents(ss);
+	for (int i=0; i<n; ++i) {
+		struct document* doc = snapshot_get_document_by_index(ss, i);
+		if (doc->id == id) return doc;
+	}
+	return NULL;
+}
+
 struct journal_commands {
-	int author_id;
+	int artist_id;
 	int document_id;
 	uint16_t num_commands;
 };
@@ -151,27 +172,22 @@ static struct {
 	int ed_num_commands;
 	size_t ed_began_at_write_position;
 	int ed_is_begun;
+	int my_artist_id;
 } g;
 
 int get_num_documents(void)
 {
-	return arrlen(g.outside.document_arr);
+	return snapshot_get_num_documents(&g.outside);
 }
 
 struct document* get_document_by_index(int index)
 {
-	assert((0 <= index) && (index < get_num_documents()));
-	return &g.outside.document_arr[index];
+	return snapshot_get_document_by_index(&g.outside, index);
 }
 
 struct document* find_document_by_id(int id)
 {
-	const int n = get_num_documents();
-	for (int i=0; i<n; ++i) {
-		struct document* doc = get_document_by_index(i);
-		if (doc->id == id) return doc;
-	}
-	return NULL;
+	return snapshot_find_document_by_id(&g.outside, id);
 }
 
 struct document* get_document_by_id(int id)
@@ -388,19 +404,19 @@ static void codec_command_ptr(struct codec* c, struct command* cm)
 		codec_range_ptr(c, &cm->delete.range);
 		break;
 	case COMMAND_COMMIT:
-		CODEC_VARINT(c, cm->commit.author_id);
+		CODEC_VARINT(c, cm->commit.artist_id);
 		codec_range_ptr(c, &cm->commit.range);
 		break;
 	case COMMAND_CANCEL:
-		CODEC_VARINT(c, cm->cancel.author_id);
+		CODEC_VARINT(c, cm->cancel.artist_id);
 		codec_range_ptr(c, &cm->cancel.range);
 		break;
 	case COMMAND_DEFER:
-		CODEC_VARINT(c, cm->defer.author_id);
+		CODEC_VARINT(c, cm->defer.artist_id);
 		codec_range_ptr(c, &cm->defer.range);
 		break;
 	case COMMAND_UNDEFER:
-		CODEC_VARINT(c, cm->undefer.author_id);
+		CODEC_VARINT(c, cm->undefer.artist_id);
 		codec_range_ptr(c, &cm->undefer.range);
 		break;
 	case COMMAND_SET_COLOR:
@@ -421,7 +437,7 @@ static void codec_command_ptr(struct codec* c, struct command* cm)
 
 static void codec_journal_commands_ptr(struct codec* c, struct journal_commands* jc)
 {
-	CODEC_VARINT(c, jc->author_id);
+	CODEC_VARINT(c, jc->artist_id);
 	CODEC_VARINT(c, jc->document_id);
 	CODEC_UINT16(c, jc->num_commands);
 }
@@ -433,13 +449,13 @@ static void codec_request_commands_ptr(struct codec* c, struct request_commands*
 	CODEC_UINT16(c, rc->num_commands);
 }
 
-static void codec_begin_encode_journal_commands(struct codec* c, struct ringbuf* rb, int author_id, int document_id)
+static void codec_begin_encode_journal_commands(struct codec* c, struct ringbuf* rb, int artist_id, int document_id)
 {
 	assert(c->in_journal_commands == 0);
 	c->began_at_position = rb->write_cursor;
 	codec_begin_encode(c, rb);
 	struct journal_commands jc = {
-		.author_id = author_id,
+		.artist_id = artist_id,
 		.document_id = document_id,
 		.num_commands = 0xffff,
 	};
@@ -490,18 +506,53 @@ static void snapshot_spool(struct snapshot* ss, struct ringbuf* journal)
 	struct journal_commands jc;
 	while (tmp_rb.read_cursor < commit_cursor) {
 		codec_journal_commands_ptr(&cc, &jc);
-		for (int i=0; i<jc.num_commands; ++i) {
+		const int num_commands = jc.num_commands;
+		const int artist_id = jc.artist_id;
+		struct document* doc = NULL;
+		if (jc.document_id > 0) {
+			doc = snapshot_find_document_by_id(ss, jc.document_id);
+		}
+		for (int i=0; i<num_commands; ++i) {
 			struct command cm;
 			codec_command_ptr(&cc, &cm);
 			switch (cm.type) {
+
 			case COMMAND_CREATE_DOCUMENT: {
-				struct document* doc = arraddnptr(ss->document_arr, 1);
-				memset(doc, 0, sizeof *doc);
+				// XXX this crash can be caused by requests over network:
+				assert((jc.document_id == 0 && doc == NULL) && "journal_commands.document_id must be zero when creating docs");
+				struct document* newdoc = arraddnptr(ss->document_arr, 1);
+				memset(newdoc, 0, sizeof *newdoc);
 				// XXX what to do with id collisions?
-				doc->id = cm.create_document.id;
-				doc->type = cm.create_document.type;
-				doc->flags = cm.create_document.flags;
+				newdoc->id = cm.create_document.id;
+				newdoc->type = cm.create_document.type;
+				newdoc->flags = cm.create_document.flags;
 			}	break;
+
+			case COMMAND_SET_CARET: {
+				// XXX this crash can be caused by requests over network:
+				assert(doc != NULL);
+				const int num_carets = arrlen(doc->caret_arr);
+				struct caret* caret = NULL;
+				for (int i=0; i<num_carets; ++i) {
+					struct caret* cr = &doc->caret_arr[i];
+					if (cr->id != cm.set_caret.id) continue;
+					caret = cr;
+					break;
+				}
+				if (caret == NULL) {
+					caret = arraddnptr(doc->caret_arr, 1);
+					memset(caret, 0, sizeof *caret);
+					caret->id = cm.set_caret.id;
+					caret->artist_id = artist_id;
+				}
+				assert(caret != NULL);
+				caret->range = cm.set_caret.range;
+			}	break;
+
+			case COMMAND_INSERT: {
+				assert(!"TODO handle text insert");
+			}	break;
+
 			default: assert(!"unhandled command type");
 			}
 		}
@@ -582,12 +633,37 @@ void ed_end(void)
 
 void gig_thread_tick(void)
 {
+	struct ringbuf* src = &g.command_ringbuf;
+	struct ringbuf* dst = &g.journal_ringbuf;
+	const size_t commit_cursor = atomic_load(&src->commit_cursor);
+	struct codec csrc={0};
+	codec_begin_decode(&csrc, src);
+	while (src->read_cursor < commit_cursor) {
+		struct request_commands rq;
+		codec_request_commands_ptr(&csrc, &rq);
+		struct codec cdst={0};
+		codec_begin_encode_journal_commands(&cdst, dst, g.my_artist_id, rq.document_id);
+		const int num_commands = rq.num_commands;
+		for (int i=0; i<num_commands; ++i) {
+			struct command cm;
+			codec_command_ptr(&csrc, &cm);
+			codec_command_ptr(&cdst, &cm);
+		}
+		codec_end_encode_journal_commands(&cdst);
+	}
+	codec_end_decode(&csrc);
+	ringbuf_acknowledge(src);
+	ringbuf_commit(dst);
 	snapshot_spool(&g.inside, &g.journal_ringbuf);
 }
 
 void gig_init(void)
 {
 	ringbuf_init(&g.command_ringbuf, 16);
+
+	g.my_artist_id = 1;
+	// XXX this is probably correct if we're host of the venue, but otherwise
+	// we need an assigned artist id
 
 	{
 		struct ringbuf* rb = &g.journal_ringbuf;
@@ -616,4 +692,9 @@ void gig_init(void)
 
 	gig_thread_tick();
 	gig_spool();
+}
+
+int get_my_artist_id(void)
+{
+	return g.my_artist_id;
 }
