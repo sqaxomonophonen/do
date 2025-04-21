@@ -184,6 +184,7 @@ static void _test_l128u(int64_t value, int num_bytes, ...)
 				fprintf(stderr, "%s%.2x", (i>0?" ":""), _g_l128u.buffer[i]);
 			}
 			fprintf(stderr, "]\n");
+			abort();
 		}
 
 		_g_l128u.cursor = 0;
@@ -198,9 +199,11 @@ static void _test_l128u(int64_t value, int num_bytes, ...)
 		const int num_read_bytes = _g_l128u.cursor;
 		if (_g_l128u.cursor != num_written_bytes) {
 			fprintf(stderr, "LEB128 ROUNDTRIP FAIL: expected to read %d byte(s), but read %d\n", num_written_bytes, num_read_bytes);
+			abort();
 		}
 		if (decoded_value != value) {
 			fprintf(stderr, "LEB128 ROUNDTRIP FAIL: expected to decode %ld, but decoded %ld\n", value, decoded_value);
+			abort();
 		}
 	}
 }
@@ -271,6 +274,7 @@ static void leb128_unit_test(void)
 		const int num_read = _g_l128u.cursor;
 		if ((num_read != num_written) || (v1 != v0)) {
 			fprintf(stderr, "LEB128 FUZZ FAIL: input value %d (n=%d), output value %d (n=%d)\n", v0, num_written, v1, num_read);
+			abort();
 		}
 	}
 }
