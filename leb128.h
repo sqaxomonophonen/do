@@ -1,5 +1,7 @@
 #ifndef LEB128_H
 
+// "little endian base 128" variable-length integer encoding. see LEB128_UNIT_TEST.
+
 #include <stdint.h>
 #include <assert.h>
 #include <stdarg.h>
@@ -7,7 +9,7 @@
 #include "util.h"
 
 ALWAYS_INLINE
-static inline void leb128_encode_int(void(*write_fn)(uint8_t), int value)
+static inline void leb128_encode_int(void(*write_fn)(uint8_t,void*), int value, void* userdata)
 {
 	int more;
 	if (value >= 0) {
@@ -17,7 +19,7 @@ static inline void leb128_encode_int(void(*write_fn)(uint8_t), int value)
 			u >>= 7;
 			more = (b > 0x3f) || u;
 			if (more) b |= 0x80;
-			write_fn(b);
+			write_fn(b, userdata);
 		} while (more);
 	} else if (value < 0) {
 		// convert negative value to two's complement. this is likely a no-op
@@ -31,7 +33,7 @@ static inline void leb128_encode_int(void(*write_fn)(uint8_t), int value)
 			u = (u >> 7) | negpad;
 			more = ((b <= 0x3f) || (u != neg));
 			if (more) b |= 0x80;
-			write_fn(b);
+			write_fn(b, userdata);
 		} while (more);
 	} else {
 		assert(!"unreachable");
@@ -39,12 +41,12 @@ static inline void leb128_encode_int(void(*write_fn)(uint8_t), int value)
 }
 
 ALWAYS_INLINE
-static inline int leb128_decode_int(uint8_t(*read_fn)(void))
+static inline int leb128_decode_int(uint8_t(*read_fn)(void*), void* userdata)
 {
 	unsigned value = 0;
 	int shift = 0;
 	for (;;) {
-		const uint8_t b = read_fn();
+		const uint8_t b = read_fn(userdata);
 		value |= (b & 0x7f) << shift;
 		shift += 7;
 		if ((b & 0x80) == 0) {
@@ -63,7 +65,8 @@ static inline int leb128_decode_int(uint8_t(*read_fn)(void))
 	} else {
 		// XXX I think this is slightly "implementation defined" because the
 		// minimum value is one lower for two's complement than compared to
-		// one's complement and sign+magnitude
+		// one's complement and sign+magnitude. nevertheless it does the right
+		// thing on two's complement.
 		return -0x7fffffff + (int)((value & ~m)-1);
 	}
 }
@@ -82,14 +85,16 @@ static struct {
 } g;
 
 
-static void write_fn(uint8_t v)
+static void write_fn(uint8_t v, void* userdata)
 {
+	assert(userdata == (void*)42);
 	assert(g.cursor < sizeof(g.buffer));
     g.buffer[g.cursor++] = v;
 }
 
-static uint8_t read_fn(void)
+static uint8_t read_fn(void* userdata)
 {
+	assert(userdata == (void*)42);
 	assert(g.cursor < sizeof(g.buffer));
     return g.buffer[g.cursor++];
 }
@@ -99,7 +104,7 @@ static void test(int value, int num_bytes, ...)
 	int fail = 0;
 
     g.cursor = 0;
-    leb128_encode_int(write_fn, value);
+    leb128_encode_int(write_fn, value, (void*)42);
 	const int num_written_bytes = g.cursor;
     if (num_written_bytes != num_bytes) {
 		fail = 1;
@@ -134,7 +139,7 @@ static void test(int value, int num_bytes, ...)
 	}
 
 	g.cursor = 0;
-	const int decoded_value = leb128_decode_int(read_fn);
+	const int decoded_value = leb128_decode_int(read_fn, (void*)42);
 	const int num_read_bytes = g.cursor;
 	if (g.cursor != num_written_bytes) {
 		fprintf(stderr, "LEB128 ROUNDTRIP FAIL: expected to read %d byte(s), but read %d\n", num_written_bytes, num_read_bytes);
@@ -187,10 +192,10 @@ int main(int argc, char** argv)
 		w = 18000 * (w & 0xffff) + (w>>16);
 		const int v0 = (z<<16) + w;
 		g.cursor = 0;
-		leb128_encode_int(write_fn, v0);
+		leb128_encode_int(write_fn, v0, (void*)42);
 		const int num_written = g.cursor;
 		g.cursor = 0;
-		const int v1 = leb128_decode_int(read_fn);
+		const int v1 = leb128_decode_int(read_fn, (void*)42);
 		const int num_read = g.cursor;
 		if ((num_read != num_written) || (v1 != v0)) {
 			fprintf(stderr, "LEB128 FUZZ FAIL: input value %d (n=%d), output value %d (n=%d)\n", v0, num_written, v1, num_read);

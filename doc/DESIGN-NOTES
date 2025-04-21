@@ -305,6 +305,12 @@ polling which I'd otherwise prefer due to server-side simplicity.
 
 internal/external protocol is journal based?
 
+"virtual OSC": you can write code that listens on or sends to a virtual OSC
+port. you give it a name like "foo42". now if you send a message to "foo42",
+then everybody who listens on "foo42" receives it. it could even work in
+multi-venue setups with some kind of "OSC bridge"?
+
+
 
 rule of thumb: the software should have the same reliability as you'd expect
 from a real instrument when playing live. this is more of a "soft rule", or a

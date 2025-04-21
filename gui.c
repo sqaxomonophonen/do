@@ -1118,6 +1118,7 @@ static void move_caret(int delta_column, int delta_line)
 static void handle_editor_input(struct pane* pane)
 {
 	assert(pane->type == CODE);
+	ed_begin(pane->code.document_id);
 	for (int i=0; i<arrlen(g.key_buffer_arr); ++i) {
 		const int key = g.key_buffer_arr[i];
 		const int down = get_key_down(key);
@@ -1142,6 +1143,7 @@ static void handle_editor_input(struct pane* pane)
 			},
 		}));
 	}
+	ed_end();
 }
 
 static void draw_code_pane(struct pane* pane)
@@ -1216,7 +1218,6 @@ static void draw_code_pane(struct pane* pane)
 
 static void gui_draw1(void)
 {
-	ed_begin();
 
 	// TODO render video synth background if configured?
 
@@ -1239,10 +1240,6 @@ static void gui_draw1(void)
 		}
 
 		// TODO render pane overlay? (e.g. pane border lines)
-	}
-
-	if (!ed_commit()) {
-		assert(!"TODO commands failed: user needs to know?");
 	}
 }
 
@@ -1320,5 +1317,4 @@ void gui_drop_file(const char* name, size_t num_bytes, uint8_t* bytes)
 	// TODO!?
 	//  - should probably always hash file
 	//  - NOTE: bytes might be freed after we return?
-	//  
 }
