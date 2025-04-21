@@ -95,7 +95,7 @@ LEB128_DEFINE_FOR_TYPE(
 LEB128_DEFINE_FOR_TYPE(
 	/*TYPE=*/int64_t,
 	/*UTYPE=*/uint64_t,
-	/*U1=*/(~0ULL),
+	/*U1=*/(~0UL),
 	/*NUMBITS=*/(64),
 	/*UHALF=*/(0x8000000000000000LL),
 	/*NEG0=*/(-0x7fffffffffffffffLL),

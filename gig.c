@@ -328,7 +328,7 @@ static int codec_varint_io(struct codec* c, int v)
 #define CODEC_VARINT(c,V) (V)=codec_varint_io(c,V)
 
 NO_DISCARD
-static int codec_varint64_io(struct codec* c, int v)
+static int64_t codec_varint64_io(struct codec* c, int64_t v)
 {
 	if (is_encoding(c)) {
 		codec_write_varint64(c, v);
@@ -360,13 +360,25 @@ static uint16_t codec_uint16_io(struct codec* c, uint16_t v)
 }
 #define CODEC_UINT16(c,V) (V)=codec_uint16_io(c,V)
 
-#if 0
-static void codec_magic(struct codec* c, int magic)
+// defining `DEBUG_PROTOCOL` means that extra dummy data is added to the
+// protocol, and read back in order to test it. this makes it incompatible with
+// data written by a non-DEBUG_PROTOCOL executable! so it should only be used
+// for debugging.
+#ifdef DEBUG_PROTOCOL
+static void codec_debug_tracer(struct codec* c, int tracer)
 {
-	int magic2 = codec_varint_io(c, magic);
-	if (magic2 != magic) {
-		assert(!"TODO error handling?"); // XXX
+	// write `tracer` when encoding, assert that we read `tracer` back when
+	// decoding.
+	const int tracer2 = codec_varint_io(c, tracer);
+	if (is_decoding(c) && tracer2 != tracer) {
+		fprintf(stderr, "codec_debug_tracer() fail: expected to read %d but read %d", tracer, tracer2);
+		abort();
 	}
+}
+#else
+static void codec_debug_tracer(struct codec* c, int tracer)
+{
+	// no-op
 }
 #endif
 
@@ -410,10 +422,7 @@ static void codec_range_ptr(struct codec* c, struct range* r)
 
 static void codec_command_ptr(struct codec* c, struct command* cm)
 {
-	#if 0
-	codec_magic(42); // XXX magic marker here? or how does that work?
-	#endif
-
+	codec_debug_tracer(c, -1003);
 	CODEC_VARINT(c, cm->type);
 	switch (cm->type) {
 	case COMMAND_SET_CARET:
@@ -464,6 +473,7 @@ static void codec_command_ptr(struct codec* c, struct command* cm)
 
 static void codec_journal_commands_ptr(struct codec* c, struct journal_commands* jc)
 {
+	codec_debug_tracer(c, -1001);
 	CODEC_VARINT(c, jc->artist_id);
 	CODEC_VARINT(c, jc->document_id);
 	CODEC_UINT16(c, jc->num_commands);
@@ -471,6 +481,7 @@ static void codec_journal_commands_ptr(struct codec* c, struct journal_commands*
 
 static void codec_request_commands_ptr(struct codec* c, struct request_commands* rc)
 {
+	codec_debug_tracer(c, -1002);
 	CODEC_VARINT(c, rc->document_id);
 	CODEC_VARINT(c, rc->version);
 	CODEC_VARINT64(c, rc->not_before_timestamp);
@@ -685,16 +696,13 @@ void gig_thread_tick(void)
 	const size_t commit_cursor = atomic_load(&src->commit_cursor);
 	struct codec csrc={0};
 	codec_begin_decode(&csrc, src);
-	int64_t now = -1;
+	const int64_t now = get_nanoseconds();
 	while (src->read_cursor < commit_cursor) {
 		const size_t save_read_cursor = src->read_cursor;
 		struct request_commands rq;
 		codec_request_commands_ptr(&csrc, &rq);
 
-		printf("not before %ld (XXX not working)\n", rq.not_before_timestamp); // XXX
-
 		if (rq.not_before_timestamp != 0) {
-			if (now == -1) now = get_nanoseconds();
 			if (now < rq.not_before_timestamp) {
 				src->read_cursor = save_read_cursor;
 				break;
