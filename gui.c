@@ -1115,7 +1115,7 @@ static void handle_editor_input(struct pane* pane)
 {
 	assert(pane->type == CODE);
 	const int doc_id = pane->code.document_id;
-	ed_begin(doc_id);
+	ed_begin(doc_id, 1000000000L);
 	struct document* doc = get_document_by_id(doc_id);
 	const int my_artist_id = get_my_artist_id();
 	const int num_carets = arrlen(doc->caret_arr);

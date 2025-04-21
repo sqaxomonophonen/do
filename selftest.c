@@ -1,6 +1,13 @@
 // run_selftest() is intended to run various automated tests before the program
 // starts up. This may or may not be a good idea :-) Scattered thoughts on it:
 
+//  - Self testing seems like the only way we can conveniently test a
+//    compilation unit that depends on other compilation units (looking at you,
+//    gig.c, for starters). I don't think dynamic dependency injection is a
+//    good solution; you end up mocking every single little thing just so you
+//    can write a test. TODO: should these tests have a different name? Like,
+//    "entangled tests"? :)
+
 //  - These tests cannot be expensive, and probably shouldn't have significant
 //    static memory requirements, and no dynamic memory requirements (no
 //    malloc). However, you can still do standalone tests that can waste almost
@@ -22,14 +29,9 @@
 //    (failed test assertion) and produce a smaller binary. This is something
 //    you might notice even before running the build.
 
-//  - Self testing seems like the only way we can conveniently test a
-//    compilation unit that depends on other compilation units (looking at you,
-//    gig.c, for starters). I don't think dynamic dependency injection is a
-//    good solution; you end up mocking every single little thing just so you
-//    can write a test.
-
 //  - Maybe support a define that replaces run_selftest() with an empty
 //    function, just in case it makes a difference on constrained platforms.
+
 
 #include "main.h"
 
@@ -39,11 +41,14 @@
 #define LEB128_UNIT_TEST
 #include "leb128.h"
 
+#include "gig.h"
+
 void run_selftest(void)
 {
 	const int64_t t0 = get_nanoseconds();
     utf8_unit_test();
     leb128_unit_test();
 	const int64_t dt = get_nanoseconds() - t0;
+	gig_selftest();
 	printf("selftest took %.5fs\n", (double)dt * 1e-9);
 }

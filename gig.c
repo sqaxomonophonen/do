@@ -9,6 +9,7 @@
 #include "util.h"
 #include "leb128.h"
 #include "utf8.h"
+#include "main.h"
 
 struct ringbuf {
 	uint8_t* data;
@@ -157,6 +158,7 @@ struct journal_commands {
 struct request_commands {
 	int document_id;
 	int version;
+	int64_t not_before_timestamp; // used to simulate latency
 	uint16_t num_commands;
 };
 
@@ -256,8 +258,6 @@ static void codec_end_decode(struct codec* c)
 	c->is_decoding = 0;
 }
 
-
-
 // codec functions: designed so they can be used both for encoding and decoding
 //
 // _ptr suffix means it uses a pointer:
@@ -298,9 +298,19 @@ static inline void codec_write_varint(struct codec* c, int v)
 	leb128_encode_int(codec_write_u8_wrapper, v, (void*)c);
 }
 
+static inline void codec_write_varint64(struct codec* c, int64_t v)
+{
+	leb128_encode_int64(codec_write_u8_wrapper, v, (void*)c);
+}
+
 static inline int codec_read_varint(struct codec* c)
 {
 	return leb128_decode_int(codec_read_u8_wrapper, (void*)c);
+}
+
+static inline int64_t codec_read_varint64(struct codec* c)
+{
+	return leb128_decode_int64(codec_read_u8_wrapper, (void*)c);
 }
 
 NO_DISCARD
@@ -316,6 +326,22 @@ static int codec_varint_io(struct codec* c, int v)
 	assert(!"bad state");
 }
 #define CODEC_VARINT(c,V) (V)=codec_varint_io(c,V)
+
+NO_DISCARD
+static int codec_varint64_io(struct codec* c, int v)
+{
+	if (is_encoding(c)) {
+		codec_write_varint64(c, v);
+		return v;
+	} else if (is_decoding(c)) {
+		(void)v;
+		return codec_read_varint64(c);
+	}
+	assert(!"bad state");
+}
+#define CODEC_VARINT64(c,V) (V)=codec_varint64_io(c,V)
+
+
 
 NO_DISCARD
 static uint16_t codec_uint16_io(struct codec* c, uint16_t v)
@@ -447,6 +473,7 @@ static void codec_request_commands_ptr(struct codec* c, struct request_commands*
 {
 	CODEC_VARINT(c, rc->document_id);
 	CODEC_VARINT(c, rc->version);
+	CODEC_VARINT64(c, rc->not_before_timestamp);
 	CODEC_UINT16(c, rc->num_commands);
 }
 
@@ -578,9 +605,14 @@ void gig_spool(void)
 	snapshot_spool(&g.outside, &g.journal_ringbuf);
 }
 
-void ed_begin(int document_id)
+void ed_begin(int document_id, int64_t add_latency_ns)
 {
 	assert(!g.ed_is_begun);
+
+	const int64_t not_before_timestamp =
+		(add_latency_ns > 0)
+		? (get_nanoseconds() + add_latency_ns)
+		: 0;
 
 	struct ringbuf* rb = &g.command_ringbuf;
 	g.ed_began_at_write_position = rb->write_cursor;
@@ -590,6 +622,7 @@ void ed_begin(int document_id)
 	struct request_commands rc = {
 		.document_id = document_id,
 		.version = d->version,
+		.not_before_timestamp = not_before_timestamp,
 		.num_commands = 0xffff, // is patched later
 	};
 	codec_request_commands_ptr(c, &rc);
@@ -628,6 +661,8 @@ void ed_end(void)
 		codec_request_commands_ptr(c, &q);
 		codec_end_decode(c);
 
+		// XXX FIXME the "0xffff" thing is also done for journal_commands:
+		// handle with some common code instead?
 		assert((q.num_commands == 0xffff) && "expected temporary marker value 0xffff");
 		q.num_commands = g.ed_num_commands;
 
@@ -650,9 +685,21 @@ void gig_thread_tick(void)
 	const size_t commit_cursor = atomic_load(&src->commit_cursor);
 	struct codec csrc={0};
 	codec_begin_decode(&csrc, src);
+	int64_t now = -1;
 	while (src->read_cursor < commit_cursor) {
+		const size_t save_read_cursor = src->read_cursor;
 		struct request_commands rq;
 		codec_request_commands_ptr(&csrc, &rq);
+
+		printf("not before %ld (XXX not working)\n", rq.not_before_timestamp); // XXX
+
+		if (rq.not_before_timestamp != 0) {
+			if (now == -1) now = get_nanoseconds();
+			if (now < rq.not_before_timestamp) {
+				src->read_cursor = save_read_cursor;
+				break;
+			}
+		}
 		struct codec cdst={0};
 		codec_begin_encode_journal_commands(&cdst, dst, g.my_artist_id, rq.document_id);
 		const int num_commands = rq.num_commands;
@@ -662,9 +709,9 @@ void gig_thread_tick(void)
 			codec_command_ptr(&cdst, &cm);
 		}
 		codec_end_encode_journal_commands(&cdst);
+		ringbuf_acknowledge(src);
 	}
 	codec_end_decode(&csrc);
-	ringbuf_acknowledge(src);
 	ringbuf_commit(dst);
 	snapshot_spool(&g.inside, &g.journal_ringbuf);
 }
@@ -709,4 +756,9 @@ void gig_init(void)
 int get_my_artist_id(void)
 {
 	return g.my_artist_id;
+}
+
+void gig_selftest(void)
+{
+	// TODO
 }

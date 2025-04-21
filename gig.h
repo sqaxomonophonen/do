@@ -71,6 +71,7 @@ struct document {
 void gig_init(void);
 void gig_spool(void);
 void gig_thread_tick(void);
+void gig_selftest(void);
 
 enum command_type {
 	COMMAND_SET_CARET=1,
@@ -141,7 +142,7 @@ struct command {
 	};
 };
 
-void ed_begin(int document_id);
+void ed_begin(int document_id, int64_t add_latency_ns);
 void ed_do(struct command*);
 void ed_end(void);
 
