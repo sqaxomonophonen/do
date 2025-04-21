@@ -2,3 +2,8 @@
 #define UTF8_UNIT_TEST
 #define UTF8_IMPLEMENTATION
 #include "utf8.h"
+int main(int argc, char** argv)
+{
+    utf8_unit_test();
+    return 0;
+}

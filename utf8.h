@@ -12,6 +12,10 @@ int utf8_convert_lowercase_codepoint_to_uppercase(int lowercase_codepoint);
 // returns the uppercase codepoint for a lowercase codepoint. if codepoint
 // cannot be uppercase'd then it returns the input value.
 
+#ifdef UTF8_UNIT_TEST
+void utf8_unit_test(void);
+// runs unit tests
+#endif
 
 #ifdef UTF8_IMPLEMENTATION
 
@@ -306,9 +310,12 @@ int utf8_convert_lowercase_codepoint_to_uppercase(int lowercase_codepoint)
 
 #endif//UTF8_IMPLEMENTATION
 
-#ifdef UTF8_UNIT_TEST
+#if defined(UTF8_UNIT_TEST) && defined(UTF8_IMPLEMENTATION)
+
 #include <string.h>
-int main(int argc, char** argv)
+#include <assert.h>
+
+void utf8_unit_test(void)
 {
 	{
 		// uppercasing:
@@ -358,8 +365,6 @@ int main(int argc, char** argv)
 
 		assert(utf8_decode(&p, &n) == -1);
 	}
-
-	return 0;
 }
 #endif
 

@@ -60,7 +60,7 @@ static int gig_thread_run(void* usr)
 	(void)usr;
 	for (;;) {
 		gig_thread_tick();
-		SDL_DelayNS(2000000L);
+		SDL_DelayNS(3000000L); // 3ms
 	}
 	return 0;
 }

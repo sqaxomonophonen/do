@@ -1,6 +1,7 @@
 #ifndef GUI_H
 
 #include <stdint.h>
+#include <stddef.h>
 
 enum window_state {
 	WINDOW_IS_NEW=1,
