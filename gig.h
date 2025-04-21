@@ -14,7 +14,7 @@ struct range {
 struct fat_char {
 	unsigned codepoint;
 	unsigned timestamp;
-	unsigned author;
+	unsigned artist_id;
 	unsigned color[3];
 	unsigned insert :1;
 	unsigned delete :1;

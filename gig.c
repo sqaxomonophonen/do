@@ -8,6 +8,7 @@
 #include "gig.h"
 #include "util.h"
 #include "leb128.h"
+#include "utf8.h"
 
 struct ringbuf {
 	uint8_t* data;
@@ -529,8 +530,7 @@ static void snapshot_spool(struct snapshot* ss, struct ringbuf* journal)
 			}	break;
 
 			case COMMAND_SET_CARET: {
-				// XXX this crash can be caused by requests over network:
-				assert(doc != NULL);
+				assert(doc != NULL); // XXX this crash can be caused by requests over network
 				const int num_carets = arrlen(doc->caret_arr);
 				struct caret* caret = NULL;
 				for (int i=0; i<num_carets; ++i) {
@@ -550,7 +550,19 @@ static void snapshot_spool(struct snapshot* ss, struct ringbuf* journal)
 			}	break;
 
 			case COMMAND_INSERT: {
-				assert(!"TODO handle text insert");
+				assert(doc != NULL); // XXX this crash can be caused by requests over network
+				const char* text_pointer = cm.insert.text;
+				// XXX FIXME find insert position.
+				// XXX FIXME allocate the proper number of codepoint upfront instead of adding them one by one
+				int bytes_remaining = strlen(text_pointer);
+				while (bytes_remaining > 0) {
+					const int codepoint = utf8_decode(&text_pointer, &bytes_remaining);
+					if (codepoint < 1) continue;
+					arrput(doc->fat_char_arr, ((struct fat_char){
+						.codepoint = codepoint,
+						.artist_id = artist_id,
+					}));
+				}
 			}	break;
 
 			default: assert(!"unhandled command type");
