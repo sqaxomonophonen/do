@@ -315,6 +315,40 @@ multi-venue setups with some kind of "OSC bridge"?
 
 
 
+"dumb terminal protocol": for the "text/code editing protocol": I don't think
+we need any fancy techniques like CRDTs; a simple "dumb terminal" approach
+ought to suffice. considerations going into this:
+ - I made a small "typing latency simulator" to test how various latencies
+   /feel/. under 50ms feels great, ~100ms feels fine, and above 200ms starts to
+   feel bad.
+ - denmark<=>spain icmp ping time is ~50ms, denmark-london ping time is ~25ms;
+   this can probably be considered the "baseline" or "lowest possible latency"
+   (there can be other sources of latency)
+ - UDP should add nearly no latency, except due to bandwidth. WebSockets
+   seem to have lower latency than HTTP. I'm not sure server-sent events (SSE)
+   perform worse, but it only solves half of the problem because it's
+   half-duplex.
+ - the server itself should not add noticeable latency; it's persistently
+   running, and doesn't use a lot of resources, so it's in a position to
+   respond immediately (<5ms) to real-time requests.
+ - I suspect a lot of avoidable (and profitable) sources of latency have also
+   been the motivation for developing CRDTs, like, maybe you have 100 servers
+   responding in 50ms on average, but if you cut it to 50 servers they respond
+   in 100ms on average; my suspicion is that CRDTs were designed to solve "big
+   tech cost cutting problems" and not "small tech algorave problems"
+ - a deceptively simple idea is "why not have simple edit commands use absolute
+   positions, target a document version, and then have the server correct
+   positions for position-altering commands received since the target version?"
+   and "why not use it to make latency-free predictions?". but once you've
+   figured out the complications, you've probably made a CRDT or something :)
+   one of the complications is: how do you target a document version once you
+   have an in-flight command? and: when you receive confirmation of the first
+   part of your commands, you must re-apply those sent in the meantime to the
+   prediction.
+
+
+
+
 rule of thumb: the software should have the same reliability as you'd expect
 from a real instrument when playing live. this is more of a "soft rule", or a
 guideline, or an ideal:
