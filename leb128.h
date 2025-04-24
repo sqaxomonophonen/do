@@ -2,6 +2,10 @@
 
 // "little endian base 128" variable-length integer encoding. see LEB128_UNIT_TEST.
 
+#if (INTPTR_MAX < INT32_MAX)
+#error "this code has not been tested on anything smaller than 32-bit system"
+#endif
+
 #include <stdint.h>
 #include <assert.h>
 #include <limits.h>
@@ -9,7 +13,7 @@
 
 #include "util.h"
 
-#define LEB128_DEFINE_FOR_TYPE(TYPE,UTYPE,U1,NUMBITS,UHALF,NEG0,NAME) \
+#define LEB128_DEFINE_FOR_TYPE(TYPE,UTYPE,NAME) \
 \
 ALWAYS_INLINE \
 static inline void leb128_encode_##NAME(void(*write_fn)(uint8_t,void*), TYPE value, void* userdata) \
@@ -29,7 +33,7 @@ static inline void leb128_encode_##NAME(void(*write_fn)(uint8_t,void*), TYPE val
 		/* cast but it's actually "implementation defined" (spec also allows */ \
 		/* one's complement and sign+magnitude) */ \
 		UTYPE u = ~(-(value+1)); \
-		const UTYPE neg = U1; \
+		const UTYPE neg = ~((UTYPE)0); \
 		const UTYPE negpad = ~(neg >> 7); \
 		do { \
 			uint8_t b = u & 0x7f; \
@@ -48,13 +52,14 @@ static inline TYPE leb128_decode_##NAME(uint8_t(*read_fn)(void*), void* userdata
 { \
 	UTYPE uvalue = 0; \
 	int shift = 0; \
+	const UTYPE neg = ~((UTYPE)0); \
 	for (;;) { \
 		const uint8_t b = read_fn(userdata); \
 		uvalue |= (UTYPE)(b & 0x7f) << shift; \
 		shift += 7; \
 		if ((b & 0x80) == 0) { \
-			if (shift < NUMBITS && (b & 0x40)) { \
-				uvalue |= (U1 << shift); \
+			if (shift < (8*sizeof(TYPE)) && (b & 0x40)) { \
+				uvalue |= (neg << shift); \
 			} \
 			break; \
 		} \
@@ -62,7 +67,7 @@ static inline TYPE leb128_decode_##NAME(uint8_t(*read_fn)(void*), void* userdata
 \
 	/* convert unsigned two's complement to signed value (should be equivalent */ \
 	/* to a cast-to-int  on two's complement hardware) */ \
-	const UTYPE m = UHALF; \
+	const UTYPE m = (UTYPE)1 << (8*sizeof(UTYPE)-1); \
 	if (uvalue < m) { \
 		return (TYPE)uvalue; \
 	} else { \
@@ -70,35 +75,24 @@ static inline TYPE leb128_decode_##NAME(uint8_t(*read_fn)(void*), void* userdata
 		/* minimum value is one lower for two's complement than compared to */ \
 		/* one's complement and sign+magnitude. nevertheless it does the right */ \
 		/* thing on two's complement. */ \
-		return NEG0 + (TYPE)((uvalue & ~m)-(TYPE)1); \
+		return -((1ULL << (8*sizeof(UTYPE)-1)) - 1) + (TYPE)((uvalue & ~m)-(TYPE)1); \
 	} \
 }
 
 // TYPE: signed integer type to encode/decode
-// UTYPE: unsigned integer type, must have same width as TYPE
-// U1: UTYPE value that is "all ones" (~0)
-// NUMBITS: 16 for int16_t and so on
-// UHALF: half the unsigned max size + 1, e.g. 0x8000 for int16_t
-// NEG0: minimum safe signed value (NOTE: should be -0x7fff for int16_t to deal
-//       with the remote possibility of non two's complement hardware)
-// NAME: used in function name, e.g. `int16` for `int16_t` or `int` for `int`.
+// UTYPE: unsigned integer type; must have same width as TYPE
+// NAME: type name used in function name, e.g. `int64` instead of `int64_t`
 
+// define leb128_encode_int() and leb128_decode_int()
 LEB128_DEFINE_FOR_TYPE(
 	/*TYPE=*/int,
 	/*UTYPE=*/unsigned,
-	/*U1=*/(~0U),
-	/*NUMBITS=*/(32),
-	/*UHALF=*/(0x80000000),
-	/*NEG0=*/(-0x7fffffff),
 	/*NAME=*/int)
 
+// define leb128_encode_int64() and leb128_decode_int64()
 LEB128_DEFINE_FOR_TYPE(
 	/*TYPE=*/int64_t,
 	/*UTYPE=*/uint64_t,
-	/*U1=*/(~0UL),
-	/*NUMBITS=*/(64),
-	/*UHALF=*/(0x8000000000000000LL),
-	/*NEG0=*/(-0x7fffffffffffffffLL),
 	/*NAME=*/int64)
 
 
@@ -109,6 +103,16 @@ LEB128_DEFINE_FOR_TYPE(
 
 #ifndef LEB128_NUM_FUZZ_ITERATIONS
 #define LEB128_NUM_FUZZ_ITERATIONS (1000)
+#endif
+
+// XXX is this a good way to detect whether `int64_t` is `long` or `long long`
+// for the purpose of printf?
+#if (INTPTR_MAX == INT32_MAX)
+#define INT64FMT "%lld"
+#elif (INTPTR_MAX == INT64_MAX)
+#define INT64FMT "%ld"
+#else
+#error "missing platform support"
 #endif
 
 #include <stdio.h>
@@ -173,7 +177,7 @@ static void _test_l128u(int64_t value, int num_bytes, ...)
 		}
 
 		if (fail) {
-			fprintf(stderr, "LEB128 ENCODE FAIL: expected value %ld to encode as byte sequence [", value);
+			fprintf(stderr, "LEB128 ENCODE FAIL: expected value " INT64FMT " to encode as byte sequence [", value);
 			va_start(ap, num_bytes);
 			for (int i=0; i<num_bytes; ++i) {
 				fprintf(stderr, "%s%.2x", (i>0?" ":""), va_arg(ap, int));
@@ -202,7 +206,7 @@ static void _test_l128u(int64_t value, int num_bytes, ...)
 			abort();
 		}
 		if (decoded_value != value) {
-			fprintf(stderr, "LEB128 ROUNDTRIP FAIL: expected to decode %ld, but decoded %ld\n", value, decoded_value);
+			fprintf(stderr, "LEB128 ROUNDTRIP FAIL: expected to decode " INT64FMT " but decoded " INT64FMT, value, decoded_value);
 			abort();
 		}
 	}
@@ -211,53 +215,56 @@ static void _test_l128u(int64_t value, int num_bytes, ...)
 static void leb128_unit_test(void)
 {
 	// test non-negative 32/64bit
-    _test_l128u(0x00L        , 1, 0x00);
-    _test_l128u(0x01L        , 1, 0x01);
-    _test_l128u(0x02L        , 1, 0x02);
-    _test_l128u(0x3fL        , 1, 0x3f);
-    _test_l128u(0x40L        , 2, 0xc0, 0x00);
-    _test_l128u(0x41L        , 2, 0xc1, 0x00);
-    _test_l128u(0x80L        , 2, 0x80, 0x01);
-    _test_l128u(0x81L        , 2, 0x81, 0x01);
-    _test_l128u(0x100L       , 2, 0x80, 0x02);
-    _test_l128u(0x200L       , 2, 0x80, 0x04);
-    _test_l128u(0x42424L     , 3, 0xa4, 0xc8, 0x10);
-    _test_l128u(0x123abcL    , 4, 0xbc, 0xf5, 0xc8, 0x00);
-    _test_l128u(0x234bcdL    , 4, 0xcd, 0x97, 0x8d, 0x01);
-    _test_l128u(0x7ffffffeL  , 5, 0xfe, 0xff, 0xff, 0xff, 0x07);
-    _test_l128u(0x7fffffffL  , 5, 0xff, 0xff, 0xff, 0xff, 0x07); // maximum int value
+    _test_l128u(0x00LL       , 1, 0x00);
+    _test_l128u(0x01LL       , 1, 0x01);
+    _test_l128u(0x02LL       , 1, 0x02);
+    _test_l128u(0x3fLL       , 1, 0x3f);
+    _test_l128u(0x40LL       , 2, 0xc0, 0x00);
+    _test_l128u(0x41LL       , 2, 0xc1, 0x00);
+    _test_l128u(0x80LL       , 2, 0x80, 0x01);
+    _test_l128u(0x81LL       , 2, 0x81, 0x01);
+    _test_l128u(0x100LL      , 2, 0x80, 0x02);
+    _test_l128u(0x200LL      , 2, 0x80, 0x04);
+    _test_l128u(0x42424LL    , 3, 0xa4, 0xc8, 0x10);
+    _test_l128u(0x123abcLL   , 4, 0xbc, 0xf5, 0xc8, 0x00);
+    _test_l128u(0x234bcdLL   , 4, 0xcd, 0x97, 0x8d, 0x01);
+    _test_l128u(0x7ffffffeLL , 5, 0xfe, 0xff, 0xff, 0xff, 0x07);
+    _test_l128u(0x7fffffffLL , 5, 0xff, 0xff, 0xff, 0xff, 0x07); // maximum int value
 
 	// test non-negative 64bit
-    _test_l128u(0x424242424L,         6, 0xa4, 0xc8, 0x90, 0xa1, 0xc2, 0x00);
-    _test_l128u(0x123456bcdef0L,      7, 0xf0, 0xbd, 0xf3, 0xb5, 0xc5, 0xc6, 0x04);
-    _test_l128u(0x1234567abcdef0L,    8, 0xf0, 0xbd, 0xf3, 0xd5, 0xe7, 0x8a, 0x8d, 0x09);
-    _test_l128u(0x123456789abcdef0L,  9, 0xf0, 0xbd, 0xf3, 0xd5, 0x89, 0xcf, 0x95, 0x9a, 0x12);
-    _test_l128u(0x7ffffffffffffffeL, 10, 0xfe, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00);
-    _test_l128u(0x7fffffffffffffffL, 10, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00);
+    _test_l128u(0x424242424LL        ,  6, 0xa4, 0xc8, 0x90, 0xa1, 0xc2, 0x00);
+    _test_l128u(0x123456bcdef0LL     ,  7, 0xf0, 0xbd, 0xf3, 0xb5, 0xc5, 0xc6, 0x04);
+    _test_l128u(0x1234567abcdef0LL   ,  8, 0xf0, 0xbd, 0xf3, 0xd5, 0xe7, 0x8a, 0x8d, 0x09);
+    _test_l128u(0x123456789abcdef0LL ,  9, 0xf0, 0xbd, 0xf3, 0xd5, 0x89, 0xcf, 0x95, 0x9a, 0x12);
+    _test_l128u(0x7ffffffffffffffeLL , 10, 0xfe, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00);
+    _test_l128u(0x7fffffffffffffffLL , 10, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00);
 
 	// test negative
-    _test_l128u(-0x01L       , 1, 0x7f);
-    _test_l128u(-0x02L       , 1, 0x7e);
-    _test_l128u(-0x3fL       , 1, 0x41);
-    _test_l128u(-0x40L       , 1, 0x40);
-    _test_l128u(-0x41L       , 2, 0xbf, 0x7f);
-    _test_l128u(-0x42424L    , 3, 0xdc, 0xb7, 0x6f);
-    _test_l128u(-0x123abcL   , 4, 0xc4, 0x8a, 0xb7, 0x7f);
-    _test_l128u(-0x234bcdL   , 4, 0xb3, 0xe8, 0xf2, 0x7e);
-    _test_l128u(-0xfffffeL   , 4, 0x82, 0x80, 0x80, 0x78);
-    _test_l128u(-0xffffffL   , 4, 0x81, 0x80, 0x80, 0x78);
-    _test_l128u(-0xffffffeL  , 5, 0x82, 0x80, 0x80, 0x80, 0x7f);
-    _test_l128u(-0xfffffffL  , 5, 0x81, 0x80, 0x80, 0x80, 0x7f);
-    _test_l128u(-0x7fffffffL , 5, 0x81, 0x80, 0x80, 0x80, 0x78); // minimum safe int value
-    _test_l128u(-0x80000000L , 5, 0x80, 0x80, 0x80, 0x80, 0x78); // minimum int value
+    _test_l128u(-0x01LL        , 1, 0x7f);
+    _test_l128u(-0x02LL        , 1, 0x7e);
+    _test_l128u(-0x3fLL        , 1, 0x41);
+    _test_l128u(-0x40LL        , 1, 0x40);
+    _test_l128u(-0x41LL        , 2, 0xbf, 0x7f);
+    _test_l128u(-0x42424LL     , 3, 0xdc, 0xb7, 0x6f);
+    _test_l128u(-0x123abcLL    , 4, 0xc4, 0x8a, 0xb7, 0x7f);
+    _test_l128u(-0x234bcdLL    , 4, 0xb3, 0xe8, 0xf2, 0x7e);
+    _test_l128u(-0xfffffeLL    , 4, 0x82, 0x80, 0x80, 0x78);
+    _test_l128u(-0xffffffLL    , 4, 0x81, 0x80, 0x80, 0x78);
+    _test_l128u(-0xffffffeLL   , 5, 0x82, 0x80, 0x80, 0x80, 0x7f);
+    _test_l128u(-0xfffffffLL   , 5, 0x81, 0x80, 0x80, 0x80, 0x7f);
+    _test_l128u(-0x7fffffffLL  , 5, 0x81, 0x80, 0x80, 0x80, 0x78); // minimum safe int value
+    _test_l128u(-0x80000000LL  , 5, 0x80, 0x80, 0x80, 0x80, 0x78); // minimum int value
 
 	// test negative 64bit
-    _test_l128u(-0x424242424L,         6, 0xdc, 0xb7, 0xef, 0xde, 0xbd, 0x7f);
-    _test_l128u(-0x123456bcdef0L,      7, 0x90, 0xc2, 0x8c, 0xca, 0xba, 0xb9, 0x7b);
-    _test_l128u(-0x1234567abcdef0L,    8, 0x90, 0xc2, 0x8c, 0xaa, 0x98, 0xf5, 0xf2, 0x76);
-    _test_l128u(-0x123456789abcdef0L,  9, 0x90, 0xc2, 0x8c, 0xaa, 0xf6, 0xb0, 0xea, 0xe5, 0x6d);
-    _test_l128u(-0x7fffffffffffffffL, 10, 0x81, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x7f);
-    _test_l128u(-0x8000000000000000L, 10, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x7f);
+    _test_l128u(-0x424242424LL        ,  6, 0xdc, 0xb7, 0xef, 0xde, 0xbd, 0x7f);
+    _test_l128u(-0x123456bcdef0LL     ,  7, 0x90, 0xc2, 0x8c, 0xca, 0xba, 0xb9, 0x7b);
+    _test_l128u(-0x1234567abcdef0LL   ,  8, 0x90, 0xc2, 0x8c, 0xaa, 0x98, 0xf5, 0xf2, 0x76);
+    _test_l128u(-0x123456789abcdef0LL ,  9, 0x90, 0xc2, 0x8c, 0xaa, 0xf6, 0xb0, 0xea, 0xe5, 0x6d);
+    _test_l128u(-0x7fffffffffffffffLL , 10, 0x81, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x7f);
+    _test_l128u(-0x8000000000000000LL , 10, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x7f);
+
+	// uncomment for FAIL TEST:
+    //_test_l128u(-0x8000000000000000LL , 10, 0x81, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x7f);
 
 	// fuzz test
 	uint32_t z = 654654;

@@ -161,7 +161,10 @@ ui (main):
    - hdr/graphics settings?
    - audio settings? number of threads? I/O mapping?
    - video synth settings?
-   - osc/midi setup/mapping?
+   - OSC/MIDI setup/mapping?
+   - joystick mapping? (could be used for alternative inputs on web? on Linux
+	 you can also create virtual joysticks, so you can use OSC/MIDI or anything
+	 to generate joystick events)
    - keymap, scroll sensitivity?
    - editor modes?
    - settings import/export/migration? (possibly allow importing/exporting a
