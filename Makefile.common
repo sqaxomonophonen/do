@@ -1,14 +1,16 @@
 CFLAGS+=-O0 -g
+#CFLAGS+=-O2
 #CFLAGS+=-Os -g
 #CFLAGS+=-O3
 #CFLAGS+=-Os
 CFLAGS+=-Wall
+#CFLAGS+=-Wall
+#CFLAGS+=-Wno-unused # can be annoying sometimes
 
 all: $(ARTIFACT)
 
-#OBJS+=do.o # application
-
-OBJS+=stb_truetype.o stb_rect_pack.o stb_image_resize2.o stb_image_write.o stb_ds.o # stb deps
+OBJS+=stb_truetype.o stb_rect_pack.o stb_image_resize2.o stb_image_write.o # stb deps
+OBJS+=stb_ds.o stb_sprintf.o # more stb deps
 OBJS+=font0.o fonts.o sep2dconv.o gui.o # gui deps
 OBJS+=utf8.o gig.o selftest.o # common deps
 

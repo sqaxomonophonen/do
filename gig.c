@@ -5,6 +5,8 @@
 #include <stdio.h> // XXX
 
 #include "stb_ds.h"
+#include "stb_sprintf.h"
+
 #include "gig.h"
 #include "util.h"
 #include "leb128.h"
@@ -14,6 +16,7 @@
 struct ringbuf {
 	uint8_t* data;
 	int size_log2;
+	int spillover_size;
 	unsigned no_acknowledge :1;
 	unsigned no_commit      :1;
 
@@ -29,11 +32,66 @@ struct ringbuf {
 	_Alignas(CACHE_LINE_SIZE) _Atomic(size_t) commit_cursor;
 };
 
-static void ringbuf_init(struct ringbuf* r, int size_log2)
+static void ringbuf_init_with_pointer(struct ringbuf* rb, void* data, int size_log2, int spillover_size)
 {
-	memset(r, 0, sizeof *r);
-	r->size_log2 = size_log2;
-	r->data = calloc(1L << size_log2, sizeof r->data[0]);
+	memset(rb, 0, sizeof *rb);
+	assert((spillover_size <= (1L << size_log2)) && "spillover doesn't work if larger than actual ringbuf");
+	rb->size_log2 = size_log2;
+	rb->spillover_size = spillover_size;
+	rb->data = data;
+}
+
+static size_t ringbuf_get_data_size(int size_log2, int spillover_size)
+{
+	return (1L << size_log2) + spillover_size;
+}
+
+static void ringbuf_init(struct ringbuf* rb, int size_log2, int spillover_size)
+{
+	ringbuf_init_with_pointer(
+		rb,
+		calloc(ringbuf_get_data_size(size_log2, spillover_size), 1),
+		size_log2,
+		spillover_size);
+}
+
+static inline void* ringbuf_get_write_pointer_at(struct ringbuf* rb, size_t position)
+{
+	return &rb->data[position & ((1L << rb->size_log2)-1)];
+}
+
+static inline void* ringbuf_get_write_pointer(struct ringbuf* rb)
+{
+	return ringbuf_get_write_pointer_at(rb, rb->write_cursor);
+}
+
+// advance write cursor and handle spillover. it assumes that you wrote
+// num_bytes beginning at ringbuf_get_write_pointer(), and handles spillover at
+// the end of the buffer. thus num_bytes must never exceed rb->spillover_size.
+static void ringbuf_wrote_linear(struct ringbuf* rb, size_t num_bytes)
+{
+	if (num_bytes == 0) return;
+	if (rb->spillover_size == 0) {
+		assert((num_bytes == 1) && "no spillover configured: you can write at most 1 byte linearly at a time");
+		return;
+	}
+	assert((num_bytes <= rb->spillover_size) && "you can't write more than spillover_size");
+	// XXX I think you can actually write 1+rb->spillover_size bytes? but that
+	// might be a problem if ringbuf size is exactly the same as the spillover
+	// size? (overlapping memcpy()?). besides, setting spillover size to the
+	// maximum number of bytes you can write is easier to understand, maybe?
+	const size_t c0 = rb->write_cursor;
+	rb->write_cursor += num_bytes;
+	const size_t c1 = rb->write_cursor;
+	const int size_log2 = rb->size_log2;
+	if (((c1-1) >> size_log2) > (c0 >> size_log2)) {
+		// wrote past end of buffer; do "spillover" by copying back to
+		// beginning of buffer
+		const size_t size = 1L << size_log2;
+		const size_t n = c1 & (size-1);
+		assert(n>0);
+		memcpy(rb->data, rb->data + size, n);
+	}
 }
 
 // copies everything except the data itself; used for having a different "view"
@@ -45,21 +103,22 @@ static void ringbuf_shallow_copy(struct ringbuf* dst, struct ringbuf* src)
 	atomic_store(&dst->commit_cursor,      atomic_load(&src->commit_cursor));
 }
 
-static void ringbuf_write_u8(struct ringbuf* r, uint8_t v)
+static void ringbuf_write_u8(struct ringbuf* rb, uint8_t v)
 {
-	if (r->write_error) return;
-	const size_t s = (1L << r->size_log2);
-	if (!r->no_acknowledge && (r->write_cursor >= (atomic_load(&r->acknowledge_cursor) + s))) {
+	if (rb->write_error) return;
+	const size_t s = (1L << rb->size_log2);
+	if (!rb->no_acknowledge && (rb->write_cursor >= (atomic_load(&rb->acknowledge_cursor) + s))) {
 		printf("WRITE ERROR\n"); // XXX
-		r->write_error = 1;
+		rb->write_error = 1;
 		return;
 	}
-	r->data[r->write_cursor] = v;
-	r->write_cursor = (1 + r->write_cursor) & (s-1);
+	*(uint8_t*)ringbuf_get_write_pointer(rb) = v;
+	ringbuf_wrote_linear(rb, 1);
 }
 
-static uint8_t ringbuf_read_u8_at(struct ringbuf* r, size_t position)
+static inline uint8_t ringbuf_read_u8_at(struct ringbuf* r, size_t position)
 {
+	//printf("read %zd => %d\n", position, r->data[position & ((1L << r->size_log2)-1)]);
 	return r->data[position & ((1L << r->size_log2)-1)];
 }
 
@@ -71,9 +130,7 @@ static uint8_t ringbuf_read_u8(struct ringbuf* r)
 		r->read_error = 1;
 		return 0;
 	}
-	const size_t at = r->read_cursor;
-	++r->read_cursor;
-	return ringbuf_read_u8_at(r, at);
+	return ringbuf_read_u8_at(r, r->read_cursor++);
 }
 
 static void ringbuf_rollback(struct ringbuf* r)
@@ -104,14 +161,11 @@ static void document_copy(struct document* dst, struct document* src)
 	// the arrays are handled differently, reusing the "_arr"s in the dst
 	// document (simplifies memory management)
 	dst->fat_char_arr = copy.fat_char_arr;
-	const int num_fat_chars = arrlen(src->fat_char_arr);
-	arrsetlen(dst->fat_char_arr, num_fat_chars);
-	memcpy(dst->fat_char_arr, src->fat_char_arr, num_fat_chars*sizeof(dst->fat_char_arr[0]));
+	//dst->caret_arr = copy.caret_arr;
+	dst->vam_state_arr = copy.vam_state_arr;
 
-	dst->caret_arr = copy.caret_arr;
-	const int num_carets = arrlen(src->caret_arr);
-	arrsetlen(dst->caret_arr, num_carets);
-	memcpy(dst->caret_arr, src->caret_arr, num_carets*sizeof(dst->caret_arr[0]));
+	ARRCOPY(dst->fat_char_arr, src->fat_char_arr);
+	ARRCOPY(dst->vam_state_arr, src->vam_state_arr);
 }
 
 struct codec {
@@ -149,19 +203,6 @@ struct document* snapshot_find_document_by_id(struct snapshot* ss, int id)
 	return NULL;
 }
 
-struct journal_commands {
-	int artist_id;
-	int document_id;
-	uint16_t num_commands;
-};
-
-struct request_commands {
-	int document_id;
-	int version;
-	int64_t not_before_timestamp; // used to simulate latency
-	uint16_t num_commands;
-};
-
 static struct {
 	struct ringbuf command_ringbuf;
 
@@ -176,6 +217,9 @@ static struct {
 	size_t ed_began_at_write_position;
 	int ed_is_begun;
 	int my_artist_id;
+
+	struct vam_state vs1;
+	struct vam_state_cool vs1cool;
 } g;
 
 int get_num_documents(void)
@@ -190,6 +234,7 @@ struct document* get_document_by_index(int index)
 
 struct document* find_document_by_id(int id)
 {
+	assert((id >= 1) && "id must be at least 1");
 	return snapshot_find_document_by_id(&g.outside, id);
 }
 
@@ -341,8 +386,6 @@ static int64_t codec_varint64_io(struct codec* c, int64_t v)
 }
 #define CODEC_VARINT64(c,V) (V)=codec_varint64_io(c,V)
 
-
-
 NO_DISCARD
 static uint16_t codec_uint16_io(struct codec* c, uint16_t v)
 {
@@ -420,195 +463,8 @@ static void codec_range_ptr(struct codec* c, struct range* r)
 	codec_location_ptr(c, &r->to);
 }
 
-static void codec_command_ptr(struct codec* c, struct command* cm)
-{
-	codec_debug_tracer(c, -1003);
-	CODEC_VARINT(c, cm->type);
-	switch (cm->type) {
-	case COMMAND_SET_CARET:
-		CODEC_VARINT(c, cm->set_caret.id);
-		codec_range_ptr(c, &cm->set_caret.range);
-		break;
-	case COMMAND_DELETE_CARET:
-		CODEC_VARINT(c, cm->delete_caret.id);
-		break;
-	case COMMAND_INSERT:
-		codec_location_ptr(c, &cm->insert.at);
-		codec_cstr_ptr(c, &cm->insert.text);
-		break;
-	case COMMAND_DELETE:
-		codec_range_ptr(c, &cm->delete.range);
-		break;
-	case COMMAND_COMMIT:
-		CODEC_VARINT(c, cm->commit.artist_id);
-		codec_range_ptr(c, &cm->commit.range);
-		break;
-	case COMMAND_CANCEL:
-		CODEC_VARINT(c, cm->cancel.artist_id);
-		codec_range_ptr(c, &cm->cancel.range);
-		break;
-	case COMMAND_DEFER:
-		CODEC_VARINT(c, cm->defer.artist_id);
-		codec_range_ptr(c, &cm->defer.range);
-		break;
-	case COMMAND_UNDEFER:
-		CODEC_VARINT(c, cm->undefer.artist_id);
-		codec_range_ptr(c, &cm->undefer.range);
-		break;
-	case COMMAND_SET_COLOR:
-		CODEC_VARINT(c, cm->set_color.red);
-		CODEC_VARINT(c, cm->set_color.green);
-		CODEC_VARINT(c, cm->set_color.blue);
-		break;
-	case COMMAND_CREATE_DOCUMENT:
-		CODEC_VARINT(c, cm->create_document.id);
-		CODEC_VARINT(c, cm->create_document.type);
-		CODEC_VARINT(c, cm->create_document.flags);
-		break;
-	default: assert(!"unhandled command");
-	}
-
-	++c->num_commands;
-}
-
-static void codec_journal_commands_ptr(struct codec* c, struct journal_commands* jc)
-{
-	codec_debug_tracer(c, -1001);
-	CODEC_VARINT(c, jc->artist_id);
-	CODEC_VARINT(c, jc->document_id);
-	CODEC_UINT16(c, jc->num_commands);
-}
-
-static void codec_request_commands_ptr(struct codec* c, struct request_commands* rc)
-{
-	codec_debug_tracer(c, -1002);
-	CODEC_VARINT(c, rc->document_id);
-	CODEC_VARINT(c, rc->version);
-	CODEC_VARINT64(c, rc->not_before_timestamp);
-	CODEC_UINT16(c, rc->num_commands);
-}
-
-static void codec_begin_encode_journal_commands(struct codec* c, struct ringbuf* rb, int artist_id, int document_id)
-{
-	assert(c->in_journal_commands == 0);
-	c->began_at_position = rb->write_cursor;
-	codec_begin_encode(c, rb);
-	struct journal_commands jc = {
-		.artist_id = artist_id,
-		.document_id = document_id,
-		.num_commands = 0xffff,
-	};
-	codec_journal_commands_ptr(c, &jc);
-	c->num_commands = 0;
-	c->in_journal_commands = 1;
-}
-
-static void codec_end_encode_journal_commands(struct codec* c)
-{
-	assert(c->in_journal_commands == 1);
-	if (c->num_commands == 0) {
-		// reset ringbuf
-		c->ringbuf->write_cursor = c->began_at_position;
-	} else {
-		assert(c->num_commands > 0);
-
-		struct ringbuf tmp_rb;
-		ringbuf_shallow_copy(&tmp_rb, c->ringbuf);
-		tmp_rb.no_commit = 1;
-
-		tmp_rb.read_cursor = c->began_at_position;
-		struct codec c2={0};
-		struct journal_commands jc = {0};
-		codec_begin_decode(&c2, &tmp_rb);
-		codec_journal_commands_ptr(&c2, &jc);
-		codec_end_decode(&c2);
-
-		assert((jc.num_commands == 0xffff) && "expected temporary marker value 0xffff");
-		jc.num_commands = c->num_commands;
-		tmp_rb.write_cursor = c->began_at_position;
-		codec_begin_encode(&c2, &tmp_rb);
-		codec_journal_commands_ptr(&c2, &jc);
-		codec_end_encode(&c2);
-	}
-	c->in_journal_commands = 0;
-	codec_end_encode(c);
-}
-
 static void snapshot_spool(struct snapshot* ss, struct ringbuf* journal)
 {
-	const size_t commit_cursor = atomic_load(&journal->commit_cursor);
-	struct ringbuf tmp_rb;
-	ringbuf_shallow_copy(&tmp_rb, journal);
-	tmp_rb.read_cursor = ss->journal_cursor;
-	struct codec cc={0};
-	codec_begin_decode(&cc, &tmp_rb);
-	struct journal_commands jc;
-	while (tmp_rb.read_cursor < commit_cursor) {
-		codec_journal_commands_ptr(&cc, &jc);
-		const int num_commands = jc.num_commands;
-		const int artist_id = jc.artist_id;
-		struct document* doc = NULL;
-		if (jc.document_id > 0) {
-			doc = snapshot_find_document_by_id(ss, jc.document_id);
-		}
-		for (int i=0; i<num_commands; ++i) {
-			struct command cm;
-			codec_command_ptr(&cc, &cm);
-			switch (cm.type) {
-
-			case COMMAND_CREATE_DOCUMENT: {
-				// XXX this crash can be caused by requests over network:
-				assert((jc.document_id == 0 && doc == NULL) && "journal_commands.document_id must be zero when creating docs");
-				struct document* newdoc = arraddnptr(ss->document_arr, 1);
-				memset(newdoc, 0, sizeof *newdoc);
-				// XXX what to do with id collisions?
-				newdoc->id = cm.create_document.id;
-				newdoc->type = cm.create_document.type;
-				newdoc->flags = cm.create_document.flags;
-			}	break;
-
-			case COMMAND_SET_CARET: {
-				assert(doc != NULL); // XXX this crash can be caused by requests over network
-				const int num_carets = arrlen(doc->caret_arr);
-				struct caret* caret = NULL;
-				for (int i=0; i<num_carets; ++i) {
-					struct caret* cr = &doc->caret_arr[i];
-					if (cr->id != cm.set_caret.id) continue;
-					caret = cr;
-					break;
-				}
-				if (caret == NULL) {
-					caret = arraddnptr(doc->caret_arr, 1);
-					memset(caret, 0, sizeof *caret);
-					caret->id = cm.set_caret.id;
-					caret->artist_id = artist_id;
-				}
-				assert(caret != NULL);
-				caret->range = cm.set_caret.range;
-			}	break;
-
-			case COMMAND_INSERT: {
-				assert(doc != NULL); // XXX this crash can be caused by requests over network
-				const char* text_pointer = cm.insert.text;
-				// XXX FIXME find insert position.
-				// XXX FIXME allocate the proper number of codepoint upfront instead of adding them one by one
-				int bytes_remaining = strlen(text_pointer);
-				while (bytes_remaining > 0) {
-					const int codepoint = utf8_decode(&text_pointer, &bytes_remaining);
-					if (codepoint < 1) continue;
-					arrput(doc->fat_char_arr, ((struct fat_char){
-						.codepoint = codepoint,
-						.artist_id = artist_id,
-					}));
-				}
-			}	break;
-
-			default: assert(!"unhandled command type");
-			}
-		}
-	}
-	codec_end_decode(&cc);
-	ss->journal_cursor = tmp_rb.read_cursor;
 }
 
 void gig_spool(void)
@@ -616,146 +472,26 @@ void gig_spool(void)
 	snapshot_spool(&g.outside, &g.journal_ringbuf);
 }
 
-void ed_begin(int document_id, int64_t add_latency_ns)
-{
-	assert(!g.ed_is_begun);
-
-	const int64_t not_before_timestamp =
-		(add_latency_ns > 0)
-		? (get_nanoseconds() + add_latency_ns)
-		: 0;
-
-	struct ringbuf* rb = &g.command_ringbuf;
-	g.ed_began_at_write_position = rb->write_cursor;
-	struct document* d = get_document_by_id(document_id);
-	struct codec* c = &g.ed_codec;
-	codec_begin_encode(c, rb);
-	struct request_commands rc = {
-		.document_id = document_id,
-		.version = d->version,
-		.not_before_timestamp = not_before_timestamp,
-		.num_commands = 0xffff, // is patched later
-	};
-	codec_request_commands_ptr(c, &rc);
-	codec_end_encode(c);
-
-	g.ed_num_commands = 0;
-	g.ed_is_begun = 1;
-}
-
-void ed_do(struct command* cm)
-{
-	assert(g.ed_is_begun);
-	struct codec* c = &g.ed_codec;
-	codec_begin_encode(c, &g.command_ringbuf);
-	codec_command_ptr(c, cm);
-	codec_end_encode(c);
-	++g.ed_num_commands;
-}
-
-void ed_end(void)
-{
-	assert(g.ed_is_begun);
-	assert((0 <= g.ed_num_commands) && (g.ed_num_commands < 0xffff));
-
-	if (g.ed_num_commands > 0) {
-		struct codec* c = &g.ed_codec;
-
-		struct ringbuf* rb = &g.command_ringbuf;
-		struct ringbuf tmp_rb;
-		ringbuf_shallow_copy(&tmp_rb, rb);
-		tmp_rb.no_commit = 1;
-
-		tmp_rb.read_cursor = g.ed_began_at_write_position;
-		codec_begin_decode(c, &tmp_rb);
-		struct request_commands q = {0};
-		codec_request_commands_ptr(c, &q);
-		codec_end_decode(c);
-
-		// XXX FIXME the "0xffff" thing is also done for journal_commands:
-		// handle with some common code instead?
-		assert((q.num_commands == 0xffff) && "expected temporary marker value 0xffff");
-		q.num_commands = g.ed_num_commands;
-
-		tmp_rb.write_cursor = g.ed_began_at_write_position;
-		codec_begin_encode(c, &tmp_rb);
-		codec_request_commands_ptr(c, &q);
-		codec_end_encode(c);
-
-		ringbuf_commit(rb);
-	} else {
-		ringbuf_rollback(&g.command_ringbuf);
-	}
-	g.ed_is_begun = 0;
-}
-
 void gig_thread_tick(void)
 {
-	struct ringbuf* src = &g.command_ringbuf;
-	struct ringbuf* dst = &g.journal_ringbuf;
-	const size_t commit_cursor = atomic_load(&src->commit_cursor);
-	struct codec csrc={0};
-	codec_begin_decode(&csrc, src);
-	const int64_t now = get_nanoseconds();
-	while (src->read_cursor < commit_cursor) {
-		const size_t save_read_cursor = src->read_cursor;
-		struct request_commands rq;
-		codec_request_commands_ptr(&csrc, &rq);
-
-		if (rq.not_before_timestamp != 0) {
-			if (now < rq.not_before_timestamp) {
-				src->read_cursor = save_read_cursor;
-				break;
-			}
-		}
-		struct codec cdst={0};
-		codec_begin_encode_journal_commands(&cdst, dst, g.my_artist_id, rq.document_id);
-		const int num_commands = rq.num_commands;
-		for (int i=0; i<num_commands; ++i) {
-			struct command cm;
-			codec_command_ptr(&csrc, &cm);
-			codec_command_ptr(&cdst, &cm);
-		}
-		codec_end_encode_journal_commands(&cdst);
-		ringbuf_acknowledge(src);
-	}
-	codec_end_decode(&csrc);
-	ringbuf_commit(dst);
-	snapshot_spool(&g.inside, &g.journal_ringbuf);
 }
 
 void gig_init(void)
 {
-	ringbuf_init(&g.command_ringbuf, 16);
+	ringbuf_init(&g.command_ringbuf, 16, STB_SPRINTF_MIN);
 
 	g.my_artist_id = 1;
 	// XXX this is probably correct if we're host of the venue, but otherwise
 	// we need an assigned artist id
 
-	{
-		struct ringbuf* rb = &g.journal_ringbuf;
-		ringbuf_init(rb, 18); // XXX 256kB ringbuf. is this good/bad?
-		rb->no_acknowledge = 1; // we'
-
-		// put a document here
-
-		struct codec c={0};
-		codec_begin_encode_journal_commands(&c, rb, 0, 0);
-
-		struct command cm = {
-			.type = COMMAND_CREATE_DOCUMENT,
-			.create_document = {
-				.id = 1,
-				.type = DOCUMENT_TYPE_AUDIO,
-			},
-		};
-		codec_command_ptr(&c, &cm);
-
-		codec_end_encode_journal_commands(&c);
-
-		//codec_end_encode(&c);
-		ringbuf_commit(rb);
-	}
+	struct document* doc = arraddnptr(g.outside.document_arr, 1);
+	memset(doc, 0, sizeof *doc);
+	doc->id = 1;
+	
+	g.vs1.cool.document_id = doc->id;
+	g.vs1.hot.document_id = doc->id;
+	g.vs1.cool.mode = VAM_COMMAND;
+	memcpy(&g.vs1cool, &g.vs1.cool, sizeof g.vs1cool);
 
 	gig_thread_tick();
 	gig_spool();
@@ -766,7 +502,257 @@ int get_my_artist_id(void)
 	return g.my_artist_id;
 }
 
+struct vam_state* get_vam_state_by_id(int id)
+{
+	assert((id==1) && "oh no");
+	return &g.vs1;
+}
+
+struct vam_state_cool* get_own_cool_vam_state_by_id(int id)
+{
+	assert((id==1) && "oh no");
+	return &g.vs1cool;
+}
+
+int vam_state_cool_compar(struct vam_state_cool* a, struct vam_state_cool* b)
+{
+	const int d0 = a->document_id - b->document_id;
+	if (d0!=0) return d0;
+	const int d1 = (int)a->mode - (int)b->mode;
+	if (d1!=0) return d1;
+	const int n = arrlen(a->query_arr);
+	const int d2 = n - arrlen(b->query_arr);
+	if (d2!=0) return d2;
+	if (n>0) {
+		const int d3 = memcmp(a->query_arr, b->query_arr, n);
+		if (d3!=0) return d3;
+	}
+	if (arrlen(a->caret_id_arr)>0 || arrlen(b->caret_id_arr)>0) {
+		assert(!"TODO");
+	}
+	return 0;
+}
+
+
+static void vam_chew(struct vam_state_cool* cool, struct vam_state_hot* hot, uint8_t input, int* hot_update)
+{
+	const int is_escape = ('\033'==input);
+	const int is_return = ('\n'==input);
+
+	if (cool != NULL) {
+		switch (cool->mode) {
+		case VAM_COMMAND: {
+			switch (input) {
+			case ':': cool->mode = VAM_EX_COMMAND; break;
+			case '/': cool->mode = VAM_SEARCH_FORWARD; break;
+			case '?': cool->mode = VAM_SEARCH_BACKWARD; break;
+
+			case 'h':
+			case 'j':
+			case 'k':
+			case 'l':
+				printf("vam_chew(): TODO caret movement (%c)\n", input);
+				break;
+
+			case 'i':
+			case 'I':
+			case 'a':
+			case 'A':
+			case 'o':
+			case 'O':
+				// XXX how to handle caret movements and line insertions here?
+				if (hot_update) *hot_update=1;
+				cool->mode = VAM_INSERT;
+				break;
+
+			//default: assert(!"unhandled command"); // XXX harsh?
+			default:
+				printf("vam_chew(): unhandled input [%c/%d]\n", input, input);
+				break;
+			}
+		}	break;
+		case VAM_VISUAL:
+		case VAM_VISUAL_LINE:
+		//VAM_VISUAL_BLOCK?
+			assert(!"TODO visual command");
+		case VAM_EX_COMMAND:
+		case VAM_SEARCH_FORWARD:
+		case VAM_SEARCH_BACKWARD: {
+			if (is_escape) {
+				arrsetlen(cool->query_arr, 0);
+				cool->mode = VAM_COMMAND;
+			} else if (is_return) {
+				arrput(cool->query_arr, 0);
+				char* q = cool->query_arr;
+				if (cool->mode == VAM_EX_COMMAND) {
+					char* q1;
+					for (q1=q; *q1 && *q1!=' '; ++q1) {}
+					*q1=0;
+					if (strcmp("document",q)==0) {
+						const long document_id = strtol(q1+1, NULL, 10);
+						cool->document_id = document_id;
+					} else {
+						printf("vam_chew(): unhandled ex command [%s]\n", q);
+					}
+				} else {
+					assert(!"TODO search");
+				}
+				cool->mode = VAM_COMMAND;
+			} else {
+				arrput(cool->query_arr, input);
+			}
+		}	break;
+		case VAM_INSERT:
+			if (is_escape) {
+				cool->mode = VAM_COMMAND;
+			} else {
+				if (hot_update) *hot_update=1;
+			}
+			break;
+		default: assert(!"unhandled vam mode");
+		}
+	}
+
+	assert((hot == NULL) && "unhandled");
+}
+
+static char* wrote_command_cb(const char* buf, void* user, int len)
+{
+	struct ringbuf* rb = &g.command_ringbuf;
+	ringbuf_wrote_linear(rb, len);
+	return ringbuf_get_write_pointer(rb);
+}
+
+static void vamf_raw_va(int vam_state_id, const char* fmt, va_list va0)
+{
+	assert(vam_state_id >= 1);
+	struct codec c = {0};
+	struct ringbuf* rb = &g.command_ringbuf;
+	codec_begin_encode(&c, rb);
+	codec_write_varint(&c, vam_state_id);
+	const size_t w0 = rb->write_cursor;
+	codec_write_varint(&c, -1); // size placeholder
+	const size_t w1 = rb->write_cursor;
+	assert(w1 == (w0+1));
+	va_list va;
+	va_copy(va, va0);
+	stbsp_vsprintfcb(wrote_command_cb, NULL, ringbuf_get_write_pointer(rb), fmt, va);
+	const size_t w2 = rb->write_cursor;
+	const size_t print_size = w2-w1;
+	rb->write_cursor = w0; // reset and write size
+	codec_write_varint64(&c, print_size);
+	const size_t w1b = rb->write_cursor;
+	if ((w1b-w0) > 1) {
+		// oops, 1 byte wasn't enough for the varint length. print again from
+		// the correct position
+		va_copy(va, va0);
+		stbsp_vsprintfcb(wrote_command_cb, NULL, ringbuf_get_write_pointer(rb), fmt, va);
+		assert(((rb->write_cursor - w1b) == print_size) && "expected to print same length again");
+	} else {
+		assert((w1b-w0) == 1);
+		rb->write_cursor = w2; // restore write cursor
+	}
+	codec_end_encode(&c);
+}
+
+static void vamf_raw(int vam_state_id, const char* fmt, ...)
+{
+	va_list va;
+	va_start(va, fmt);
+	vamf_raw_va(vam_state_id, fmt, va);
+	va_end(va);
+}
+
+void vamf(int vam_state_id, const char* fmt, ...)
+{
+	struct ringbuf* rb = &g.command_ringbuf;
+	struct ringbuf rbr;
+	ringbuf_shallow_copy(&rbr, rb);
+	const size_t w0 = rb->write_cursor;
+	va_list va;
+	va_start(va, fmt);
+	vamf_raw_va(vam_state_id, fmt, va);
+	va_end(va);
+	rbr.read_cursor = w0;
+	rbr.no_commit = 1;
+	struct codec c={0};
+	codec_begin_decode(&c, &rbr);
+	const int read_state_id = codec_read_varint(&c);
+	assert(read_state_id==vam_state_id);
+	const int ss = codec_read_varint(&c);
+	int hot_update=0;
+	for (int i=0; i<ss; ++i) {
+		const uint8_t v = codec_read_u8(&c);
+		vam_chew(&g.vs1cool, NULL, v, &hot_update);
+	}
+	codec_end_decode(&c);
+	// TODO detect if command is discardable? e.g. ":document 1<cr>" when
+	// already on document 1 and so on?
+}
+
 void gig_selftest(void)
 {
-	// TODO
+	{ // test ringbuf spillover
+		struct ringbuf rb;
+		uint8_t buf[1<<8];
+		memset(buf, 0, sizeof buf);
+		ringbuf_init_with_pointer(&rb, buf, /*size_log2=*/4, /*spillover_size=*/8);
+		// advance 12 bytes (can't advance more than `spillover_size`)
+		ringbuf_wrote_linear(&rb, 8);
+		ringbuf_wrote_linear(&rb, 4);
+		assert(ringbuf_get_write_pointer(&rb) == buf+12);
+		// write 8 bytes, 4 bytes past end of ringbuf main area, and expect 4
+		// bytes spillover
+		uint8_t* p = ringbuf_get_write_pointer(&rb);
+		for (int i=0; i<8; ++i) p[i] = 3+7*i;
+		ringbuf_wrote_linear(&rb, 8);
+		for (int i=0; i<24; ++i) {
+			assert(buf[i] ==
+				(
+				i<4  ? 3+7*(i+4) : // spillover copied to start
+				i<12 ? 0 : // not written (zero initialized)
+				i<20 ? 3+7*(i-12) : // 4 last bytes + 4 bytes spillover
+				0 // not written (zero initialized)
+				)
+			);
+		}
+		assert(((uint8_t*)ringbuf_get_write_pointer(&rb) < p) && "expected pointer to move backwards due to wrap-around");
+		assert(ringbuf_get_write_pointer(&rb) == buf+4);
+	}
+
+	{ // test vamf_raw
+		uint8_t buf[(1<<9) + STB_SPRINTF_MIN];
+		assert(sizeof(buf) == 1024);
+		uint8_t* p;
+
+		{
+			ringbuf_init_with_pointer(&g.command_ringbuf, buf, 9, STB_SPRINTF_MIN);
+			vamf_raw(42, "x=%d", 69);
+			p = buf;
+			assert(*(p++) == 42); // vam state id
+			assert(*(p++) == 4); // string length
+			assert(*(p++) == 'x'); assert(*(p++) == '=');
+			assert(*(p++) == '6'); assert(*(p++) == '9');
+		}
+
+		{ // test special case when string is 64 bytes or longer (length is varint)
+			ringbuf_init_with_pointer(&g.command_ringbuf, buf, 9, STB_SPRINTF_MIN);
+			vamf_raw(66,
+			"0123456789ABCDEF"
+			"0123456789ABCDEF"
+			"0123456789ABCDEF"
+			"0123456789ABCDEF"
+			"!"
+			);
+			p = buf;
+			assert(*(p++) == 0xc2); assert(*(p++) == 0x00); // 66 (vam state id) as leb128
+			assert(*(p++) == 0xc1); assert(*(p++) == 0x00); // 65 (string length) as leb128
+			for (int i=0;i<4;++i) {
+				for (int ii=0;ii<16;++ii) {
+					assert(*(p++) == "0123456789ABCDEF"[ii]);
+				}
+			}
+			assert(*p == '!');
+		}
+	}
 }

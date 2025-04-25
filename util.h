@@ -3,9 +3,11 @@
 #define ARRAY_LENGTH(xs) (sizeof(xs)/sizeof((xs)[0]))
 
 // TODO non gcc/clang defines?
-#define NO_RETURN     __attribute__((noreturn))
-#define NO_DISCARD    __attribute__((warn_unused_result))
-#define ALWAYS_INLINE __attribute__((always_inline))
+#define NO_RETURN      __attribute__((noreturn))
+#define NO_DISCARD     __attribute__((warn_unused_result))
+#define ALWAYS_INLINE  __attribute__((always_inline))
+#define FORMATPRINTF2  __attribute__((format(printf,2,3)))
+
 
 //#define ALIGNAS(x) _Alignas(x)
 //#define ATOMIC(T) _Atomic(T)
@@ -15,6 +17,12 @@
 #define CACHE_LINE_SIZE (64)
 
 static inline int is_numeric(char ch) { return '0' <= ch && ch <= '9'; }
+
+
+#define ARRCOPY(DST,SRC) \
+	assert((sizeof(*(SRC))==sizeof(*(DST))) && "size mismatch"); \
+	arrsetlen(DST, arrlen(SRC)); \
+	memcpy(DST, SRC, arrlen(DST)*sizeof(*(DST)));
 
 #define UTIL_H
 #endif

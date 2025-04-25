@@ -42,7 +42,7 @@ struct pane {
 	float u0,v0,u1,v1;
 	union {
 		struct {
-			int document_id;
+			int vam_state_id;
 			int focus_id;
 			// TODO presentation shader id? (can be built-in, or user-defined?)
 		} code;
@@ -776,19 +776,24 @@ void gui_init(void)
 {
 	g.atlas_texture_id = -1;
 
-	assert((get_num_documents() > 0) && "the following code is probably not the best if/when this changes");
-
+	// XXX a lot of this code is bad "getting started code" that shouldn't
+	// survive for too long
+	//assert((get_num_documents() > 0) && "the following code is probably not the best if/when this changes");
 	const int focus_id = make_focus_id();
+	const int vam_state_id = 1;
 	arrput(g.pane_arr, ((struct pane){
 		.type = CODE,
 		.u0=0, .v0=0,
 		.u1=1, .v1=1,
 		.code = {
 			.focus_id = focus_id,
-			.document_id = get_document_by_index(0)->id,
+			//.document_id = get_document_by_index(0)->id,
+			.vam_state_id = vam_state_id,
 		},
 	}));
 	focus(focus_id);
+	vamf(vam_state_id, ":document %d\n", 1); // XXX ?
+	gig_spool(); // XXX?
 
 	struct font_config* fc = &g.font_config;
 	arrsetlen(fc->codepoint_range_pairs_arr, 0);
@@ -1114,14 +1119,8 @@ void gui_begin_frame(void)
 static void handle_editor_input(struct pane* pane)
 {
 	assert(pane->type == CODE);
-	const int doc_id = pane->code.document_id;
-
-	//const int64_t add_latency_ns = 200000000L; // 200ms
-	const int64_t add_latency_ns = 0L; // none
-	ed_begin(doc_id, add_latency_ns);
-	struct document* doc = get_document_by_id(doc_id);
 	const int my_artist_id = get_my_artist_id();
-	const int num_carets = arrlen(doc->caret_arr);
+	const int vid = pane->code.vam_state_id;
 
 	for (int i=0; i<arrlen(g.key_buffer_arr); ++i) {
 		const int key = g.key_buffer_arr[i];
@@ -1131,82 +1130,21 @@ static void handle_editor_input(struct pane* pane)
 		if (down && mod==0) {
 			int dcol=0, dline=0;
 			switch (code) {
-			case KEY_ARROW_LEFT:  dcol  = -1; break;
-			case KEY_ARROW_RIGHT: dcol  =  1; break;
-			case KEY_ARROW_UP:    dline = -1; break;
-			case KEY_ARROW_DOWN:  dline =  1; break;
+			case KEY_ARROW_LEFT:  vamf(vid, "\033h"); break;
+			case KEY_ARROW_RIGHT: vamf(vid, "\033l"); break;
+			case KEY_ARROW_UP:    vamf(vid, "\033k"); break;
+			case KEY_ARROW_DOWN:  vamf(vid, "\033j"); break;
+			case KEY_ENTER:       vamf(vid, "\n"); break;
+			case KEY_ESCAPE:      vamf(vid, "\033"); break;
 			default: break;
-			}
-
-			if (dcol || dline) {
-				int num_motions = 0;
-				for (int i=0; i<num_carets; ++i) {
-					struct caret* caret = &doc->caret_arr[i];
-					if (caret->artist_id != my_artist_id) continue;
-					++num_motions;
-					struct location newloc = {
-						.line = caret->range.from.line + dline,
-						.column = caret->range.from.column + dcol,
-					};
-					#if 0
-					printf("newloc %d %d\n", newloc.line, newloc.column);
-					#endif
-					ed_do(&((struct command){
-						.type = COMMAND_SET_CARET,
-						.set_caret = {
-							.id = caret->id,
-							.range = { .from = newloc, .to = newloc },
-						},
-					}));
-				}
-
-				if (num_motions == 0) {
-					// XXX FIXME hack? I think the proper approach is:
-					//  set caret if click in code
-					//  if tabbing into window remember last caret position?
-					printf("XXXHACK: setting caret because we have none\n");
-					ed_do(&((struct command){
-						.type = COMMAND_SET_CARET,
-						.set_caret = {
-							.id = 1,
-							.range = {
-								.from = { .line = 1, .column = 1, },
-								.to =   { .line = 1, .column = 1, },
-							},
-						},
-					}));
-				}
 			}
 		}
 	}
 
 	const int num_chars = utf8_strlen(g.text_buffer_arr);
 	if (num_chars > 0) {
-		for (int i=0; i<num_carets; ++i) {
-			struct caret* caret = &doc->caret_arr[i];
-			if (caret->artist_id != my_artist_id) continue;
-			ed_do(&((struct command){
-				.type = COMMAND_INSERT,
-				.insert = {
-					.text = g.text_buffer_arr,
-					.at = caret->range.from,
-					// XXX handle caret ranges?
-				},
-			}));
-			struct location newloc = {
-				.line = caret->range.from.line,
-				.column = caret->range.from.column + num_chars,
-			};
-			ed_do(&((struct command){
-				.type = COMMAND_SET_CARET,
-				.set_caret = {
-					.id = caret->id,
-					.range = { .from = newloc, .to = newloc, },
-				},
-			}));
-		}
+		vamf(vid, "%s", g.text_buffer_arr);
 	}
-	ed_end();
 }
 
 static void draw_code_pane(struct pane* pane)
@@ -1234,7 +1172,7 @@ static void draw_code_pane(struct pane* pane)
 	//set_color3f(.7, 2.7, .7);
 	set_color3f(.9,2.6,.9);
 
-	struct document* doc = get_document_by_id(pane->code.document_id);
+	struct document* doc = get_document_by_id(get_own_cool_vam_state_by_id(pane->code.vam_state_id)->document_id);
 	const int num_chars = arrlen(doc->fat_char_arr);
 	int line_index = 0;
 	for (int i=0; i<num_chars; ++i) {

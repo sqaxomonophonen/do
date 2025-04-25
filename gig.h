@@ -2,6 +2,8 @@
 
 #include <stdint.h>
 
+#include "util.h"
+
 struct location {
 	int line;
 	int column;
@@ -21,6 +23,59 @@ struct fat_char {
 	unsigned defer  :1;
 };
 
+enum vam_mode {
+	VAM_COMMAND = 1,
+	VAM_VISUAL,
+	VAM_VISUAL_LINE,
+	//VAM_VISUAL_BLOCK?
+	VAM_INSERT,
+	VAM_EX_COMMAND, // ":<query>"
+	VAM_SEARCH_FORWARD,
+	VAM_SEARCH_BACKWARD,
+};
+
+// "cool state" contains state that the artist has 100% control over (so no
+// need to wait for server response to "predict" these; useful for knowing
+// "we're already in insert mode" and so on)
+struct vam_state_cool {
+	int document_id;
+	// if `document_id` is set to an id that does not exist
+	enum vam_mode mode;
+	char* query_arr;
+	// `query_arr` contains the current "unfinished" query as a string, depending
+	// on mode:
+	//  - VAM_COMMAND: if you type "dw" or "10dw" then just before the last "w"
+	//    query contains "d" and "10d" respectively
+	//  - VAM_EX / VAM_SEARCH_FORWARD / VAM_SEARCH_BACKWARD: the query as
+	//    you type it
+	// Q: for VAM_INSERT: should the string be empty? or maybe contain the
+	// command that initiated it? e.g. "10i" will insert a thing 10 times after
+	// you escape? that state isn't seen elsewhere... or maybe it should just
+	// contain "10"?
+	int* caret_id_arr;
+};
+
+struct caret {
+	int id;
+	struct range range;
+};
+
+// "hot state" is whatever the server says it is; potentially
+// chaotic/unpredictable in multi-artist venues
+struct vam_state_hot {
+	int document_id;
+	struct caret* caret_arr;
+	// TODO yank buffer contents?
+};
+
+struct vam_state {
+	int vam_state_id;
+	int artist_id;
+	struct vam_state_cool cool;
+	struct vam_state_hot hot;
+};
+
+
 enum document_type {
 	DOCUMENT_TYPE_ROOT = 1,
 	DOCUMENT_TYPE_AUDIO,
@@ -30,12 +85,6 @@ enum document_type {
 	// XXX re:DOCUMENT_TYPE_PRESENTATION_SHADER: code that translates "fat_chars"
 	// into "render_chars". but do I need a type per "presentation backend"?
 	// would a "braille backend" need another doc type?
-};
-
-struct caret {
-	int id;
-	int artist_id;
-	struct range range;
 };
 
 enum document_flag {
@@ -61,10 +110,10 @@ enum document_flag {
 struct document {
 	int flags;
 	int id;
-	int version;
+	//int version;
 	enum document_type type;
 	struct fat_char* fat_char_arr;
-	struct caret* caret_arr;
+	struct vam_state* vam_state_arr;
 	// beware document_copy() when adding new arrays
 };
 
@@ -73,78 +122,17 @@ void gig_spool(void);
 void gig_thread_tick(void);
 void gig_selftest(void);
 
-enum command_type {
-	COMMAND_SET_CARET=1,
-	COMMAND_DELETE_CARET,
+void vam_set_latency(double mu, double sigma);
 
-	COMMAND_INSERT,
-	COMMAND_DELETE,
-	COMMAND_COMMIT,
-	COMMAND_CANCEL,
-	COMMAND_DEFER,
-	COMMAND_UNDEFER,
+FORMATPRINTF2
+void vamf(int vam_state_id, const char* fmt, ...);
 
-	COMMAND_SET_COLOR,
+int get_num_vam_states(void);
+struct vam_state* get_vam_state_by_index(int index);
+struct vam_state* get_vam_state_by_id(int id);
+//struct vam_state_cool* get_own_cool_vam_state_by_index(int index);
+struct vam_state_cool* get_own_cool_vam_state_by_id(int id);
 
-	COMMAND_CREATE_DOCUMENT,
-	COMMAND_DELETE_DOCUMENT,
-
-	// TODO?
-	//  admin ops? ban?
-};
-
-struct command {
-	enum command_type type;
-	//int document_id;
-	//int document_serial;
-	union {
-		struct {
-			int id;
-			struct range range;
-		} set_caret; // for COMMAND_SET_CARET
-		struct {
-			int id;
-		} delete_caret; // for COMMAND_DELETE_CARET
-		struct {
-			struct location at;
-			const char* text;
-		} insert; // for COMMAND_INSERT
-		struct {
-			struct range range;
-		} delete; // for COMMAND_DELETE
-		struct {
-			int artist_id;
-			struct range range;
-		} commit; // for COMMAND_COMMIT
-		struct {
-			int artist_id;
-			struct range range;
-		} cancel; // for COMMAND_CANCEL
-		struct {
-			int artist_id;
-			struct range range;
-		} defer; // for COMMAND_DEFER
-		struct {
-			int artist_id;
-			struct range range;
-		} undefer; // for COMMAND_UNDEFER
-		struct {
-			int red, green, blue;
-		} set_color; // for COMMAND_SET_COLOR
-		struct {
-			int id;
-			int flags;
-			enum document_type type;
-		} create_document; // for COMMAND_CREATE_DOCUMENT
-		struct {
-			int document_id;
-		} delete_document; // for COMMAND_DELETE_DOCUMENT
-	};
-};
-
-void ed_begin(int document_id, int64_t add_latency_ns);
-void ed_do(struct command*);
-void ed_end(void);
 
 int get_num_documents(void);
 struct document* get_document_by_index(int);
