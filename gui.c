@@ -1128,7 +1128,6 @@ static void handle_editor_input(struct pane* pane)
 		const int mod = get_key_mod(key);
 		const int code = get_key_code(key);
 		if (down && mod==0) {
-			int dcol=0, dline=0;
 			switch (code) {
 			case KEY_ARROW_LEFT:  vamf(vid, "\033h"); break;
 			case KEY_ARROW_RIGHT: vamf(vid, "\033l"); break;
