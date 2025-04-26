@@ -23,32 +23,32 @@ struct fat_char {
 	unsigned defer  :1;
 };
 
-enum vam_mode {
-	VAM_COMMAND = 1,
-	VAM_VISUAL,
-	VAM_VISUAL_LINE,
-	//VAM_VISUAL_BLOCK?
-	VAM_INSERT,
-	VAM_EX_COMMAND, // ":<query>"
-	VAM_SEARCH_FORWARD,
-	VAM_SEARCH_BACKWARD,
+enum mim_mode {
+	MIM_COMMAND = 1,
+	MIM_VISUAL,
+	MIM_VISUAL_LINE,
+	//MIM_VISUAL_BLOCK?
+	MIM_INSERT,
+	MIM_EX_COMMAND, // ":<query>"
+	MIM_SEARCH_FORWARD,
+	MIM_SEARCH_BACKWARD,
 };
 
 // "cool state" contains state that the artist has 100% control over (so no
 // need to wait for server response to "predict" these; useful for knowing
 // "we're already in insert mode" and so on)
-struct vam_state_cool {
+struct mim_state_cool {
 	int document_id;
 	// if `document_id` is set to an id that does not exist
-	enum vam_mode mode;
+	enum mim_mode mode;
 	char* query_arr;
 	// `query_arr` contains the current "unfinished" query as a string, depending
 	// on mode:
-	//  - VAM_COMMAND: if you type "dw" or "10dw" then just before the last "w"
+	//  - MIM_COMMAND: if you type "dw" or "10dw" then just before the last "w"
 	//    query contains "d" and "10d" respectively
-	//  - VAM_EX / VAM_SEARCH_FORWARD / VAM_SEARCH_BACKWARD: the query as
+	//  - MIM_EX / MIM_SEARCH_FORWARD / MIM_SEARCH_BACKWARD: the query as
 	//    you type it
-	// Q: for VAM_INSERT: should the string be empty? or maybe contain the
+	// Q: for MIM_INSERT: should the string be empty? or maybe contain the
 	// command that initiated it? e.g. "10i" will insert a thing 10 times after
 	// you escape? that state isn't seen elsewhere... or maybe it should just
 	// contain "10"?
@@ -62,17 +62,17 @@ struct caret {
 
 // "hot state" is whatever the server says it is; potentially
 // chaotic/unpredictable in multi-artist venues
-struct vam_state_hot {
+struct mim_state_hot {
 	int document_id;
 	struct caret* caret_arr;
 	// TODO yank buffer contents?
 };
 
-struct vam_state {
-	int vam_state_id;
+struct mim_state {
+	int mim_state_id;
 	int artist_id;
-	struct vam_state_cool cool;
-	struct vam_state_hot hot;
+	struct mim_state_cool cool;
+	struct mim_state_hot hot;
 };
 
 
@@ -113,7 +113,7 @@ struct document {
 	//int version;
 	enum document_type type;
 	struct fat_char* fat_char_arr;
-	struct vam_state* vam_state_arr;
+	struct mim_state* mim_state_arr;
 	// beware document_copy() when adding new arrays
 };
 
@@ -122,16 +122,16 @@ void gig_spool(void);
 void gig_thread_tick(void);
 void gig_selftest(void);
 
-void vam_set_latency(double mu, double sigma);
+void mim_set_latency(double mu, double sigma);
 
 FORMATPRINTF2
-void vamf(int vam_state_id, const char* fmt, ...);
+void mimf(int mim_state_id, const char* fmt, ...);
 
-int get_num_vam_states(void);
-struct vam_state* get_vam_state_by_index(int index);
-struct vam_state* get_vam_state_by_id(int id);
-//struct vam_state_cool* get_own_cool_vam_state_by_index(int index);
-struct vam_state_cool* get_own_cool_vam_state_by_id(int id);
+int get_num_mim_states(void);
+struct mim_state* get_mim_state_by_index(int index);
+struct mim_state* get_mim_state_by_id(int id);
+//struct mim_state_cool* get_own_cool_mim_state_by_index(int index);
+struct mim_state_cool* get_own_cool_mim_state_by_id(int id);
 
 
 int get_num_documents(void);

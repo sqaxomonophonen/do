@@ -162,10 +162,10 @@ static void document_copy(struct document* dst, struct document* src)
 	// document (simplifies memory management)
 	dst->fat_char_arr = copy.fat_char_arr;
 	//dst->caret_arr = copy.caret_arr;
-	dst->vam_state_arr = copy.vam_state_arr;
+	dst->mim_state_arr = copy.mim_state_arr;
 
 	ARRCOPY(dst->fat_char_arr, src->fat_char_arr);
-	ARRCOPY(dst->vam_state_arr, src->vam_state_arr);
+	ARRCOPY(dst->mim_state_arr, src->mim_state_arr);
 }
 
 struct codec {
@@ -218,8 +218,8 @@ static struct {
 	int ed_is_begun;
 	int my_artist_id;
 
-	struct vam_state vs1;
-	struct vam_state_cool vs1cool;
+	struct mim_state vs1;
+	struct mim_state_cool vs1cool;
 } g;
 
 int get_num_documents(void)
@@ -487,10 +487,10 @@ void gig_init(void)
 	struct document* doc = arraddnptr(g.outside.document_arr, 1);
 	memset(doc, 0, sizeof *doc);
 	doc->id = 1;
-	
+
 	g.vs1.cool.document_id = doc->id;
 	g.vs1.hot.document_id = doc->id;
-	g.vs1.cool.mode = VAM_COMMAND;
+	g.vs1.cool.mode = MIM_COMMAND;
 	memcpy(&g.vs1cool, &g.vs1.cool, sizeof g.vs1cool);
 
 	gig_thread_tick();
@@ -502,19 +502,19 @@ int get_my_artist_id(void)
 	return g.my_artist_id;
 }
 
-struct vam_state* get_vam_state_by_id(int id)
+struct mim_state* get_mim_state_by_id(int id)
 {
 	assert((id==1) && "oh no");
 	return &g.vs1;
 }
 
-struct vam_state_cool* get_own_cool_vam_state_by_id(int id)
+struct mim_state_cool* get_own_cool_mim_state_by_id(int id)
 {
 	assert((id==1) && "oh no");
 	return &g.vs1cool;
 }
 
-int vam_state_cool_compar(struct vam_state_cool* a, struct vam_state_cool* b)
+int mim_state_cool_compar(struct mim_state_cool* a, struct mim_state_cool* b)
 {
 	const int d0 = a->document_id - b->document_id;
 	if (d0!=0) return d0;
@@ -533,25 +533,24 @@ int vam_state_cool_compar(struct vam_state_cool* a, struct vam_state_cool* b)
 	return 0;
 }
 
-
-static void vam_chew(struct vam_state_cool* cool, struct vam_state_hot* hot, uint8_t input, int* hot_update)
+static void mim_chew(struct mim_state_cool* cool, struct mim_state_hot* hot, uint8_t input, int* hot_update)
 {
 	const int is_escape = ('\033'==input);
 	const int is_return = ('\n'==input);
 
 	if (cool != NULL) {
 		switch (cool->mode) {
-		case VAM_COMMAND: {
+		case MIM_COMMAND: {
 			switch (input) {
-			case ':': cool->mode = VAM_EX_COMMAND; break;
-			case '/': cool->mode = VAM_SEARCH_FORWARD; break;
-			case '?': cool->mode = VAM_SEARCH_BACKWARD; break;
+			case ':': cool->mode = MIM_EX_COMMAND; break;
+			case '/': cool->mode = MIM_SEARCH_FORWARD; break;
+			case '?': cool->mode = MIM_SEARCH_BACKWARD; break;
 
 			case 'h':
 			case 'j':
 			case 'k':
 			case 'l':
-				printf("vam_chew(): TODO caret movement (%c)\n", input);
+				printf("mim_chew(): TODO caret movement (%c)\n", input);
 				break;
 
 			case 'i':
@@ -562,29 +561,29 @@ static void vam_chew(struct vam_state_cool* cool, struct vam_state_hot* hot, uin
 			case 'O':
 				// XXX how to handle caret movements and line insertions here?
 				if (hot_update) *hot_update=1;
-				cool->mode = VAM_INSERT;
+				cool->mode = MIM_INSERT;
 				break;
 
 			//default: assert(!"unhandled command"); // XXX harsh?
 			default:
-				printf("vam_chew(): unhandled input [%c/%d]\n", input, input);
+				printf("mim_chew(): unhandled input [%c/%d]\n", input, input);
 				break;
 			}
 		}	break;
-		case VAM_VISUAL:
-		case VAM_VISUAL_LINE:
-		//VAM_VISUAL_BLOCK?
+		case MIM_VISUAL:
+		case MIM_VISUAL_LINE:
+		//MIM_VISUAL_BLOCK?
 			assert(!"TODO visual command");
-		case VAM_EX_COMMAND:
-		case VAM_SEARCH_FORWARD:
-		case VAM_SEARCH_BACKWARD: {
+		case MIM_EX_COMMAND:
+		case MIM_SEARCH_FORWARD:
+		case MIM_SEARCH_BACKWARD: {
 			if (is_escape) {
 				arrsetlen(cool->query_arr, 0);
-				cool->mode = VAM_COMMAND;
+				cool->mode = MIM_COMMAND;
 			} else if (is_return) {
 				arrput(cool->query_arr, 0);
 				char* q = cool->query_arr;
-				if (cool->mode == VAM_EX_COMMAND) {
+				if (cool->mode == MIM_EX_COMMAND) {
 					char* q1;
 					for (q1=q; *q1 && *q1!=' '; ++q1) {}
 					*q1=0;
@@ -592,24 +591,24 @@ static void vam_chew(struct vam_state_cool* cool, struct vam_state_hot* hot, uin
 						const long document_id = strtol(q1+1, NULL, 10);
 						cool->document_id = document_id;
 					} else {
-						printf("vam_chew(): unhandled ex command [%s]\n", q);
+						printf("mim_chew(): unhandled ex command [%s]\n", q);
 					}
 				} else {
 					assert(!"TODO search");
 				}
-				cool->mode = VAM_COMMAND;
+				cool->mode = MIM_COMMAND;
 			} else {
 				arrput(cool->query_arr, input);
 			}
 		}	break;
-		case VAM_INSERT:
+		case MIM_INSERT:
 			if (is_escape) {
-				cool->mode = VAM_COMMAND;
+				cool->mode = MIM_COMMAND;
 			} else {
 				if (hot_update) *hot_update=1;
 			}
 			break;
-		default: assert(!"unhandled vam mode");
+		default: assert(!"unhandled mim mode");
 		}
 	}
 
@@ -623,13 +622,13 @@ static char* wrote_command_cb(const char* buf, void* user, int len)
 	return ringbuf_get_write_pointer(rb);
 }
 
-static void vamf_raw_va(int vam_state_id, const char* fmt, va_list va0)
+static void mimf_raw_va(int mim_state_id, const char* fmt, va_list va0)
 {
-	assert(vam_state_id >= 1);
+	assert(mim_state_id >= 1);
 	struct codec c = {0};
 	struct ringbuf* rb = &g.command_ringbuf;
 	codec_begin_encode(&c, rb);
-	codec_write_varint(&c, vam_state_id);
+	codec_write_varint(&c, mim_state_id);
 	const size_t w0 = rb->write_cursor;
 	codec_write_varint(&c, -1); // size placeholder
 	const size_t w1 = rb->write_cursor;
@@ -655,15 +654,15 @@ static void vamf_raw_va(int vam_state_id, const char* fmt, va_list va0)
 	codec_end_encode(&c);
 }
 
-static void vamf_raw(int vam_state_id, const char* fmt, ...)
+static void mimf_raw(int mim_state_id, const char* fmt, ...)
 {
 	va_list va;
 	va_start(va, fmt);
-	vamf_raw_va(vam_state_id, fmt, va);
+	mimf_raw_va(mim_state_id, fmt, va);
 	va_end(va);
 }
 
-void vamf(int vam_state_id, const char* fmt, ...)
+void mimf(int mim_state_id, const char* fmt, ...)
 {
 	struct ringbuf* rb = &g.command_ringbuf;
 	struct ringbuf rbr;
@@ -671,19 +670,19 @@ void vamf(int vam_state_id, const char* fmt, ...)
 	const size_t w0 = rb->write_cursor;
 	va_list va;
 	va_start(va, fmt);
-	vamf_raw_va(vam_state_id, fmt, va);
+	mimf_raw_va(mim_state_id, fmt, va);
 	va_end(va);
 	rbr.read_cursor = w0;
 	rbr.no_commit = 1;
 	struct codec c={0};
 	codec_begin_decode(&c, &rbr);
 	const int read_state_id = codec_read_varint(&c);
-	assert(read_state_id==vam_state_id);
+	assert(read_state_id==mim_state_id);
 	const int ss = codec_read_varint(&c);
 	int hot_update=0;
 	for (int i=0; i<ss; ++i) {
 		const uint8_t v = codec_read_u8(&c);
-		vam_chew(&g.vs1cool, NULL, v, &hot_update);
+		mim_chew(&g.vs1cool, NULL, v, &hot_update);
 	}
 	codec_end_decode(&c);
 	// TODO detect if command is discardable? e.g. ":document 1<cr>" when
@@ -720,16 +719,16 @@ void gig_selftest(void)
 		assert(ringbuf_get_write_pointer(&rb) == buf+4);
 	}
 
-	{ // test vamf_raw
+	{ // test mimf_raw
 		uint8_t buf[(1<<9) + STB_SPRINTF_MIN];
 		assert(sizeof(buf) == 1024);
 		uint8_t* p;
 
 		{
 			ringbuf_init_with_pointer(&g.command_ringbuf, buf, 9, STB_SPRINTF_MIN);
-			vamf_raw(42, "x=%d", 69);
+			mimf_raw(42, "x=%d", 69);
 			p = buf;
-			assert(*(p++) == 42); // vam state id
+			assert(*(p++) == 42); // mim state id
 			assert(*(p++) == 4); // string length
 			assert(*(p++) == 'x'); assert(*(p++) == '=');
 			assert(*(p++) == '6'); assert(*(p++) == '9');
@@ -737,7 +736,7 @@ void gig_selftest(void)
 
 		{ // test special case when string is 64 bytes or longer (length is varint)
 			ringbuf_init_with_pointer(&g.command_ringbuf, buf, 9, STB_SPRINTF_MIN);
-			vamf_raw(66,
+			mimf_raw(66,
 			"0123456789ABCDEF"
 			"0123456789ABCDEF"
 			"0123456789ABCDEF"
@@ -745,7 +744,7 @@ void gig_selftest(void)
 			"!"
 			);
 			p = buf;
-			assert(*(p++) == 0xc2); assert(*(p++) == 0x00); // 66 (vam state id) as leb128
+			assert(*(p++) == 0xc2); assert(*(p++) == 0x00); // 66 (mim state id) as leb128
 			assert(*(p++) == 0xc1); assert(*(p++) == 0x00); // 65 (string length) as leb128
 			for (int i=0;i<4;++i) {
 				for (int ii=0;ii<16;++ii) {
