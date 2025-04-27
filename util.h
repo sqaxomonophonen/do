@@ -6,6 +6,7 @@
 #define NO_RETURN      __attribute__((noreturn))
 #define NO_DISCARD     __attribute__((warn_unused_result))
 #define ALWAYS_INLINE  __attribute__((always_inline))
+#define FORMATPRINTF1  __attribute__((format(printf,1,2)))
 #define FORMATPRINTF2  __attribute__((format(printf,2,3)))
 
 

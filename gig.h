@@ -23,58 +23,18 @@ struct fat_char {
 	unsigned defer  :1;
 };
 
-enum mim_mode {
-	MIM_COMMAND = 1,
-	MIM_VISUAL,
-	MIM_VISUAL_LINE,
-	//MIM_VISUAL_BLOCK?
-	MIM_INSERT,
-	MIM_EX_COMMAND, // ":<query>"
-	MIM_SEARCH_FORWARD,
-	MIM_SEARCH_BACKWARD,
-};
-
-// "cool state" contains state that the artist has 100% control over (so no
-// need to wait for server response to "predict" these; useful for knowing
-// "we're already in insert mode" and so on)
-struct mim_state_cool {
-	int document_id;
-	// if `document_id` is set to an id that does not exist
-	enum mim_mode mode;
-	char* query_arr;
-	// `query_arr` contains the current "unfinished" query as a string, depending
-	// on mode:
-	//  - MIM_COMMAND: if you type "dw" or "10dw" then just before the last "w"
-	//    query contains "d" and "10d" respectively
-	//  - MIM_EX / MIM_SEARCH_FORWARD / MIM_SEARCH_BACKWARD: the query as
-	//    you type it
-	// Q: for MIM_INSERT: should the string be empty? or maybe contain the
-	// command that initiated it? e.g. "10i" will insert a thing 10 times after
-	// you escape? that state isn't seen elsewhere... or maybe it should just
-	// contain "10"?
-	int* caret_id_arr;
-};
-
 struct caret {
 	int id;
-	struct range range;
-};
-
-// "hot state" is whatever the server says it is; potentially
-// chaotic/unpredictable in multi-artist venues
-struct mim_state_hot {
 	int document_id;
-	struct caret* caret_arr;
-	// TODO yank buffer contents?
+	struct range range; // not available if "cool"
 };
 
 struct mim_state {
 	int mim_state_id;
 	int artist_id;
-	struct mim_state_cool cool;
-	struct mim_state_hot hot;
+	struct caret* cool_caret_arr;
+	struct caret* hot_caret_arr;
 };
-
 
 enum document_type {
 	DOCUMENT_TYPE_ROOT = 1,
@@ -124,14 +84,14 @@ void gig_selftest(void);
 
 void mim_set_latency(double mu, double sigma);
 
-FORMATPRINTF2
-void mimf(int mim_state_id, const char* fmt, ...);
+//FORMATPRINTF2
+//void mimf(int mim_state_id, const char* fmt, ...);
+FORMATPRINTF1
+void mimf(const char* fmt, ...);
 
 int get_num_mim_states(void);
 struct mim_state* get_mim_state_by_index(int index);
 struct mim_state* get_mim_state_by_id(int id);
-//struct mim_state_cool* get_own_cool_mim_state_by_index(int index);
-struct mim_state_cool* get_own_cool_mim_state_by_id(int id);
 
 
 int get_num_documents(void);

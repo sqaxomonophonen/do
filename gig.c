@@ -219,7 +219,6 @@ static struct {
 	int my_artist_id;
 
 	struct mim_state vs1;
-	struct mim_state_cool vs1cool;
 } g;
 
 int get_num_documents(void)
@@ -488,10 +487,10 @@ void gig_init(void)
 	memset(doc, 0, sizeof *doc);
 	doc->id = 1;
 
-	g.vs1.cool.document_id = doc->id;
-	g.vs1.hot.document_id = doc->id;
-	g.vs1.cool.mode = MIM_COMMAND;
-	memcpy(&g.vs1cool, &g.vs1.cool, sizeof g.vs1cool);
+	g.vs1.mim_state_id = 1;
+	g.vs1.artist_id = g.my_artist_id;
+
+
 
 	gig_thread_tick();
 	gig_spool();
@@ -504,16 +503,21 @@ int get_my_artist_id(void)
 
 struct mim_state* get_mim_state_by_id(int id)
 {
-	assert((id==1) && "oh no");
+	assert((id==1) && "oh no"); // XXX
 	return &g.vs1;
 }
 
-struct mim_state_cool* get_own_cool_mim_state_by_id(int id)
+int get_num_mim_states(void)
 {
-	assert((id==1) && "oh no");
-	return &g.vs1cool;
+	return 1; // XXX
 }
 
+struct mim_state* get_mim_state_by_index(int index)
+{
+	return get_mim_state_by_id(1); // XXX
+}
+
+#if 0
 int mim_state_cool_compar(struct mim_state_cool* a, struct mim_state_cool* b)
 {
 	const int d0 = a->document_id - b->document_id;
@@ -614,6 +618,7 @@ static void mim_chew(struct mim_state_cool* cool, struct mim_state_hot* hot, uin
 
 	assert((hot == NULL) && "unhandled");
 }
+#endif
 
 static char* wrote_command_cb(const char* buf, void* user, int len)
 {
@@ -622,13 +627,11 @@ static char* wrote_command_cb(const char* buf, void* user, int len)
 	return ringbuf_get_write_pointer(rb);
 }
 
-static void mimf_raw_va(int mim_state_id, const char* fmt, va_list va0)
+static void mimf_raw_va(/*int mim_state_id,*/ const char* fmt, va_list va0)
 {
-	assert(mim_state_id >= 1);
 	struct codec c = {0};
 	struct ringbuf* rb = &g.command_ringbuf;
 	codec_begin_encode(&c, rb);
-	codec_write_varint(&c, mim_state_id);
 	const size_t w0 = rb->write_cursor;
 	codec_write_varint(&c, -1); // size placeholder
 	const size_t w1 = rb->write_cursor;
@@ -654,15 +657,15 @@ static void mimf_raw_va(int mim_state_id, const char* fmt, va_list va0)
 	codec_end_encode(&c);
 }
 
-static void mimf_raw(int mim_state_id, const char* fmt, ...)
+static void mimf_raw(/*int mim_state_id, */const char* fmt, ...)
 {
 	va_list va;
 	va_start(va, fmt);
-	mimf_raw_va(mim_state_id, fmt, va);
+	mimf_raw_va(/*mim_state_id, */fmt, va);
 	va_end(va);
 }
 
-void mimf(int mim_state_id, const char* fmt, ...)
+void mimf(/*int mim_state_id,*/const char* fmt, ...)
 {
 	struct ringbuf* rb = &g.command_ringbuf;
 	struct ringbuf rbr;
@@ -670,19 +673,20 @@ void mimf(int mim_state_id, const char* fmt, ...)
 	const size_t w0 = rb->write_cursor;
 	va_list va;
 	va_start(va, fmt);
-	mimf_raw_va(mim_state_id, fmt, va);
+	mimf_raw_va(/*mim_state_id, */fmt, va);
 	va_end(va);
 	rbr.read_cursor = w0;
 	rbr.no_commit = 1;
 	struct codec c={0};
 	codec_begin_decode(&c, &rbr);
-	const int read_state_id = codec_read_varint(&c);
-	assert(read_state_id==mim_state_id);
+	//const int read_state_id = codec_read_varint(&c);
+	//assert(read_state_id==mim_state_id);
 	const int ss = codec_read_varint(&c);
-	int hot_update=0;
+	//int hot_update=0;
 	for (int i=0; i<ss; ++i) {
 		const uint8_t v = codec_read_u8(&c);
-		mim_chew(&g.vs1cool, NULL, v, &hot_update);
+		//mim_chew(&g.vs1cool, NULL, v, &hot_update);
+		printf("TODO chew %d/%c\n", v, v);
 	}
 	codec_end_decode(&c);
 	// TODO detect if command is discardable? e.g. ":document 1<cr>" when
@@ -726,9 +730,8 @@ void gig_selftest(void)
 
 		{
 			ringbuf_init_with_pointer(&g.command_ringbuf, buf, 9, STB_SPRINTF_MIN);
-			mimf_raw(42, "x=%d", 69);
+			mimf_raw("x=%d", 69);
 			p = buf;
-			assert(*(p++) == 42); // mim state id
 			assert(*(p++) == 4); // string length
 			assert(*(p++) == 'x'); assert(*(p++) == '=');
 			assert(*(p++) == '6'); assert(*(p++) == '9');
@@ -736,7 +739,7 @@ void gig_selftest(void)
 
 		{ // test special case when string is 64 bytes or longer (length is varint)
 			ringbuf_init_with_pointer(&g.command_ringbuf, buf, 9, STB_SPRINTF_MIN);
-			mimf_raw(66,
+			mimf_raw(
 			"0123456789ABCDEF"
 			"0123456789ABCDEF"
 			"0123456789ABCDEF"
@@ -744,7 +747,6 @@ void gig_selftest(void)
 			"!"
 			);
 			p = buf;
-			assert(*(p++) == 0xc2); assert(*(p++) == 0x00); // 66 (mim state id) as leb128
 			assert(*(p++) == 0xc1); assert(*(p++) == 0x00); // 65 (string length) as leb128
 			for (int i=0;i<4;++i) {
 				for (int ii=0;ii<16;++ii) {

@@ -42,7 +42,7 @@ struct pane {
 	float u0,v0,u1,v1;
 	union {
 		struct {
-			int mim_state_id;
+			int document_id;
 			int focus_id;
 			// TODO presentation shader id? (can be built-in, or user-defined?)
 		} code;
@@ -780,20 +780,17 @@ void gui_init(void)
 	// survive for too long
 	//assert((get_num_documents() > 0) && "the following code is probably not the best if/when this changes");
 	const int focus_id = make_focus_id();
-	const int mim_state_id = 1;
+	//const int mim_state_id = 1;
 	arrput(g.pane_arr, ((struct pane){
 		.type = CODE,
 		.u0=0, .v0=0,
 		.u1=1, .v1=1,
 		.code = {
 			.focus_id = focus_id,
-			//.document_id = get_document_by_index(0)->id,
-			.mim_state_id = mim_state_id,
+			.document_id = 1, // XXX?
 		},
 	}));
 	focus(focus_id);
-	mimf(mim_state_id, ":document %d\n", 1); // XXX ?
-	gig_spool(); // XXX?
 
 	struct font_config* fc = &g.font_config;
 	arrsetlen(fc->codepoint_range_pairs_arr, 0);
@@ -1120,7 +1117,6 @@ static void handle_editor_input(struct pane* pane)
 {
 	assert(pane->type == CODE);
 	const int my_artist_id = get_my_artist_id();
-	const int vid = pane->code.mim_state_id;
 
 	for (int i=0; i<arrlen(g.key_buffer_arr); ++i) {
 		const int key = g.key_buffer_arr[i];
@@ -1129,12 +1125,12 @@ static void handle_editor_input(struct pane* pane)
 		const int code = get_key_code(key);
 		if (down && mod==0) {
 			switch (code) {
-			case KEY_ARROW_LEFT:  mimf(vid, "\033h"); break;
-			case KEY_ARROW_RIGHT: mimf(vid, "\033l"); break;
-			case KEY_ARROW_UP:    mimf(vid, "\033k"); break;
-			case KEY_ARROW_DOWN:  mimf(vid, "\033j"); break;
-			case KEY_ENTER:       mimf(vid, "\n"); break;
-			case KEY_ESCAPE:      mimf(vid, "\033"); break;
+			case KEY_ARROW_LEFT:  mimf("h"); break;
+			case KEY_ARROW_RIGHT: mimf("l"); break;
+			case KEY_ARROW_UP:    mimf("k"); break;
+			case KEY_ARROW_DOWN:  mimf("j"); break;
+			//case KEY_ENTER:       mimf("\n"); break;
+			//case KEY_ESCAPE:      mimf("\033"); break;
 			default: break;
 			}
 		}
@@ -1142,7 +1138,7 @@ static void handle_editor_input(struct pane* pane)
 
 	const int num_chars = utf8_strlen(g.text_buffer_arr);
 	if (num_chars > 0) {
-		mimf(vid, "%s", g.text_buffer_arr);
+		mimf("%s", g.text_buffer_arr);
 	}
 }
 
@@ -1171,7 +1167,18 @@ static void draw_code_pane(struct pane* pane)
 	//set_color3f(.7, 2.7, .7);
 	set_color3f(.9,2.6,.9);
 
-	struct document* doc = get_document_by_id(get_own_cool_mim_state_by_id(pane->code.mim_state_id)->document_id);
+	const int my_artist_id = get_my_artist_id();
+
+	const int num_mim_states = get_num_mim_states();
+	for (int i=0; i<num_mim_states; ++i) {
+		struct mim_state* st = get_mim_state_by_index(i);
+		//asm("int $3");
+		//printf("%p\n", st);
+	}
+
+	#if 0
+	struct document* doc = get_document_by_id(get_mim_state_by_id(pane->code.mim_state_id)->document_id);
+
 	const int num_chars = arrlen(doc->fat_char_arr);
 	int line_index = 0;
 	for (int i=0; i<num_chars; ++i) {
@@ -1194,6 +1201,7 @@ static void draw_code_pane(struct pane* pane)
 		// wrong... text formatting is hard!
 		put_char(c);
 	}
+	#endif
 
 	g.cursor_x = g.cursor_x0;
 	g.cursor_y += 40;
