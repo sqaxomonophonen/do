@@ -1,5 +1,21 @@
 #ifndef UTF8_H
 
+#include <stdint.h>
+
+static inline int utf8_num_bytes_for_first_byte(uint8_t v)
+{
+	if ((v & 0x80) == 0x00) return 1; // U+0000   - U+007F   : 0xxxxxxx
+	if ((v & 0xe0) == 0xc0) return 2; // U+0080   - U+07FF   : 110xxxxx 10xxxxxx
+	if ((v & 0xf0) == 0xe0) return 3; // U+0800   - U+FFFF   : 1110xxxx 10xxxxxx 10xxxxxx
+	if ((v & 0xf8) == 0xf0) return 4; // U+010000 - U+10FFFF : 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx
+	return -1;
+}
+
+static inline int utf8_is_first(uint8_t v)
+{
+	return utf8_num_bytes_for_first_byte(v) > 0;
+}
+
 int utf8_strlen(const char* str);
 // returns the number of codepoints in the string (not graphemes)
 
@@ -243,6 +259,8 @@ static const int codepoint_lowercase_uppercase_pairs[] = {
 
 };
 
+// XXX this only counts the number of bytes that are valid first bytes in utf-8
+// sequences, so it potentially also counts invalid encodings as chars
 int utf8_strlen(const char* str)
 {
 	const char* p = str;
@@ -250,42 +268,42 @@ int utf8_strlen(const char* str)
 	for (;;) {
 		const unsigned char b = (unsigned char)*(p++);
 		if (b==0) break;
-		// 0xxxxxxx: 1-byte utf-8 char
-		// 11xxxxxx: first byte in 2+-byte utf-8 char
-		// 10xxxxxx: non-first byte in 2+-byte utf-8 char
-		if ((b&0x80)==0 || (b&0xc0)==0xc0) n++;
+		if (utf8_is_first(b)) ++n;
 	}
 	return n;
 }
 
 int utf8_decode(const char** c0z, int* n)
 {
-	const unsigned char** c0 = (const unsigned char**)c0z;
-	if (*n <= 0) return -1;
-	unsigned char c = **c0;
-	(*n)--;
-	(*c0)++;
-	if ((c & 0x80) == 0) return c & 0x7f;
-	int mask = 192;
-	int d;
-	for (d = 1; d <= 3; d++) {
-		int match = mask;
-		mask = (mask >> 1) | 0x80;
-		if ((c & mask) == match) {
-			int codepoint = (c & ~mask) << (6*d);
-			while (d > 0 && *n > 0) {
-				c = **c0;
-				if ((c & 192) != 128) return -1;
-				(*c0)++;
-				(*n)--;
-				d--;
-				codepoint += (c & 63) << (6*d);
-			}
-			return d == 0 ? codepoint : -1;
-		}
+	const uint8_t** c0 = (const uint8_t**)c0z;
+	const uint8_t* b = *c0;
+	if (*n < 1) return -1;
+	--(*n);
+	++(*c0);
+	const uint8_t b0 = b[0];
+	const int nb = utf8_num_bytes_for_first_byte(b0);
+	if (nb == -1) return -1;
+	if (nb == 1) return b0;
+	assert((2<=nb) && (nb<=4));
+	const int nb1 = nb-1;
+	if (*n < nb1) {
+		// not enough bytes; advance to end and return error
+		(*c0) += *n;
+		*n = 0;
+		return -1;
 	}
-	return -1;
+	(*n)  -= nb1;
+	(*c0) += nb1;
+	const int m6 = 0x3f;
+	switch (nb) {
+	case 2: return ((b[0] & 0x1f) << 6)  +  (b[1] & m6);
+	case 3: return ((b[0] & 0x0f) << 12) + ((b[1] & m6) << 6)  +  (b[2] & m6);
+	case 4: return ((b[0] & 0x07) << 18) + ((b[1] & m6) << 12) + ((b[2] & m6) << 6) + (b[3] & m6);
+	}
+	assert(!"unreachable");
 }
+
+// TODO do we also want a stateful decoder that you push bytes into?
 
 int utf8_convert_lowercase_codepoint_to_uppercase(int lowercase_codepoint)
 {
@@ -312,8 +330,19 @@ int utf8_convert_lowercase_codepoint_to_uppercase(int lowercase_codepoint)
 
 #if defined(UTF8_UNIT_TEST) && defined(UTF8_IMPLEMENTATION)
 
+#include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 #include <assert.h>
+
+static void expect_utf8_decode(const char** c0z, int* n, int expected_codepoint)
+{
+	const int actual_codepoint = utf8_decode(c0z, n);
+	if (actual_codepoint != expected_codepoint) {
+		fprintf(stderr, "expected codepoint %d, got %d\n", expected_codepoint, actual_codepoint);
+		abort();
+	}
+}
 
 void utf8_unit_test(void)
 {
@@ -336,34 +365,74 @@ void utf8_unit_test(void)
 		assert(utf8_convert_lowercase_codepoint_to_uppercase(1<<24) == 1<<24);
 	}
 
-	const char* dk3 = "æøå";
-
 	{
 		assert(utf8_strlen("abc") == 3);
-		assert(strlen(dk3) == 6);
-		assert(utf8_strlen(dk3) == 3);
+		assert(strlen("æøå") == 6);
+		assert(utf8_strlen("æøå") == 3);
 		assert(strlen("å") == 2);
 		assert(utf8_strlen("å") == 1);
 	}
 
 	{
-		const char* p = dk3;
-		int n = strlen(dk3);
-		assert(n == 6);
+		const char* p0 = "æøå!";
+		int n = strlen(p0);
+		assert(n == 7);
+		assert(utf8_strlen(p0) == 4);
 
-		assert(utf8_decode(&p, &n) == 230);
-		assert(p == (dk3+2));
-		assert(n == 4);
+		const char* p = p0;
 
-		assert(utf8_decode(&p, &n) == 248);
-		assert(p == (dk3+4));
-		assert(n == 2);
+		expect_utf8_decode(&p, &n, 230);
+		assert(p == (p0+2));
+		assert(n == 5);
 
-		assert(utf8_decode(&p, &n) == 229);
-		assert(p == (dk3+6));
+		expect_utf8_decode(&p, &n, 248);
+		assert(p == (p0+4));
+		assert(n == 3);
+
+		expect_utf8_decode(&p, &n, 229);
+		assert(p == (p0+6));
+		assert(n == 1);
+
+		expect_utf8_decode(&p, &n, '!');
+		assert(p == (p0+7));
 		assert(n == 0);
 
 		assert(utf8_decode(&p, &n) == -1);
+	}
+
+	{
+		const char* p0 = "\xe2\x84\xa2";
+		int n = strlen(p0);
+		assert(n == 3);
+		assert(utf8_strlen(p0) == 1);
+		const char* p = p0;
+		expect_utf8_decode(&p, &n, 8482);
+		assert(p == (p0+3));
+		assert(n == 0);
+	}
+
+	{
+		const char* p0 = "\xf0\x90\x80\x80";
+		int n = strlen(p0);
+		assert(n == 4);
+		assert(utf8_strlen(p0) == 1);
+		const char* p = p0;
+		expect_utf8_decode(&p, &n, 0x10000);
+		assert(p == (p0+4));
+		assert(n == 0);
+	}
+
+	{
+		// XXX should this test fail? it tests the highest possible codepoint for
+		// the encoding, 0x1fffff, but the highest legal codepoint is 0x10ffff?
+		const char* p0 = "\xf7\xbf\xbf\xbf";
+		int n = strlen(p0);
+		assert(n == 4);
+		assert(utf8_strlen(p0) == 1);
+		const char* p = p0;
+		expect_utf8_decode(&p, &n, 0x1fffff);
+		assert(p == (p0+4));
+		assert(n == 0);
 	}
 }
 #endif
