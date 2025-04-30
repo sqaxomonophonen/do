@@ -160,6 +160,7 @@ struct draw_list {
 		// TODO optimized quads or something?
 	};
 };
+int gui_get_num_draw_lists(void);
 struct draw_list* gui_get_draw_list(int index);
 
 

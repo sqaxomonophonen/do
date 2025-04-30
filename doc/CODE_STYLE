@@ -1,14 +1,14 @@
 
- - stb_ds.h dynamic arrays (using the arr*() macros) should have an `_arr`
-   suffix (I'm normally not fan of "type in variable name" conventions, but
-   confusing plain old pointers with dynamic arrays is bad)
-
- - Prefix "out/return arguments" with `out_`. These are pointer arguments used
-   to return multiple/optional values. It should typically be valid to pass
-   NULL if you don't want a particular return value.
+ - Prefix out/return argument names with `out_`. These are pointer arguments
+   used to return multiple/optional values. It should typically be valid to
+   pass NULL if you don't want a particular return value.
 
  - Don't use `typedef` unless a type must be easily replaceable or
    configurable. In particular don't typedef structs, enums, etc.
+
+ - For a function that "returns foo by id": if it crashes (e.g. by failed
+   assertion) when called with an id that doesn't exist, call it
+   get_foo_by_id(); if it instead returns a nil value, call it find_foo_by_id()
 
  - It's hard to be 100% consistent with function argument ordering, but the
    rough guideline is:

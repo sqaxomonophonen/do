@@ -12,11 +12,12 @@
 #include "stb_truetype.h"
 #include "stb_image_write.h"
 #include "stb_image_resize2.h"
-#include "stb_ds.h"
 #include "sep2dconv.h"
 #include "gig.h"
 #include "fonts.h"
 #include "utf8.h"
+#include "stb_ds.h"
+#include "da.h"
 
 #define ATLAS_MIN_SIZE_LOG2 (8)
 #define ATLAS_MAX_SIZE_LOG2 (13)
@@ -42,7 +43,7 @@ struct pane {
 	float u0,v0,u1,v1;
 	union {
 		struct {
-			int document_id;
+			int personal_mim_state_id;
 			int focus_id;
 			// TODO presentation shader id? (can be built-in, or user-defined?)
 		} code;
@@ -137,7 +138,7 @@ struct font_spec {
 };
 
 struct font_config {
-	int* codepoint_range_pairs_arr;
+	DA(int, codepoint_range_pairs);
 	float y_scalar_min, y_scalar_max;
 	int num_y_stretch_levels; // XXX maybe calculate automatically?
 	int num_blur_levels;
@@ -155,14 +156,12 @@ static float font_config_get_y_stretch_level_scale(struct font_config* fc, int i
 }
 
 static struct {
-	struct window* window_arr;
-	struct pane* pane_arr;
-
+	DA(struct window, windows);
+	DA(struct pane, panes);
 	struct font_config font_config;
-
 	stbrp_context rect_pack_context;
 	stbrp_node rect_pack_nodes[1 << ATLAS_MAX_SIZE_LOG2];
-	stbrp_rect* atlas_pack_rect_arr;
+	DA(stbrp_rect, atlas_pack_rects);
 
 	struct {
 		//int key;
@@ -170,9 +169,9 @@ static struct {
 		struct atlas_lut_info value;
 	}* atlas_lut;
 	int atlas_texture_id;
-	struct draw_list* draw_list_arr;
-	struct vertex* vertex_arr;
-	vertex_index* vertex_index_arr;
+	DA(struct draw_list, draw_lists);
+	DA(struct vertex, vertices);
+	DA(vertex_index, vertex_indices);
 	int64_t last_frame_time;
 	float fps;
 	int cursor_x0, cursor_x, cursor_y;
@@ -183,8 +182,8 @@ static struct {
 	struct window* current_window;
 	int focus_sequence;
 	int current_focus_id;
-	int* key_buffer_arr;
-	char* text_buffer_arr;
+	DA(int, key_buffer);
+	DA(char, text_buffer);
 	int is_dragging;
 } g;
 
@@ -218,19 +217,18 @@ static float get_current_y_stretch_scale(void)
 
 int get_num_windows(void)
 {
-	return arrlen(g.window_arr);
+	return daLen(g.windows);
 }
 
 struct window* get_window(int index)
 {
-	assert((0 <= index) && (index < get_num_windows()));
-	return &g.window_arr[index];
+	return daPtr(g.windows, index);
 }
 
 static int next_window_id=1;
 void open_window(void)
 {
-	arrput(g.window_arr, ((struct window){
+	daPut(g.windows, ((struct window){
 		.state = WINDOW_IS_NEW,
 		.id = next_window_id++,
 	}));
@@ -242,7 +240,7 @@ void remove_closed_windows(void)
 		struct window* w = get_window(i);
 		if (w->state == WINDOW_IS_CLOSING) {
 			assert((w->backend_extra == NULL) && "we expected the backend to have cleaned up by this point?");
-			arrdel(g.window_arr, i);
+			daDel(g.windows, i);
 			--i;
 		}
 	}
@@ -318,7 +316,7 @@ static int build_atlas(void)
 
 	struct font_config* fc = &g.font_config;
 
-	const int nc = arrlen(fc->codepoint_range_pairs_arr);
+	const int nc = daLen(fc->codepoint_range_pairs);
 	assert(nc%2==0);
 	const int num_codepoint_ranges = nc/2;
 	assert(num_codepoint_ranges > 0);
@@ -327,10 +325,10 @@ static int build_atlas(void)
 
 	// check that codepoint ranges are ordered and don't overlap
 	for (int i=0; i<num_codepoint_ranges; ++i) {
-		const int r0 = fc->codepoint_range_pairs_arr[i*2+0];
-		const int r1 = fc->codepoint_range_pairs_arr[i*2+1];
+		const int r0 = daGet(fc->codepoint_range_pairs, i*2+0);
+		const int r1 = daGet(fc->codepoint_range_pairs, i*2+1);
 		assert((r0<=r1) && "bad range");
-		assert((i==0 || r0>fc->codepoint_range_pairs_arr[i*2-1]) && "range not ordered");
+		assert((i==0 || r0>daGet(fc->codepoint_range_pairs, i*2-1)) && "range not ordered");
 	}
 
 	for (int i=0; i<fc->num_font_specs; ++i) {
@@ -344,9 +342,10 @@ static int build_atlas(void)
 	}
 	assert(g.atlas_lut == NULL);
 
-	arrsetlen(g.atlas_pack_rect_arr, 0);
-	static int* glyph_index_arr = NULL;
-	arrsetlen(glyph_index_arr, 0);
+	daReset(g.atlas_pack_rects);
+
+	static DA(int,glyph_indices) = {0};
+	daReset(glyph_indices);
 
 	for (int fsi=0; fsi<fc->num_font_specs; ++fsi) {
 		struct font_spec* spec = &fc->font_specs[fsi];
@@ -368,8 +367,9 @@ static int build_atlas(void)
 		assert((boxy_glyph_index > 0) && "found no 'boxy' glyph; maybe fix by adding more to `boxy_codepoints[]`?");
 
 		for (int ci=0; ci<num_codepoint_ranges; ++ci) {
-			for (int codepoint=fc->codepoint_range_pairs_arr[2*ci]; codepoint<=fc->codepoint_range_pairs_arr[1+2*ci]; ++codepoint) {
-
+			const int cp0 = daGet(fc->codepoint_range_pairs, 2*ci);
+			const int cp1 = daGet(fc->codepoint_range_pairs, 1+2*ci);
+			for (int codepoint=cp0; codepoint<=cp1; ++codepoint) {
 				int glyph_index = -1;
 				if (codepoint < SPECIAL_CODEPOINT0) {
 					glyph_index = stbtt_FindGlyphIndex(fontinfo, codepoint);
@@ -380,7 +380,7 @@ static int build_atlas(void)
 						if (advance > max_advance) max_advance = advance;
 					}
 				}
-				arrput(glyph_index_arr, glyph_index);
+				daPut(glyph_indices, glyph_index);
 
 				const int ny = spec->uses_y_stretch ? fc->num_y_stretch_levels : 1;
 				for (int ysi=0; ysi<ny; ++ysi) {
@@ -425,7 +425,7 @@ static int build_atlas(void)
 						.codepoint = codepoint,
 					};
 					hmput(g.atlas_lut, key, ((struct atlas_lut_info){
-						.rect_index0 = !has_pixels ? -1 : (int)arrlen(g.atlas_pack_rect_arr),
+						.rect_index0 = !has_pixels ? -1 : daLen(g.atlas_pack_rects),
 						.rect = make_rect(x0,y0,w0,h0),
 					}));
 
@@ -434,7 +434,7 @@ static int build_atlas(void)
 					for (int blur_index=0; blur_index<fc->num_blur_levels; ++blur_index) {
 						const struct blur_level* bl = &fc->blur_levels[blur_index];
 						const struct blur_level_metrics m = get_blur_level_metrics(bl, w0, h0);
-						arrput(g.atlas_pack_rect_arr, ((stbrp_rect){
+						daPut(g.atlas_pack_rects, ((stbrp_rect){
 							.w=m.width,
 							.h=m.height,
 						}));
@@ -459,8 +459,7 @@ static int build_atlas(void)
 
 		stbrp_init_target(&g.rect_pack_context, w, h, g.rect_pack_nodes, w);
 
-		const int n = arrlen(g.atlas_pack_rect_arr);
-		if (stbrp_pack_rects(&g.rect_pack_context, g.atlas_pack_rect_arr, n)) {
+		if (stbrp_pack_rects(&g.rect_pack_context, daPtr0(g.atlas_pack_rects), daLen(g.atlas_pack_rects))) {
 			break;
 		}
 
@@ -476,15 +475,18 @@ static int build_atlas(void)
 	const int atlas_height = 1 << atlas_height_log2;
 	uint8_t* atlas_bitmap = calloc(atlas_width*atlas_height,1);
 
-	int* pgi = glyph_index_arr;
+	int gi=0;
 	for (int fsi=0; fsi<fc->num_font_specs; ++fsi) {
 		struct font_spec* spec = &fc->font_specs[fsi];
 		struct font* font = get_font(spec->font_index);
 		stbtt_fontinfo* fontinfo = &font->fontinfo;
 		for (int ci=0; ci<num_codepoint_ranges; ++ci) {
-			for (int codepoint=fc->codepoint_range_pairs_arr[2*ci]; codepoint<=fc->codepoint_range_pairs_arr[1+2*ci]; ++codepoint) {
+			const int cp0 = daGet(fc->codepoint_range_pairs, 2*ci);
+			const int cp1 = daGet(fc->codepoint_range_pairs, 1+2*ci);
+			for (int codepoint=cp0; codepoint<=cp1; ++codepoint) {
 				const int ny = spec->uses_y_stretch ? fc->num_y_stretch_levels : 1;
-				const int glyph_index = *(pgi++);
+				const int glyph_index = daGet(glyph_indices, gi);
+				++gi;
 				if (glyph_index == 0) continue;
 
 				for (int ysi=0; ysi<ny; ++ysi) {
@@ -497,10 +499,11 @@ static int build_atlas(void)
 					const struct atlas_lut_info info = hmget(g.atlas_lut, key);
 					if (info.rect_index0 == -1) continue;
 					assert(info.rect_index0 >= 0);
-					const stbrp_rect r = g.atlas_pack_rect_arr[info.rect_index0];
+					const stbrp_rect r = daGet(g.atlas_pack_rects, info.rect_index0);
 					uint8_t* p = &atlas_bitmap[r.x+(r.y << atlas_width_log2)];
 					const int stride = atlas_width;
 					if (codepoint < SPECIAL_CODEPOINT0) {
+						assert(glyph_index >= 0);
 						stbtt_MakeGlyphBitmap(
 							fontinfo,
 							p,
@@ -547,12 +550,15 @@ static int build_atlas(void)
 		}
 	}
 
-	static struct resize* resize_arr = NULL;
-	arrsetlen(resize_arr, 0);
+	static DA(struct resize, resizes);
+	daReset(resizes);
+
 	for (int fsi=0; fsi<fc->num_font_specs; ++fsi) {
 		struct font_spec* spec = &fc->font_specs[fsi];
 		for (int ci=0; ci<num_codepoint_ranges; ++ci) {
-			for (int codepoint=fc->codepoint_range_pairs_arr[2*ci]; codepoint<=fc->codepoint_range_pairs_arr[1+2*ci]; ++codepoint) {
+			const int cp0 = daGet(fc->codepoint_range_pairs, 2*ci);
+			const int cp1 = daGet(fc->codepoint_range_pairs, 1+2*ci);
+			for (int codepoint=cp0; codepoint<=cp1; ++codepoint) {
 				struct atlas_lut_key key0 = {
 					.font_spec_index = fsi,
 					.y_stretch_index = 0,
@@ -571,7 +577,7 @@ static int build_atlas(void)
 					};
 					const struct atlas_lut_info info = ysi==0 ? info0 : hmget(g.atlas_lut, key);
 					assert(info.rect_index0 >= 0);
-					const stbrp_rect r0 = g.atlas_pack_rect_arr[info.rect_index0];
+					const stbrp_rect r0 = daGet(g.atlas_pack_rects, info.rect_index0);
 
 					const int src_w=info.rect.w;
 					const int src_h=info.rect.h;
@@ -581,7 +587,7 @@ static int build_atlas(void)
 
 					for (int blur_index=1; blur_index<fc->num_blur_levels; ++blur_index) {
 						const struct blur_level* bl = &fc->blur_levels[blur_index];
-						const stbrp_rect rn = g.atlas_pack_rect_arr[info.rect_index0+blur_index];
+						const stbrp_rect rn = daGet(g.atlas_pack_rects, info.rect_index0+blur_index);
 
 						const struct blur_level_metrics m = get_blur_level_metrics(bl, src_w, src_h);
 
@@ -590,7 +596,7 @@ static int build_atlas(void)
 						const int dst_x=rn.x + m.blurpx;
 						const int dst_y=rn.y + m.blurpx;
 
-						arrput(resize_arr, ((struct resize){
+						daPut(resizes, ((struct resize){
 							.src = make_rect(src_x, src_y, src_w, src_h),
 							.dst = make_rect(dst_x, dst_y, dst_w, dst_h),
 						}));
@@ -600,13 +606,13 @@ static int build_atlas(void)
 		}
 	}
 
-	const int num_resizes = arrlen(resize_arr);
-	qsort(resize_arr, num_resizes, sizeof(resize_arr[0]), resize_compar);
+	const int num_resizes = daLen(resizes);
+	qsort(daPtr0(resizes), num_resizes, daItemSize(resizes), resize_compar);
 	STBIR_RESIZE re={0};
 	int num_samplers=0;
 	for (int i=0; i<num_resizes; ++i) {
-		struct resize rz = resize_arr[i];
-		if (i==0 || resize_dim_compar(&resize_arr[i-1], &rz) != 0) {
+		struct resize rz = daGet(resizes, i);
+		if (i==0 || resize_dim_compar(daPtr(resizes, i-1), &rz) != 0) {
 			assert(rz.src.w>0 && rz.src.h>0 && rz.dst.w>0 && rz.dst.h>0);
 			stbir_free_samplers(&re); // safe when zero-initialized
 			stbir_resize_init(
@@ -632,20 +638,20 @@ static int build_atlas(void)
 	}
 	stbir_free_samplers(&re);
 
-	static float* kernel_arr = NULL;
+	static DA(float, coefficients);
 	for (int blur_index=1; blur_index<fc->num_blur_levels; ++blur_index) {
 		const struct blur_level* bl = &fc->blur_levels[blur_index];
 		const int blurpx = get_blurpx(bl);
 		const int kernel_size = 1+2*blurpx;
-		arrsetlen(kernel_arr, kernel_size);
+		daSetLen(coefficients, kernel_size);
 		for (int i=0; i<=blurpx; ++i) {
 			const double x = ((double)(-blurpx+i)/(double)blurpx)*3.0;
 			//printf("y[%d]=%f\n", i, x);
 			const float y = (float)gaussian(bl->variance, x) * bl->kernel_scalar;
 			assert((0 <= i) && (i < kernel_size));
-			kernel_arr[i] = y;
+			daSet(coefficients, i, y);
 			assert((0 <= (kernel_size-i-1)) && ((kernel_size-i-1) < kernel_size));
-			kernel_arr[kernel_size-i-1] = y;
+			daSet(coefficients, kernel_size-i-1, y);
 		}
 
 		#if 0
@@ -660,13 +666,15 @@ static int build_atlas(void)
 
 		struct sep2dconv_kernel kernel = {
 			.radius = blurpx,
-			.coefficients = kernel_arr,
+			.coefficients = daPtr0(coefficients),
 		};
 
 		for (int fsi=0; fsi<fc->num_font_specs; ++fsi) {
 			struct font_spec* spec = &fc->font_specs[fsi];
 			for (int ci=0; ci<num_codepoint_ranges; ++ci) {
-				for (int codepoint=fc->codepoint_range_pairs_arr[2*ci]; codepoint<=fc->codepoint_range_pairs_arr[1+2*ci]; ++codepoint) {
+				const int cp0 = daGet(fc->codepoint_range_pairs, 2*ci);
+				const int cp1 = daGet(fc->codepoint_range_pairs, 1+2*ci);
+				for (int codepoint=cp0; codepoint<=cp1; ++codepoint) {
 					struct atlas_lut_key key0 = {
 						.font_spec_index = fsi,
 						.y_stretch_index = 0,
@@ -683,7 +691,7 @@ static int build_atlas(void)
 							.codepoint = codepoint,
 						};
 						const struct atlas_lut_info info = hmget(g.atlas_lut, key);
-						const stbrp_rect rn = g.atlas_pack_rect_arr[info.rect_index0+blur_index];
+						const stbrp_rect rn = daGet(g.atlas_pack_rects, info.rect_index0+blur_index);
 
 						sep2dconv_execute(
 							&kernel,
@@ -701,7 +709,7 @@ static int build_atlas(void)
 
 	printf("atlas %d×%d, %d rects, %d samplers, %d resizes, built in %.5fs\n",
 		atlas_width, atlas_height,
-		(int)arrlen(g.atlas_pack_rect_arr),
+		daLen(g.atlas_pack_rects),
 		num_samplers, num_resizes,
 		(double)dt*1e-9);
 
@@ -758,8 +766,8 @@ static struct font_spec default_font_specs[] = {
 
 static void fc_add_codepoint_range(struct font_config* fc, int first, int last)
 {
-	arrput(fc->codepoint_range_pairs_arr, first);
-	arrput(fc->codepoint_range_pairs_arr, last);
+	daPut(fc->codepoint_range_pairs, first);
+	daPut(fc->codepoint_range_pairs, last);
 }
 
 static void fc_add_latin1(struct font_config* fc)
@@ -778,22 +786,21 @@ void gui_init(void)
 
 	// XXX a lot of this code is bad "getting started code" that shouldn't
 	// survive for too long
-	//assert((get_num_documents() > 0) && "the following code is probably not the best if/when this changes");
+	assert((get_num_documents() > 0) && "the following code is probably not the best if/when this changes");
 	const int focus_id = make_focus_id();
-	//const int mim_state_id = 1;
-	arrput(g.pane_arr, ((struct pane){
+	daPut(g.panes, ((struct pane){
 		.type = CODE,
 		.u0=0, .v0=0,
 		.u1=1, .v1=1,
 		.code = {
 			.focus_id = focus_id,
-			.document_id = 1, // XXX?
+			.personal_mim_state_id = 1,
 		},
 	}));
 	focus(focus_id);
 
 	struct font_config* fc = &g.font_config;
-	arrsetlen(fc->codepoint_range_pairs_arr, 0);
+	daReset(fc->codepoint_range_pairs);
 	fc_add_latin1(fc);
 	fc_add_special(fc);
 	fc->y_scalar_min = default_y_scalar_min;
@@ -827,18 +834,18 @@ void gui_setup_gpu_resources(void)
 
 void gui_on_key(int keycode)
 {
-	arrput(g.key_buffer_arr, keycode);
+	daPut(g.key_buffer, keycode);
 }
 
 void gui_on_text(const char* text)
 {
 	const size_t n = strlen(text);
-	assert((arrlen(g.text_buffer_arr) > 0) && "empty array; length should always be 1 or longer");
-	assert((0 == arrpop(g.text_buffer_arr)) && "expected to pop cstr nul-terminator");
-	char* p = arraddnptr(g.text_buffer_arr, n);
+	assert((daLen(g.text_buffer) > 0) && "empty array; length should always be 1 or longer");
+	assert((0 == daPop(g.text_buffer)) && "expected to pop cstr nul-terminator");
+	char* p = daAddNPtr(g.text_buffer, n);
 	memcpy(p, text, n);
-	arrput(g.text_buffer_arr, 0);
-	assert(arrlen(g.text_buffer_arr) == (1+strlen(g.text_buffer_arr)));
+	daPut(g.text_buffer, 0);
+	assert(daLen(g.text_buffer) == (1+strlen(daPtr0(g.text_buffer))));
 }
 
 static void set_blend_mode(enum blend_mode blend_mode)
@@ -871,9 +878,9 @@ static struct draw_list* continue_draw_list(int num_vertices, int num_indices)
 	assert((max_vert>0) && "unhandled config?");
 	assert(num_vertices <= max_vert);
 
-	const int n = arrlen(g.draw_list_arr);
+	const int n = daLen(g.draw_lists);
 	if (n==0) return NULL;
-	struct draw_list* list = &g.draw_list_arr[n-1];
+	struct draw_list* list = daPtr(g.draw_lists, n-1);
 
 	if (!render_mode_same(&g.render_mode, &list->render_mode)) return NULL;
 
@@ -891,15 +898,15 @@ static void alloc_mesh(int num_vertices, int num_indices, struct vertex** out_ve
 {
 	struct draw_list* list = continue_draw_list(num_vertices, num_indices);
 	if (list == NULL) {
-		list = arraddnptr(g.draw_list_arr, 1);
+		list = daAddNPtr(g.draw_lists, 1);
 		memcpy(&list->render_mode, &g.render_mode, sizeof g.render_mode);
-		list->mesh._vertices_offset = arrlen(g.vertex_arr);
+		list->mesh._vertices_offset = daLen(g.vertices);
 		list->mesh.num_vertices = 0;
-		list->mesh._indices_offset = arrlen(g.vertex_index_arr);
+		list->mesh._indices_offset = daLen(g.vertex_indices);
 		list->mesh.num_indices = 0;
 	}
-	*out_vertices = arraddnptr(g.vertex_arr, num_vertices);
-	*out_indices = arraddnptr(g.vertex_index_arr, num_indices);
+	*out_vertices = daAddNPtr(g.vertices, num_vertices);
+	*out_indices  = daAddNPtr(g.vertex_indices, num_indices);
 	const int i0=list->mesh.num_vertices;
 	for (int i=0; i<num_indices; ++i) (*out_indices)[i] = i0;
 	list->mesh.num_vertices += num_vertices;
@@ -1037,7 +1044,7 @@ static void put_char(int codepoint)
 
 		for (int i=0; i<fc->num_blur_levels; ++i) {
 			const struct blur_level* b = &fc->blur_levels[i];
-			const stbrp_rect rect = g.atlas_pack_rect_arr[i+info.rect_index0];
+			const stbrp_rect rect = daGet(g.atlas_pack_rects, i+info.rect_index0);
 			const float r = b->radius;
 			push_mesh_quad(
 				g.cursor_x + ((float)info.rect.x) - r, // XXX should have `- ascent` too, but looks wrong?
@@ -1108,27 +1115,27 @@ void gui_begin_frame(void)
 {
 	gig_spool();
 	update_fps();
-	arrsetlen(g.key_buffer_arr, 0);
-	arrsetlen(g.text_buffer_arr, 0);
-	arrput(g.text_buffer_arr, 0); // terminate cstr
+	daReset(g.key_buffer);
+	daReset(g.text_buffer);
+	daPut(g.text_buffer, 0); // terminate cstr
 }
 
 static void handle_editor_input(struct pane* pane)
 {
 	assert(pane->type == CODE);
-	const int my_artist_id = get_my_artist_id();
-
-	for (int i=0; i<arrlen(g.key_buffer_arr); ++i) {
-		const int key = g.key_buffer_arr[i];
+	const int pmsid = pane->code.personal_mim_state_id;
+	for (int i=0; i<daLen(g.key_buffer); ++i) {
+		const int key = daGet(g.key_buffer, i);
 		const int down = get_key_down(key);
 		const int mod = get_key_mod(key);
 		const int code = get_key_code(key);
 		if (down && mod==0) {
 			switch (code) {
-			case KEY_ARROW_LEFT:  mimf("h"); break;
-			case KEY_ARROW_RIGHT: mimf("l"); break;
-			case KEY_ARROW_UP:    mimf("k"); break;
-			case KEY_ARROW_DOWN:  mimf("j"); break;
+			// XXX
+			case KEY_ARROW_LEFT:  mimf(pmsid, "h"); break;
+			case KEY_ARROW_RIGHT: mimf(pmsid, "l"); break;
+			case KEY_ARROW_UP:    mimf(pmsid, "k"); break;
+			case KEY_ARROW_DOWN:  mimf(pmsid, "j"); break;
 			//case KEY_ENTER:       mimf("\n"); break;
 			//case KEY_ESCAPE:      mimf("\033"); break;
 			default: break;
@@ -1136,9 +1143,10 @@ static void handle_editor_input(struct pane* pane)
 		}
 	}
 
-	const int num_chars = utf8_strlen(g.text_buffer_arr);
+	const int num_chars = utf8_strlen(daPtr0(g.text_buffer));
 	if (num_chars > 0) {
-		mimf("%s", g.text_buffer_arr);
+		// XXX
+		mimf(pmsid, "%s", daPtr0(g.text_buffer));
 	}
 }
 
@@ -1167,22 +1175,13 @@ static void draw_code_pane(struct pane* pane)
 	//set_color3f(.7, 2.7, .7);
 	set_color3f(.9,2.6,.9);
 
-	const int my_artist_id = get_my_artist_id();
+	struct mim_state* ms = get_cool_mim_state_by_personal_id(pane->code.personal_mim_state_id);
+	struct document* doc = get_document_by_id(ms->document_id);
 
-	const int num_mim_states = get_num_mim_states();
-	for (int i=0; i<num_mim_states; ++i) {
-		struct mim_state* st = get_mim_state_by_index(i);
-		//asm("int $3");
-		//printf("%p\n", st);
-	}
-
-	#if 0
-	struct document* doc = get_document_by_id(get_mim_state_by_id(pane->code.mim_state_id)->document_id);
-
-	const int num_chars = arrlen(doc->fat_char_arr);
+	const int num_chars = daLen(doc->fat_chars);
 	int line_index = 0;
 	for (int i=0; i<num_chars; ++i) {
-		struct fat_char* fc = &doc->fat_char_arr[i];
+		struct fat_char* fc = daPtr(doc->fat_chars, i);
 		const unsigned c = fc->codepoint;
 		if (c == '\n') {
 			float /*ascent0,*/ descent0,   line_gap0;
@@ -1201,7 +1200,6 @@ static void draw_code_pane(struct pane* pane)
 		// wrong... text formatting is hard!
 		put_char(c);
 	}
-	#endif
 
 	g.cursor_x = g.cursor_x0;
 	g.cursor_y += 40;
@@ -1229,8 +1227,8 @@ static void gui_draw1(void)
 
 	// TODO render video synth background if configured?
 
-	for (int i=0; i<arrlen(g.pane_arr); ++i) {
-		struct pane* pane = &g.pane_arr[i];
+	for (int i=0; i<daLen(g.panes); ++i) {
+		struct pane* pane = daPtr(g.panes, i);
 
 		struct rect pr = get_pane_rect(pane);
 		if (pr.w<=0 || pr.h<=0) continue;
@@ -1258,9 +1256,9 @@ void gui_draw(struct window* window)
 	g.current_window = window;
 
 	// reset draw lists
-	arrsetlen(g.draw_list_arr, 0);
-	arrsetlen(g.vertex_arr, 0);
-	arrsetlen(g.vertex_index_arr, 0);
+	daReset(g.draw_lists);
+	daReset(g.vertices);
+	daReset(g.vertex_indices);
 
 	memset(&g.render_mode, 0, sizeof g.render_mode);
 
@@ -1274,12 +1272,13 @@ void gui_draw(struct window* window)
 	// pointer and corrupt any number of draw_lists. this "fixup" happens last,
 	// when it it's safe to point into the dynamic array which won't be written
 	// to while it's being rendered.
-	for (int i=0; i<arrlen(g.draw_list_arr); ++i) {
-		struct draw_list* list = &g.draw_list_arr[i];
+	const int n_lists = daLen(g.draw_lists);
+	for (int i=0; i<n_lists; ++i) {
+		struct draw_list* list = daPtr(g.draw_lists, i);
 		switch (list->render_mode.type) {
 		case MESH_TRIANGLES: {
-			list->mesh.vertices = g.vertex_arr       + list->mesh._vertices_offset;
-			list->mesh.indices  = g.vertex_index_arr + list->mesh._indices_offset;
+			list->mesh.vertices = daPtr(g.vertices         , list->mesh._vertices_offset);
+			list->mesh.indices  = daPtr(g.vertex_indices   , list->mesh._indices_offset );
 		}	break;
 		default: assert(!"unhandled draw list type");
 		}
@@ -1288,11 +1287,14 @@ void gui_draw(struct window* window)
 	g.current_window = NULL;
 }
 
+int gui_get_num_draw_lists(void)
+{
+	return daLen(g.draw_lists);
+}
+
 struct draw_list* gui_get_draw_list(int index)
 {
-	assert(index >= 0);
-	if (index >= arrlen(g.draw_list_arr)) return NULL;
-	return &g.draw_list_arr[index];
+	return daPtr(g.draw_lists, index);
 }
 
 struct draw_char {

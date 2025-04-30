@@ -1,7 +1,7 @@
-#include "stb_ds.h"
 #include "util.h"
 #include "main.h"
 #include "gui.h"
+#include "da.h"
 
 static void _glcheck(const char* file, const int line, const char* body)
 {
@@ -29,8 +29,8 @@ struct texture {
 static struct {
 	int frame_x0, frame_y0, frame_width, frame_height;
 
-	struct texture* texture_arr;
-	int* texture_freelist_arr;
+	DA(struct texture, textures);
+	DA(int, texture_freelist);
 	size_t vertex_buffer_size;
 	GLuint vertex_buffer;
 	size_t element_buffer_size;
@@ -48,16 +48,16 @@ static struct {
 
 static int alloc_texture(void)
 {
-	if (arrlen(gg.texture_freelist_arr) > 0) return arrpop(gg.texture_freelist_arr);
-	const int id = arrlen(gg.texture_arr);
-	arrsetlen(gg.texture_arr,id+1);
+	if (daLen(gg.texture_freelist) > 0) return daPop(gg.texture_freelist);
+	const int id = daLen(gg.textures);
+	daSetLen(gg.textures, id+1);
 	return id;
 }
 
 int create_texture(int type, int width, int height)
 {
 	const int id = alloc_texture();
-	struct texture* tex = &gg.texture_arr[id];
+	struct texture* tex = daPtr(gg.textures, id);
 	memset(tex, 0, sizeof *tex);
 	tex->type = type;
 	tex->width = width;
@@ -112,8 +112,7 @@ int create_texture(int type, int width, int height)
 
 static struct texture* get_texture(int texture)
 {
-	assert((0 <= texture) && (texture < arrlen(gg.texture_arr)));
-	return &gg.texture_arr[texture];
+	return daPtr(gg.textures, texture);
 }
 
 void get_texture_dim(int texture, int* out_width, int* out_height)
@@ -127,7 +126,7 @@ void destroy_texture(int texture)
 {
 	struct texture* t = get_texture(texture);
 	GLCALL(glDeleteTextures(1, &t->gl_texture));
-	arrput(gg.texture_freelist_arr, texture);
+	daPut(gg.texture_freelist, texture);
 }
 
 void update_texture(int texture, int y0, int width, int height, void* data)
@@ -302,9 +301,9 @@ static void gl_init(void)
 static void gl_render_gui_draw_lists(void)
 {
 
-	for (int i=0;;++i) {
+	const int n = gui_get_num_draw_lists();
+	for (int i=0; i<n; ++i) {
 		struct draw_list* list = gui_get_draw_list(i);
-		if (list == NULL) break;
 
 		switch (list->render_mode.blend_mode) {
 		case ADDITIVE:

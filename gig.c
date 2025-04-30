@@ -1,10 +1,11 @@
-#include <assert.h>
 #include <limits.h>
 #include <stdatomic.h>
 #include <stdalign.h>
+#include <stdlib.h>
+#include <assert.h>
+#include <string.h>
 #include <stdio.h> // XXX
 
-#include "stb_ds.h"
 #include "stb_sprintf.h"
 
 #include "gig.h"
@@ -12,6 +13,7 @@
 #include "leb128.h"
 #include "utf8.h"
 #include "main.h"
+#include "da.h"
 
 struct ringbuf {
 	uint8_t* data;
@@ -153,6 +155,7 @@ static void ringbuf_acknowledge(struct ringbuf* r)
 	atomic_store(&r->acknowledge_cursor, r->read_cursor);
 }
 
+#if 0
 static void document_copy(struct document* dst, struct document* src)
 {
 	const struct document copy = *dst;
@@ -167,6 +170,7 @@ static void document_copy(struct document* dst, struct document* src)
 	ARRCOPY(dst->fat_char_arr, src->fat_char_arr);
 	ARRCOPY(dst->mim_state_arr, src->mim_state_arr);
 }
+#endif
 
 struct codec {
 	struct ringbuf* ringbuf;
@@ -179,18 +183,17 @@ struct codec {
 
 struct snapshot {
 	size_t journal_cursor;
-	struct document* document_arr;
+	DA(struct document, documents);
 };
 
 static int snapshot_get_num_documents(struct snapshot* ss)
 {
-	return arrlen(ss->document_arr);
+	return daLen(ss->documents);
 }
 
 struct document* snapshot_get_document_by_index(struct snapshot* ss, int index)
 {
-	assert((0 <= index) && (index < get_num_documents()));
-	return &ss->document_arr[index];
+	return daPtr(ss->documents, index);
 }
 
 struct document* snapshot_find_document_by_id(struct snapshot* ss, int id)
@@ -202,6 +205,8 @@ struct document* snapshot_find_document_by_id(struct snapshot* ss, int id)
 	}
 	return NULL;
 }
+
+struct mim_state_da DASTRUCTBODY(struct mim_state);
 
 static struct {
 	struct ringbuf command_ringbuf;
@@ -218,7 +223,7 @@ static struct {
 	int ed_is_begun;
 	int my_artist_id;
 
-	struct mim_state vs1;
+	struct mim_state_da hot_mim_states, my_cool_mim_states;
 } g;
 
 int get_num_documents(void)
@@ -456,11 +461,13 @@ static void codec_location_ptr(struct codec* c, struct location* l)
 	CODEC_VARINT(c, l->column);
 }
 
+#if 0
 static void codec_range_ptr(struct codec* c, struct range* r)
 {
 	codec_location_ptr(c, &r->from);
 	codec_location_ptr(c, &r->to);
 }
+#endif
 
 static void snapshot_spool(struct snapshot* ss, struct ringbuf* journal)
 {
@@ -479,21 +486,25 @@ void gig_init(void)
 {
 	ringbuf_init(&g.command_ringbuf, 16, STB_SPRINTF_MIN);
 
+	// XXX "getting started"-stuff here:
 	g.my_artist_id = 1;
-	// XXX this is probably correct if we're host of the venue, but otherwise
-	// we need an assigned artist id
-
-	struct document* doc = arraddnptr(g.outside.document_arr, 1);
+	const int doc_id = 1;
+	struct document* doc = daAddNPtr(g.outside.documents, 1);
 	memset(doc, 0, sizeof *doc);
-	doc->id = 1;
+	doc->id = doc_id;
+	struct mim_state ms1 = {
+		.artist_id = get_my_artist_id(),
+		.personal_id = 1,
+		.document_id = doc_id,
+	};
 
-	g.vs1.mim_state_id = 1;
-	g.vs1.artist_id = g.my_artist_id;
+	daPut(g.hot_mim_states, ms1);
+	daPut(g.my_cool_mim_states, ms1);
 
-
-
+	#if 0
 	gig_thread_tick();
 	gig_spool();
+	#endif
 }
 
 int get_my_artist_id(void)
@@ -501,20 +512,42 @@ int get_my_artist_id(void)
 	return g.my_artist_id;
 }
 
-struct mim_state* get_mim_state_by_id(int id)
-{
-	assert((id==1) && "oh no"); // XXX
-	return &g.vs1;
-}
-
 int get_num_mim_states(void)
 {
-	return 1; // XXX
+	return daLen(g.hot_mim_states);
+}
+
+static struct mim_state* find_mim_state_by_id(struct mim_state_da* da, int id)
+{
+	const int n = daLen(*da);
+	for (int i=0; i<n; ++i) {
+		struct mim_state* ms = daPtr(*da, i);
+		if (ms->personal_id == id) return ms;
+	}
+	return NULL;
+}
+
+struct mim_state* check_my_mim_state(struct mim_state* ms, int id)
+{
+	assert(ms != NULL);
+	assert(ms->artist_id == get_my_artist_id());
+	assert(ms->personal_id == id);
+	return ms;
+}
+
+struct mim_state* get_cool_mim_state_by_personal_id(int id)
+{
+	return check_my_mim_state(find_mim_state_by_id(&g.my_cool_mim_states, id), id);
+}
+
+struct mim_state* get_hot_mim_state_by_personal_id(int id)
+{
+	return check_my_mim_state(find_mim_state_by_id(&g.hot_mim_states, id), id);
 }
 
 struct mim_state* get_mim_state_by_index(int index)
 {
-	return get_mim_state_by_id(1); // XXX
+	return daPtr(g.hot_mim_states, index);
 }
 
 #if 0
@@ -665,7 +698,7 @@ static void mimf_raw(/*int mim_state_id, */const char* fmt, ...)
 	va_end(va);
 }
 
-void mimf(/*int mim_state_id,*/const char* fmt, ...)
+void mimf(int personal_mim_state_id, const char* fmt, ...)
 {
 	struct ringbuf* rb = &g.command_ringbuf;
 	struct ringbuf rbr;

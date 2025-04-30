@@ -19,11 +19,5 @@
 
 static inline int is_numeric(char ch) { return '0' <= ch && ch <= '9'; }
 
-
-#define ARRCOPY(DST,SRC) \
-	assert((sizeof(*(SRC))==sizeof(*(DST))) && "size mismatch"); \
-	arrsetlen(DST, arrlen(SRC)); \
-	memcpy(DST, SRC, arrlen(DST)*sizeof(*(DST)));
-
 #define UTIL_H
 #endif

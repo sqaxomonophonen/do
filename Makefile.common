@@ -5,14 +5,16 @@ CFLAGS+=-O0 -g
 #CFLAGS+=-Os
 CFLAGS+=-Wall
 #CFLAGS+=-Wall
-#CFLAGS+=-Wno-unused # can be annoying sometimes
+
+# you can temporarily disable warnings to remove unhelpful clutter:
+#CFLAGS+=-Wno-unused
 
 all: $(ARTIFACT)
 
 OBJS+=stb_truetype.o stb_rect_pack.o stb_image_resize2.o stb_image_write.o # stb deps
 OBJS+=stb_ds.o stb_sprintf.o # more stb deps
 OBJS+=font0.o fonts.o sep2dconv.o gui.o # gui deps
-OBJS+=utf8.o gig.o selftest.o # common deps
+OBJS+=utf8.o gig.o selftest.o da.o # common deps
 
 LDFLAGS+=-lm
 

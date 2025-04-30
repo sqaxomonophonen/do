@@ -3,15 +3,18 @@
 #include <stdint.h>
 
 #include "util.h"
+#include "da.h"
 
 struct location {
 	int line;
 	int column;
 };
 
+#if 0
 struct range {
 	struct location from, to;
 };
+#endif
 
 struct fat_char {
 	unsigned codepoint;
@@ -23,17 +26,28 @@ struct fat_char {
 	unsigned defer  :1;
 };
 
-struct caret {
+struct anchor {
 	int id;
-	int document_id;
-	struct range range; // not available if "cool"
+	struct location loc;
+};
+
+struct caret {
+	int anchor_id;
+};
+
+struct selection {
+	int anchor0_id;
+	int anchor1_id;
 };
 
 struct mim_state {
-	int mim_state_id;
 	int artist_id;
-	struct caret* cool_caret_arr;
-	struct caret* hot_caret_arr;
+	int personal_id;
+	// [artist_id,personal_id] is the "unique key"
+	int document_id;
+	DA(struct anchor, anchors);
+	DA(struct caret, carets);
+	DA(struct selection, selections);
 };
 
 enum document_type {
@@ -72,8 +86,7 @@ struct document {
 	int id;
 	//int version;
 	enum document_type type;
-	struct fat_char* fat_char_arr;
-	struct mim_state* mim_state_arr;
+	DA(struct fat_char, fat_chars);
 	// beware document_copy() when adding new arrays
 };
 
@@ -84,15 +97,13 @@ void gig_selftest(void);
 
 void mim_set_latency(double mu, double sigma);
 
-//FORMATPRINTF2
-//void mimf(int mim_state_id, const char* fmt, ...);
-FORMATPRINTF1
-void mimf(const char* fmt, ...);
+FORMATPRINTF2
+void mimf(int personal_mim_state_id, const char* fmt, ...);
 
 int get_num_mim_states(void);
+struct mim_state* get_cool_mim_state_by_personal_id(int id);
+struct mim_state* get_hot_mim_state_by_personal_id(int id);
 struct mim_state* get_mim_state_by_index(int index);
-struct mim_state* get_mim_state_by_id(int id);
-
 
 int get_num_documents(void);
 struct document* get_document_by_index(int);
