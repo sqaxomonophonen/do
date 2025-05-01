@@ -13,10 +13,12 @@
 
 #include "util.h"
 
+#define LEB128_MAX_LENGTH (10)
+
 #define LEB128_DEFINE_FOR_TYPE(TYPE,UTYPE,NAME) \
 \
 ALWAYS_INLINE \
-static inline void leb128_encode_##NAME(void(*write_fn)(uint8_t,void*), TYPE value, void* userdata) \
+static inline void leb128_encode_##NAME(void(*write_fn)(uint8_t,void*), void* userdata, TYPE value) \
 { \
 	int more; \
 	if (value >= 0) { \
@@ -152,9 +154,9 @@ static void _test_l128u(int64_t value, int num_bytes, ...)
 		_g_l128u.cursor = 0;
 		if (pass == 0) {
 			assert((INT_MIN <= value) && (value <= INT_MAX));
-			leb128_encode_int(write_fn, (int)value, (void*)42);
+			leb128_encode_int(write_fn, (void*)42, (int)value);
 		} else if (pass == 1) {
-			leb128_encode_int64(write_fn, value, (void*)42);
+			leb128_encode_int64(write_fn, (void*)42, value);
 		} else {
 			assert(!"bad state");
 		}
@@ -274,7 +276,7 @@ static void leb128_unit_test(void)
 		w = 18000 * (w & 0xffff) + (w>>16);
 		const int v0 = (z<<16) + w;
 		_g_l128u.cursor = 0;
-		leb128_encode_int(write_fn, v0, (void*)42);
+		leb128_encode_int(write_fn, (void*)42, v0);
 		const int num_written = _g_l128u.cursor;
 		_g_l128u.cursor = 0;
 		const int v1 = leb128_decode_int(read_fn, (void*)42);

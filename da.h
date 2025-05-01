@@ -1,24 +1,23 @@
 #ifndef DA_H // dynamic array, macro powered
 
 // XXX be careful with macro gotchas; it's tempting to use `i++` in macros that
-// accept an INDEX, but you risk evaluating it multiple times.
+// accept an INDEX, but they evaluate your expression multiple times.
 
 #include <assert.h>
 #include <string.h>
 
 void _daMaybeGrow(size_t item_size, void** pitems, int* pcap, int required_cap);
 
-#define DASTRUCTBODY(TYPE)      { TYPE* items; int len,cap; }
-#define DA(TYPE,NAME)           struct DASTRUCTBODY(TYPE) NAME
+#define DA_STRUCT_BODY(TYPE)    { TYPE* items; int len,cap; }
+#define DA(TYPE,NAME)           struct DA_STRUCT_BODY(TYPE) NAME
 
 #define daLen(ARR)              ((ARR).len)
 #define daItemSize(ARR)         (sizeof(*(ARR).items))
-#define daSetLen(ARR,LEN)       (assert((LEN)>=0),\
-                                _daMaybeGrow(daItemSize(ARR),(void**)&((ARR).items),&((ARR).cap),LEN),\
-                                (ARR).len=(LEN))
+#define daSetMinCap(ARR,CAP)    (assert((CAP)>=0),\
+                                _daMaybeGrow(daItemSize(ARR),(void**)&((ARR).items),&((ARR).cap),CAP))
+#define daSetLen(ARR,LEN)       (daSetMinCap(ARR,LEN),assert((ARR).cap>=(LEN)),(ARR).len=(LEN))
 #define daReset(ARR)            daSetLen(ARR,0)
 #define daGuardN(ARR,INDEX,N)   assert((0<=(INDEX))&&((INDEX)<=(daLen(ARR)-(N)))&&"index out of bounds")
-// do: gui.c:244: remove_closed_windows: Assertion `(0<=((i)+(1)))&&(((i)+(1))<=(daLen(g.windows)-(1)))&&"index out of bounds"' failed.
 #define daGuard(ARR,INDEX)      daGuardN(ARR,INDEX,1)
 #define daPtr(ARR,INDEX)        (daGuard(ARR,INDEX),&(ARR).items[INDEX])
 #define daPtr0(ARR)             daPtr(ARR,0)

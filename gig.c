@@ -18,141 +18,51 @@
 struct ringbuf {
 	uint8_t* data;
 	int size_log2;
-	int spillover_size;
-	unsigned no_acknowledge :1;
-	unsigned no_commit      :1;
 
-	// fields on separate cache lines to avoid "false sharing" (hope I'm not
-	// cargo culting too much)
+	//size_t read_cursor;
+	size_t write_cursor;
 
-	_Alignas(CACHE_LINE_SIZE)         int     read_error;
-	_Alignas(CACHE_LINE_SIZE)         size_t  read_cursor;
-	_Alignas(CACHE_LINE_SIZE) _Atomic(size_t) acknowledge_cursor;
-
-	_Alignas(CACHE_LINE_SIZE)         int     write_error;
-	_Alignas(CACHE_LINE_SIZE)         size_t  write_cursor;
+	// fields on separate cache lines to avoid "false sharing"
+	//_Alignas(CACHE_LINE_SIZE) _Atomic(size_t) acknowledge_cursor;
 	_Alignas(CACHE_LINE_SIZE) _Atomic(size_t) commit_cursor;
 };
 
-static void ringbuf_init_with_pointer(struct ringbuf* rb, void* data, int size_log2, int spillover_size)
+static void ringbuf_init_with_pointer(struct ringbuf* rb, void* data, int size_log2)
 {
 	memset(rb, 0, sizeof *rb);
-	assert((spillover_size <= (1L << size_log2)) && "spillover doesn't work if larger than actual ringbuf");
 	rb->size_log2 = size_log2;
-	rb->spillover_size = spillover_size;
 	rb->data = data;
 }
 
-static size_t ringbuf_get_data_size(int size_log2, int spillover_size)
+static void ringbuf_init(struct ringbuf* rb, int size_log2)
 {
-	return (1L << size_log2) + spillover_size;
+	ringbuf_init_with_pointer(rb, calloc(1L<<size_log2, 1), size_log2);
 }
 
-static void ringbuf_init(struct ringbuf* rb, int size_log2, int spillover_size)
+static void ringbuf_commit(struct ringbuf* rb)
 {
-	ringbuf_init_with_pointer(
-		rb,
-		calloc(ringbuf_get_data_size(size_log2, spillover_size), 1),
-		size_log2,
-		spillover_size);
+	atomic_store(&rb->commit_cursor, rb->write_cursor);
 }
 
-static inline void* ringbuf_get_write_pointer_at(struct ringbuf* rb, size_t position)
-{
-	return &rb->data[position & ((1L << rb->size_log2)-1)];
-}
 
-static inline void* ringbuf_get_write_pointer(struct ringbuf* rb)
+static void ringbuf_writen(struct ringbuf* rb, const void* src_data, size_t num_bytes)
 {
-	return ringbuf_get_write_pointer_at(rb, rb->write_cursor);
-}
-
-// advance write cursor and handle spillover. it assumes that you wrote
-// num_bytes beginning at ringbuf_get_write_pointer(), and handles spillover at
-// the end of the buffer. thus num_bytes must never exceed rb->spillover_size.
-static void ringbuf_wrote_linear(struct ringbuf* rb, size_t num_bytes)
-{
-	if (num_bytes == 0) return;
-	if (rb->spillover_size == 0) {
-		assert((num_bytes == 1) && "no spillover configured: you can write at most 1 byte linearly at a time");
-		return;
+	const size_t size = 1L << rb->size_log2;
+	const size_t mask = size - 1L;
+	const size_t cursor = rb->write_cursor;
+	const size_t until_next_wrap_around = size - (cursor & mask);
+	uint8_t* dst_data = rb->data;
+	uint8_t* dst_first = dst_data + (cursor & mask);
+	if (until_next_wrap_around >= num_bytes) {
+		memcpy(dst_first, src_data, num_bytes);
+	} else {
+		memcpy(dst_first, src_data, until_next_wrap_around);
+		const size_t remaining = num_bytes - until_next_wrap_around;
+		assert((until_next_wrap_around + remaining) == num_bytes);
+		assert((remaining>0) && "expected to write at least 1 byte");
+		memcpy(dst_data, src_data + until_next_wrap_around, remaining);
 	}
-	assert((num_bytes <= rb->spillover_size) && "you can't write more than spillover_size");
-	// XXX I think you can actually write 1+rb->spillover_size bytes? but that
-	// might be a problem if ringbuf size is exactly the same as the spillover
-	// size? (overlapping memcpy()?). besides, setting spillover size to the
-	// maximum number of bytes you can write is easier to understand, maybe?
-	const size_t c0 = rb->write_cursor;
-	rb->write_cursor += num_bytes;
-	const size_t c1 = rb->write_cursor;
-	const int size_log2 = rb->size_log2;
-	if (((c1-1) >> size_log2) > (c0 >> size_log2)) {
-		// wrote past end of buffer; do "spillover" by copying back to
-		// beginning of buffer
-		const size_t size = 1L << size_log2;
-		const size_t n = c1 & (size-1);
-		assert(n>0);
-		memcpy(rb->data, rb->data + size, n);
-	}
-}
-
-// copies everything except the data itself; used for having a different "view"
-// with its own read/write state
-static void ringbuf_shallow_copy(struct ringbuf* dst, struct ringbuf* src)
-{
-	memcpy(dst, src, sizeof *dst);
-	atomic_store(&dst->acknowledge_cursor, atomic_load(&src->acknowledge_cursor));
-	atomic_store(&dst->commit_cursor,      atomic_load(&src->commit_cursor));
-}
-
-static void ringbuf_write_u8(struct ringbuf* rb, uint8_t v)
-{
-	if (rb->write_error) return;
-	const size_t s = (1L << rb->size_log2);
-	if (!rb->no_acknowledge && (rb->write_cursor >= (atomic_load(&rb->acknowledge_cursor) + s))) {
-		printf("WRITE ERROR\n"); // XXX
-		rb->write_error = 1;
-		return;
-	}
-	*(uint8_t*)ringbuf_get_write_pointer(rb) = v;
-	ringbuf_wrote_linear(rb, 1);
-}
-
-static inline uint8_t ringbuf_read_u8_at(struct ringbuf* r, size_t position)
-{
-	//printf("read %zd => %d\n", position, r->data[position & ((1L << r->size_log2)-1)]);
-	return r->data[position & ((1L << r->size_log2)-1)];
-}
-
-static uint8_t ringbuf_read_u8(struct ringbuf* r)
-{
-	if (r->read_error) return 0;
-	if (!r->no_commit && (r->read_cursor >= atomic_load(&r->commit_cursor))) {
-		printf("READ ERROR\n"); // XXX
-		r->read_error = 1;
-		return 0;
-	}
-	return ringbuf_read_u8_at(r, r->read_cursor++);
-}
-
-static void ringbuf_rollback(struct ringbuf* r)
-{
-	if (r->write_error) return;
-	r->write_cursor = r->commit_cursor;
-}
-
-static void ringbuf_commit(struct ringbuf* r)
-{
-	assert((!r->no_commit) && "commit is disabled");
-	if (r->write_error) return;
-	atomic_store(&r->commit_cursor, r->write_cursor);
-}
-
-static void ringbuf_acknowledge(struct ringbuf* r)
-{
-	assert((!r->no_acknowledge) && "acknowledge is disabled");
-	if (r->read_error) return;
-	atomic_store(&r->acknowledge_cursor, r->read_cursor);
+	rb->write_cursor = cursor + num_bytes;
 }
 
 #if 0
@@ -171,15 +81,6 @@ static void document_copy(struct document* dst, struct document* src)
 	ARRCOPY(dst->mim_state_arr, src->mim_state_arr);
 }
 #endif
-
-struct codec {
-	struct ringbuf* ringbuf;
-	int num_commands;
-	size_t began_at_position;
-	unsigned is_encoding : 1;
-	unsigned is_decoding : 1;
-	unsigned in_journal_commands : 1;
-};
 
 struct snapshot {
 	size_t journal_cursor;
@@ -206,23 +107,18 @@ struct document* snapshot_find_document_by_id(struct snapshot* ss, int id)
 	return NULL;
 }
 
-struct mim_state_da DASTRUCTBODY(struct mim_state);
+struct mim_state_da DA_STRUCT_BODY(struct mim_state);
 
 static struct {
 	struct ringbuf command_ringbuf;
-
 	int document_id_sequence;
-
 	struct snapshot outside, inside;
 	//struct document scratch_doc;
 	struct ringbuf journal_ringbuf;
-
-	struct codec ed_codec;
-	int ed_num_commands;
-	size_t ed_began_at_write_position;
-	int ed_is_begun;
 	int my_artist_id;
-
+	DA(uint8_t, mim_buffer);
+	int using_personal_mim_state_id;
+	int in_mim;
 	struct mim_state_da hot_mim_states, my_cool_mim_states;
 } g;
 
@@ -249,228 +145,9 @@ struct document* get_document_by_id(int id)
 	return doc;
 }
 
-static void codec_sanity_check(struct codec* c)
-{
-	assert(!(c->is_encoding && c->is_decoding) && "both cannot be true");
-}
-
-static int is_encoding(struct codec* c)
-{
-	codec_sanity_check(c);
-	return c->is_encoding;
-}
-
-static int is_decoding(struct codec* c)
-{
-	codec_sanity_check(c);
-	return c->is_decoding;
-}
-
-static int is_coding(struct codec* c)
-{
-	return is_encoding(c) || is_decoding(c);
-}
-
-static void codec_begin_encode(struct codec* c, struct ringbuf* r)
-{
-	assert(!is_coding(c));
-	assert(c->ringbuf == NULL);
-	c->ringbuf = r;
-	c->began_at_position = r->write_cursor;
-	// TODO remember document revision we're editing against?
-	c->is_encoding = 1;
-}
-
-static void codec_end_encode(struct codec* c)
-{
-	assert(is_encoding(c));
-	assert(!c->in_journal_commands);
-	assert(c->ringbuf != NULL);
-	c->ringbuf = NULL;
-	c->is_encoding = 0;
-}
-
-static void codec_begin_decode(struct codec* c, struct ringbuf* r)
-{
-	assert(!is_coding(c));
-	assert(c->ringbuf == NULL);
-	c->ringbuf = r;
-	c->began_at_position = r->write_cursor;
-	c->is_decoding = 1;
-}
-
-static void codec_end_decode(struct codec* c)
-{
-	assert(is_decoding(c));
-	assert(c->ringbuf != NULL);
-	c->ringbuf = NULL;
-	c->is_decoding = 0;
-}
-
-// codec functions: designed so they can be used both for encoding and decoding
-//
-// _ptr suffix means it uses a pointer:
-//    codec_foo_ptr(&foo)
-//
-// _io suffix means you should "connect" both input and output:
-//    x->foo = codec_foo_io(x->foo);
-// please mark _io functions with "NO_DISCARD" (causes compiler to complain if
-// you forget to use the return value). also consider adding a CODEC_FOO()
-// macro that does it for you.
-
-static uint8_t codec_read_u8(struct codec* c)
-{
-	assert(is_decoding(c));
-	assert(c->ringbuf != NULL);
-	return ringbuf_read_u8(c->ringbuf);
-}
-
-static uint8_t codec_read_u8_wrapper(void* userdata)
-{
-	return codec_read_u8((struct codec*)userdata);
-}
-
-static void codec_write_u8(struct codec* c, uint8_t v)
-{
-	assert(is_encoding(c));
-	assert(c->ringbuf != NULL);
-	ringbuf_write_u8(c->ringbuf, v);
-}
-
-static void codec_write_u8_wrapper(uint8_t v, void* userdata)
-{
-	codec_write_u8((struct codec*)userdata, v);
-}
-
-static inline void codec_write_varint(struct codec* c, int v)
-{
-	leb128_encode_int(codec_write_u8_wrapper, v, (void*)c);
-}
-
-static inline void codec_write_varint64(struct codec* c, int64_t v)
-{
-	leb128_encode_int64(codec_write_u8_wrapper, v, (void*)c);
-}
-
-static inline int codec_read_varint(struct codec* c)
-{
-	return leb128_decode_int(codec_read_u8_wrapper, (void*)c);
-}
-
-static inline int64_t codec_read_varint64(struct codec* c)
-{
-	return leb128_decode_int64(codec_read_u8_wrapper, (void*)c);
-}
-
-NO_DISCARD
-static int codec_varint_io(struct codec* c, int v)
-{
-	if (is_encoding(c)) {
-		codec_write_varint(c, v);
-		return v;
-	} else if (is_decoding(c)) {
-		(void)v;
-		return codec_read_varint(c);
-	}
-	assert(!"bad state");
-}
-#define CODEC_VARINT(c,V) (V)=codec_varint_io(c,V)
-
-NO_DISCARD
-static int64_t codec_varint64_io(struct codec* c, int64_t v)
-{
-	if (is_encoding(c)) {
-		codec_write_varint64(c, v);
-		return v;
-	} else if (is_decoding(c)) {
-		(void)v;
-		return codec_read_varint64(c);
-	}
-	assert(!"bad state");
-}
-#define CODEC_VARINT64(c,V) (V)=codec_varint64_io(c,V)
-
-NO_DISCARD
-static uint16_t codec_uint16_io(struct codec* c, uint16_t v)
-{
-	if (is_encoding(c)) {
-		codec_write_u8(c, v & 0xff);
-		codec_write_u8(c, (v>>8) & 0xff);
-		return v;
-	} else if (is_decoding(c)) {
-		(void)v;
-		uint8_t b0 = codec_read_u8(c);
-		uint8_t b1 = codec_read_u8(c);
-		return (uint16_t)b0 + ((uint16_t)b1 << 8);
-	}
-	assert(!"bad state");
-}
-#define CODEC_UINT16(c,V) (V)=codec_uint16_io(c,V)
-
-// defining `DEBUG_PROTOCOL` means that extra dummy data is added to the
-// protocol, and read back in order to test it. this makes it incompatible with
-// data written by a non-DEBUG_PROTOCOL executable! so it should only be used
-// for debugging.
-#ifdef DEBUG_PROTOCOL
-static void codec_debug_tracer(struct codec* c, int tracer)
-{
-	// write `tracer` when encoding, assert that we read `tracer` back when
-	// decoding.
-	const int tracer2 = codec_varint_io(c, tracer);
-	if (is_decoding(c) && tracer2 != tracer) {
-		fprintf(stderr, "codec_debug_tracer() fail: expected to read %d but read %d", tracer, tracer2);
-		abort();
-	}
-}
-#else
-static void codec_debug_tracer(struct codec* c, int tracer)
-{
-	// no-op
-}
-#endif
-
-static inline int s2i(size_t x)
-{
-	assert((x <= INT_MAX) && "size to int conversion failed: size too large");
-	return (int)x;
-}
-
-static void codec_cstr_ptr(struct codec* c, const char** p)
-{
-	if (is_encoding(c)) {
-		const int n = s2i(strlen(*p));
-		codec_write_varint(c, n);
-		for (int i=0; i<n; ++i) codec_write_u8(c, (*p)[i]);
-	} else if (is_decoding(c)) {
-		const int n = codec_read_varint(c);
-		char* s = malloc(n+1);
-		// XXX ^^^ do something smarter that malloc'ing here (and leaking
-		// likely)? note that nul-terminating the string in the ringbuf and
-		// pointing into it is a baad idea, far too smart :)
-		for (int i=0; i<n; ++i) s[i] = codec_read_u8(c);
-		s[n] = 0;
-		*p = s;
-	} else {
-		assert(!"bad state");
-	}
-}
-
-static void codec_location_ptr(struct codec* c, struct location* l)
-{
-	CODEC_VARINT(c, l->line);
-	CODEC_VARINT(c, l->column);
-}
-
-#if 0
-static void codec_range_ptr(struct codec* c, struct range* r)
-{
-	codec_location_ptr(c, &r->from);
-	codec_location_ptr(c, &r->to);
-}
-#endif
-
 static void snapshot_spool(struct snapshot* ss, struct ringbuf* journal)
 {
+	// TODO?
 }
 
 void gig_spool(void)
@@ -480,11 +157,12 @@ void gig_spool(void)
 
 void gig_thread_tick(void)
 {
+	// TODO?
 }
 
 void gig_init(void)
 {
-	ringbuf_init(&g.command_ringbuf, 16, STB_SPRINTF_MIN);
+	ringbuf_init(&g.command_ringbuf, 16);
 
 	// XXX "getting started"-stuff here:
 	g.my_artist_id = 1;
@@ -653,6 +331,7 @@ static void mim_chew(struct mim_state_cool* cool, struct mim_state_hot* hot, uin
 }
 #endif
 
+#if 0
 static char* wrote_command_cb(const char* buf, void* user, int len)
 {
 	struct ringbuf* rb = &g.command_ringbuf;
@@ -697,65 +376,122 @@ static void mimf_raw(/*int mim_state_id, */const char* fmt, ...)
 	mimf_raw_va(/*mim_state_id, */fmt, va);
 	va_end(va);
 }
+#endif
 
-void mimf(int personal_mim_state_id, const char* fmt, ...)
+void begin_mim(int personal_mim_state_id)
 {
-	struct ringbuf* rb = &g.command_ringbuf;
-	struct ringbuf rbr;
-	ringbuf_shallow_copy(&rbr, rb);
-	const size_t w0 = rb->write_cursor;
+	assert(!g.in_mim);
+	g.in_mim = 1;
+	g.using_personal_mim_state_id = personal_mim_state_id;
+	daReset(g.mim_buffer);
+}
+
+static void u8pp_write(uint8_t v, void* userdata)
+{
+	uint8_t** p = (uint8_t**)userdata;
+	**p = v;
+	++(*p);
+}
+
+static void write_varint64(uint8_t** pp, uint8_t* end, int64_t value)
+{
+	assert(((end - *pp) >= LEB128_MAX_LENGTH) && "not enough space for largest-case leb128 encoding");
+	leb128_encode_int64(u8pp_write, pp, value);
+}
+
+void end_mim(void)
+{
+	assert(g.in_mim);
+	const int n = daLen(g.mim_buffer);
+	if (n>0) {
+		// TODO spool applicable changes into cool mim state? (also validate?)
+		uint8_t header[1<<8];
+		uint8_t* hp = header;
+		uint8_t* end = header + sizeof(header);
+		write_varint64(&hp, end, g.using_personal_mim_state_id);
+		write_varint64(&hp, end, n);
+		const size_t nh = hp - header;
+		ringbuf_writen(&g.command_ringbuf, header, nh);
+		ringbuf_writen(&g.command_ringbuf, g.mim_buffer.items, n);
+		ringbuf_commit(&g.command_ringbuf);
+	}
+	g.in_mim = 0;
+}
+
+static char* get_mim_buffer_top(void)
+{
+	daSetMinCap(g.mim_buffer, daLen(g.mim_buffer) + STB_SPRINTF_MIN);
+	return (char*)g.mim_buffer.items + daLen(g.mim_buffer);
+}
+
+static char* wrote_mim_cb(const char* buf, void* user, int len)
+{
+	daSetLen(g.mim_buffer, daLen(g.mim_buffer)+len);
+	return get_mim_buffer_top();
+}
+
+void mimf(const char* fmt, ...)
+{
+	assert(g.in_mim);
 	va_list va;
 	va_start(va, fmt);
-	mimf_raw_va(/*mim_state_id, */fmt, va);
+	stbsp_vsprintfcb(wrote_mim_cb, NULL, get_mim_buffer_top(), fmt, va);
 	va_end(va);
-	rbr.read_cursor = w0;
-	rbr.no_commit = 1;
-	struct codec c={0};
-	codec_begin_decode(&c, &rbr);
-	//const int read_state_id = codec_read_varint(&c);
-	//assert(read_state_id==mim_state_id);
-	const int ss = codec_read_varint(&c);
-	//int hot_update=0;
-	for (int i=0; i<ss; ++i) {
-		const uint8_t v = codec_read_u8(&c);
-		//mim_chew(&g.vs1cool, NULL, v, &hot_update);
-		printf("TODO chew %d/%c\n", v, v);
-	}
-	codec_end_decode(&c);
-	// TODO detect if command is discardable? e.g. ":document 1<cr>" when
-	// already on document 1 and so on?
 }
 
 void gig_selftest(void)
 {
-	{ // test ringbuf spillover
+	{ // test ringbuf_writen()
 		struct ringbuf rb;
-		uint8_t buf[1<<8];
-		memset(buf, 0, sizeof buf);
-		ringbuf_init_with_pointer(&rb, buf, /*size_log2=*/4, /*spillover_size=*/8);
-		// advance 12 bytes (can't advance more than `spillover_size`)
-		ringbuf_wrote_linear(&rb, 8);
-		ringbuf_wrote_linear(&rb, 4);
-		assert(ringbuf_get_write_pointer(&rb) == buf+12);
-		// write 8 bytes, 4 bytes past end of ringbuf main area, and expect 4
-		// bytes spillover
-		uint8_t* p = ringbuf_get_write_pointer(&rb);
-		for (int i=0; i<8; ++i) p[i] = 3+7*i;
-		ringbuf_wrote_linear(&rb, 8);
-		for (int i=0; i<24; ++i) {
-			assert(buf[i] ==
-				(
-				i<4  ? 3+7*(i+4) : // spillover copied to start
-				i<12 ? 0 : // not written (zero initialized)
-				i<20 ? 3+7*(i-12) : // 4 last bytes + 4 bytes spillover
-				0 // not written (zero initialized)
-				)
-			);
-		}
-		assert(((uint8_t*)ringbuf_get_write_pointer(&rb) < p) && "expected pointer to move backwards due to wrap-around");
-		assert(ringbuf_get_write_pointer(&rb) == buf+4);
+		uint8_t buf[1<<4] = {0};
+		ringbuf_init_with_pointer(&rb, buf, 4);
+		const char* p0 = "0123456";
+		const size_t s0 = strlen(p0);
+		const char* p1 = "xy";
+		const size_t s1 = strlen(p1);
+
+		// write p0 twice
+		ringbuf_writen(&rb, p0, s0);
+		assert(rb.write_cursor == (s0));
+		ringbuf_writen(&rb, p0, s0);
+		assert(rb.write_cursor == (s0+s0));
+
+		// write exactly to the end of the ring buffer wrap around point: there
+		// should be an assert that we don't do a zero-byte memcpy (i.e. that
+		// we mistakenly split the write into two memcpy's)
+		ringbuf_writen(&rb, p1, s1);
+		assert(rb.write_cursor == (s0+s0+s1));
+		assert((rb.write_cursor & ((1L<<rb.size_log2)-1L)) == 0L);
+
+		// verify data, expect 2 × p0, 1 × p1
+		char* p = (char*)rb.data;
+		const char* expected = "01234560123456xy";
+		assert(strlen(expected) == 16);
+		for (int i=0; i<strlen(expected); ++i) assert(*(p++) == expected[i]);
+
+		// write p0 again to advance write cursor
+		ringbuf_writen(&rb, p0, s0);
+		assert(rb.write_cursor == (s0+s0+s1+s0));
+
+		// write across wrap-around point (should be 2 memcpy's)
+		const char* p2 = "abcdefghijk";
+		const size_t s2 = strlen(p2);
+		ringbuf_writen(&rb, p2, s2);
+		assert(rb.write_cursor == (s0+s0+s1+s0+s2));
+
+		// verify final data
+		expected = "jk23456abcdefghi";
+		assert(strlen(expected) == 16);
+		p = (char*)rb.data;
+		for (int i=0; i<strlen(expected); ++i) assert(*(p++) == expected[i]);
+
+		// test commit
+		assert(rb.commit_cursor == 0);
+		ringbuf_commit(&rb);
+		assert(rb.commit_cursor == rb.write_cursor);
 	}
 
+	#if 0
 	{ // test mimf_raw
 		uint8_t buf[(1<<9) + STB_SPRINTF_MIN];
 		assert(sizeof(buf) == 1024);
@@ -789,4 +525,5 @@ void gig_selftest(void)
 			assert(*p == '!');
 		}
 	}
+	#endif
 }

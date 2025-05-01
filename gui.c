@@ -1123,7 +1123,7 @@ void gui_begin_frame(void)
 static void handle_editor_input(struct pane* pane)
 {
 	assert(pane->type == CODE);
-	const int pmsid = pane->code.personal_mim_state_id;
+	begin_mim(pane->code.personal_mim_state_id);
 	for (int i=0; i<daLen(g.key_buffer); ++i) {
 		const int key = daGet(g.key_buffer, i);
 		const int down = get_key_down(key);
@@ -1132,10 +1132,10 @@ static void handle_editor_input(struct pane* pane)
 		if (down && mod==0) {
 			switch (code) {
 			// XXX
-			case KEY_ARROW_LEFT:  mimf(pmsid, "h"); break;
-			case KEY_ARROW_RIGHT: mimf(pmsid, "l"); break;
-			case KEY_ARROW_UP:    mimf(pmsid, "k"); break;
-			case KEY_ARROW_DOWN:  mimf(pmsid, "j"); break;
+			case KEY_ARROW_LEFT:  mimf("h"); break;
+			case KEY_ARROW_RIGHT: mimf("l"); break;
+			case KEY_ARROW_UP:    mimf("k"); break;
+			case KEY_ARROW_DOWN:  mimf("j"); break;
 			//case KEY_ENTER:       mimf("\n"); break;
 			//case KEY_ESCAPE:      mimf("\033"); break;
 			default: break;
@@ -1146,8 +1146,9 @@ static void handle_editor_input(struct pane* pane)
 	const int num_chars = utf8_strlen(daPtr0(g.text_buffer));
 	if (num_chars > 0) {
 		// XXX
-		mimf(pmsid, "%s", daPtr0(g.text_buffer));
+		mimf("%s", daPtr0(g.text_buffer));
 	}
+	end_mim();
 }
 
 static void draw_code_pane(struct pane* pane)

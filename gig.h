@@ -97,8 +97,11 @@ void gig_selftest(void);
 
 void mim_set_latency(double mu, double sigma);
 
-FORMATPRINTF2
-void mimf(int personal_mim_state_id, const char* fmt, ...);
+void begin_mim(int personal_mim_state_id);
+void end_mim(void);
+
+FORMATPRINTF1
+void mimf(const char* fmt, ...);
 
 int get_num_mim_states(void);
 struct mim_state* get_cool_mim_state_by_personal_id(int id);
