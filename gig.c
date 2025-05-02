@@ -402,6 +402,8 @@ static int mim_chew(struct mim_state* ms, struct document* doc, const uint8_t* i
 					const int off = document_locate(doc, car->range.to);
 					daIns(doc->fat_chars, off, ((struct fat_char){
 						.codepoint = cp,
+						.timestamp = get_nanoseconds(),
+						.artist_id = get_my_artist_id(),
 					}));
 				}
 			}
