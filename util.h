@@ -17,7 +17,7 @@
 // to exist in C
 #define CACHE_LINE_SIZE (64)
 
-static inline int is_numeric(char ch) { return '0' <= ch && ch <= '9'; }
+static inline int is_digit(int c) { return ('0'<=c) && (c<='9'); }
 
 #define UTIL_H
 #endif

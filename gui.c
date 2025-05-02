@@ -786,7 +786,7 @@ void gui_init(void)
 
 	// XXX a lot of this code is bad "getting started code" that shouldn't
 	// survive for too long
-	assert((get_num_documents() > 0) && "the following code is probably not the best if/when this changes");
+	//assert((get_num_documents() > 0) && "the following code is probably not the best if/when this changes");
 	const int focus_id = make_focus_id();
 	daPut(g.panes, ((struct pane){
 		.type = CODE,
@@ -1145,8 +1145,10 @@ static void handle_editor_input(struct pane* pane)
 
 	const int num_chars = utf8_strlen(daPtr0(g.text_buffer));
 	if (num_chars > 0) {
-		// XXX
-		mimf("%s", daPtr0(g.text_buffer));
+		const int num_bytes = daLen(g.text_buffer) - 1;
+		mimf("0i");
+		for (int i=0; i<num_bytes; ++i) mim8(daGet(g.text_buffer, i));
+		mimf("\033");
 	}
 	end_mim();
 }
@@ -1176,8 +1178,9 @@ static void draw_code_pane(struct pane* pane)
 	//set_color3f(.7, 2.7, .7);
 	set_color3f(.9,2.6,.9);
 
-	struct mim_state* ms = get_cool_mim_state_by_personal_id(pane->code.personal_mim_state_id);
-	struct document* doc = get_document_by_id(ms->document_id);
+	struct mim_state* ms;
+	struct document* doc;
+	get_state_and_doc(pane->code.personal_mim_state_id, &ms, &doc);
 
 	const int num_chars = daLen(doc->fat_chars);
 	int line_index = 0;

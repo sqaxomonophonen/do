@@ -176,10 +176,10 @@ static GLuint create_shader(GLenum type, const char* src)
 
 		// attempt to parse "0:<linenumber>" in error message
 		int line_number = 0;
-		if (strlen(msg) >= 3 && msg[0] == '0' && msg[1] == ':' && is_numeric(msg[2])) {
+		if (strlen(msg) >= 3 && msg[0] == '0' && msg[1] == ':' && is_digit(msg[2])) {
 			const char* p0 = msg+2;
 			const char* p1 = p0+1;
-			while (is_numeric(*p1)) p1++;
+			while (is_digit(*p1)) p1++;
 			char buf[32];
 			const int n = p1-p0;
 			if (n < ARRAY_LENGTH(buf)) {

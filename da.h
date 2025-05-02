@@ -19,11 +19,16 @@ void _daMaybeGrow(size_t item_size, void** pitems, int* pcap, int required_cap);
 #define daReset(ARR)            daSetLen(ARR,0)
 #define daGuardN(ARR,INDEX,N)   assert((0<=(INDEX))&&((INDEX)<=(daLen(ARR)-(N)))&&"index out of bounds")
 #define daGuard(ARR,INDEX)      daGuardN(ARR,INDEX,1)
-#define daPtr(ARR,INDEX)        (daGuard(ARR,INDEX),&(ARR).items[INDEX])
+#define daUP(ARR,INDEX)         (&(ARR).items[INDEX])
+#define daPtr(ARR,INDEX)        (daGuard(ARR,INDEX),daUP(ARR,INDEX))
 #define daPtr0(ARR)             daPtr(ARR,0)
 #define daGet(ARR,INDEX)        (*daPtr(ARR,INDEX))
 #define daAddNPtr(ARR,N)        (daSetLen(ARR,(N)+daLen(ARR)),daPtr(ARR,daLen(ARR)-(N)))
 #define daPut(ARR,ITEM)         (*daAddNPtr(ARR,1)=(ITEM))
+#define daInsNPtr(ARR,INDEX,N)  ((void)daAddNPtr(ARR,N),\
+                                memmove(daUP(ARR,(INDEX)+(N)),daPtr(ARR,INDEX),daItemSize(ARR)*(daLen(ARR)-(N)-(INDEX))),\
+                                daPtr(ARR,INDEX))
+#define daIns(ARR,INDEX,ITEM)   (*(daInsNPtr(ARR,INDEX,1))=(ITEM))
 #define daSet(ARR,INDEX,ITEM)   (*daPtr(ARR,INDEX)=(ITEM))
 #define daDelN(ARR,INDEX,N)     (daGuardN(ARR,INDEX,N),\
                                 memmove(daPtr(ARR,INDEX),1+daPtr(ARR,INDEX),daItemSize(ARR)*(daLen(ARR)-(INDEX)-(N))),\
@@ -31,9 +36,9 @@ void _daMaybeGrow(size_t item_size, void** pitems, int* pcap, int required_cap);
 #define daDel(ARR,INDEX)        daDelN(ARR,INDEX,1)
 #define daPop(ARR)              (daSetLen(ARR,daLen(ARR)-1),(ARR).items[daLen(ARR)])
 
-#define daCopy(DST,SRC)         {(void)(daPtr0(DST)==daPtr0(SRC)); /* try to emit warning if not same type */ \
-                                daSetLen(DST,daLen(SRC));\
-                                memcpy(DST.items, SRC.items, daItemSize(DST)*daLen(DST));}
+#define daCopy(DST,SRC)         ((void)(DST.items==SRC.items), /* try to emit warning if not same type */ \
+                                daSetLen(DST,daLen(SRC)),\
+                                memcpy(DST.items, SRC.items, daItemSize(DST)*daLen(DST)))
 
 // BACKGROUND: I previously used the arr*() macros in stb_ds.h, but:
 //  - I declared arrays with an `_arr`-suffix to distinguish them from other

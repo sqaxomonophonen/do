@@ -19,9 +19,10 @@ static inline int utf8_is_first(uint8_t v)
 int utf8_strlen(const char* str);
 // returns the number of codepoints in the string (not graphemes)
 
-int utf8_decode(const char** c0z, int* n);
-// c0z/n are in/out variables: c0z points at the start of the string, and n is
-// the number of bytes remaining of the string. both are updated. it returns
+int utf8_decode(const char** inputpp, int* remaining);
+// inputpp/remaining are in/out variables: inputpp points at the start of the
+// string, and `remaining` is the number of bytes remaining of the string. both
+// are updated (inputpp is incremented, remaining is decremented). it returns
 // the codepoint for the decoded utf8 sequence, or -1 if unsuccessful.
 
 int utf8_convert_lowercase_codepoint_to_uppercase(int lowercase_codepoint);
@@ -273,12 +274,12 @@ int utf8_strlen(const char* str)
 	return n;
 }
 
-int utf8_decode(const char** c0z, int* n)
+int utf8_decode(const char** inputpp, int* remaining)
 {
-	const uint8_t** c0 = (const uint8_t**)c0z;
+	const uint8_t** c0 = (const uint8_t**)inputpp;
 	const uint8_t* b = *c0;
-	if (*n < 1) return -1;
-	--(*n);
+	if (*remaining < 1) return -1;
+	--(*remaining);
 	++(*c0);
 	const uint8_t b0 = b[0];
 	const int nb = utf8_num_bytes_for_first_byte(b0);
@@ -286,13 +287,13 @@ int utf8_decode(const char** c0z, int* n)
 	if (nb == 1) return b0;
 	assert((2<=nb) && (nb<=4));
 	const int nb1 = nb-1;
-	if (*n < nb1) {
+	if (*remaining < nb1) {
 		// not enough bytes; advance to end and return error
-		(*c0) += *n;
-		*n = 0;
+		(*c0) += *remaining;
+		*remaining = 0;
 		return -1;
 	}
-	(*n)  -= nb1;
+	(*remaining) -= nb1;
 	(*c0) += nb1;
 	const int m6 = 0x3f;
 	switch (nb) {

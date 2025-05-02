@@ -65,26 +65,47 @@ static void ringbuf_writen(struct ringbuf* rb, const void* src_data, size_t num_
 	rb->write_cursor = cursor + num_bytes;
 }
 
-#if 0
 static void document_copy(struct document* dst, struct document* src)
 {
-	const struct document copy = *dst;
-	memcpy(dst, src, sizeof *dst);
-
-	// the arrays are handled differently, reusing the "_arr"s in the dst
-	// document (simplifies memory management)
-	dst->fat_char_arr = copy.fat_char_arr;
-	//dst->caret_arr = copy.caret_arr;
-	dst->mim_state_arr = copy.mim_state_arr;
-
-	ARRCOPY(dst->fat_char_arr, src->fat_char_arr);
-	ARRCOPY(dst->mim_state_arr, src->mim_state_arr);
+	struct document tmp;
+	memcpy(&tmp, src, sizeof *src);
+	memcpy(dst, src, sizeof *src);
+	dst->fat_chars = tmp.fat_chars;
+	daCopy(dst->fat_chars, src->fat_chars);
 }
-#endif
+
+static void mim_state_copy(struct mim_state* dst, struct mim_state* src)
+{
+	struct mim_state tmp;
+	memcpy(&tmp, src, sizeof *src);
+	memcpy(dst, src, sizeof *src);
+	dst->carets = tmp.carets;
+	daCopy(dst->carets, src->carets);
+}
+
+static int document_locate(struct document* doc, struct location loc)
+{
+	const int num_chars = daLen(doc->fat_chars);
+	int line=1;
+	int column=1;
+	for (int i=0; i<num_chars; ++i) {
+		++column;
+		if ((loc.line < line) || (loc.line == line && loc.column <= column)) {
+			return i;
+		}
+		struct fat_char* fc = daPtr(doc->fat_chars, i);
+		if (fc->codepoint == '\n') {
+			++line;
+			column=0;
+		}
+	}
+	return num_chars;
+}
 
 struct snapshot {
 	size_t journal_cursor;
 	DA(struct document, documents);
+	DA(struct mim_state, mim_states);
 };
 
 static int snapshot_get_num_documents(struct snapshot* ss)
@@ -107,43 +128,40 @@ struct document* snapshot_find_document_by_id(struct snapshot* ss, int id)
 	return NULL;
 }
 
-struct mim_state_da DA_STRUCT_BODY(struct mim_state);
+struct document* snapshot_get_document_by_id(struct snapshot* ss, int id)
+{
+	struct document* doc = snapshot_find_document_by_id(ss, id);
+	assert((doc != NULL) && "document not found by id");
+	return doc;
+}
+
+static struct mim_state* snapshot_get_mim_state_by_ids(struct snapshot* ss, int artist_id, int personal_id)
+{
+	const int n = daLen(ss->mim_states);
+	for (int i=0; i<n; ++i) {
+		struct mim_state* s = daPtr(ss->mim_states, i);
+		if ((s->artist_id == artist_id) &&  (s->personal_id == personal_id)) {
+			return s;
+		}
+	}
+	assert(!"not found");
+}
+
+static struct mim_state* snapshot_get_personal_mim_state_by_id(struct snapshot* ss, int personal_id)
+{
+	return snapshot_get_mim_state_by_ids(ss, get_my_artist_id(), personal_id);
+}
 
 static struct {
 	struct ringbuf command_ringbuf;
 	int document_id_sequence;
-	struct snapshot outside, inside;
-	//struct document scratch_doc;
+	struct snapshot cool_snapshot, hot_snapshot;
 	struct ringbuf journal_ringbuf;
 	int my_artist_id;
 	DA(uint8_t, mim_buffer);
 	int using_personal_mim_state_id;
 	int in_mim;
-	struct mim_state_da hot_mim_states, my_cool_mim_states;
 } g;
-
-int get_num_documents(void)
-{
-	return snapshot_get_num_documents(&g.outside);
-}
-
-struct document* get_document_by_index(int index)
-{
-	return snapshot_get_document_by_index(&g.outside, index);
-}
-
-struct document* find_document_by_id(int id)
-{
-	assert((id >= 1) && "id must be at least 1");
-	return snapshot_find_document_by_id(&g.outside, id);
-}
-
-struct document* get_document_by_id(int id)
-{
-	struct document* doc = find_document_by_id(id);
-	assert((doc != NULL) && "document id not found");
-	return doc;
-}
 
 static void snapshot_spool(struct snapshot* ss, struct ringbuf* journal)
 {
@@ -152,7 +170,7 @@ static void snapshot_spool(struct snapshot* ss, struct ringbuf* journal)
 
 void gig_spool(void)
 {
-	snapshot_spool(&g.outside, &g.journal_ringbuf);
+	snapshot_spool(&g.hot_snapshot, &g.journal_ringbuf);
 }
 
 void gig_thread_tick(void)
@@ -167,7 +185,8 @@ void gig_init(void)
 	// XXX "getting started"-stuff here:
 	g.my_artist_id = 1;
 	const int doc_id = 1;
-	struct document* doc = daAddNPtr(g.outside.documents, 1);
+	struct snapshot* ss = &g.cool_snapshot;
+	struct document* doc = daAddNPtr(ss->documents, 1);
 	memset(doc, 0, sizeof *doc);
 	doc->id = doc_id;
 	struct mim_state ms1 = {
@@ -175,9 +194,16 @@ void gig_init(void)
 		.personal_id = 1,
 		.document_id = doc_id,
 	};
+	struct caret cr = {
+		.tag=0,
+		.range={
+			.from={.line=1,.column=1},
+			.to={.line=1,.column=1},
+		},
+	};
+	daPut(ms1.carets, cr);
+	daPut(ss->mim_states, ms1);
 
-	daPut(g.hot_mim_states, ms1);
-	daPut(g.my_cool_mim_states, ms1);
 
 	#if 0
 	gig_thread_tick();
@@ -190,42 +216,32 @@ int get_my_artist_id(void)
 	return g.my_artist_id;
 }
 
-int get_num_mim_states(void)
+void get_state_and_doc(int personal_id, struct mim_state** out_mim_state, struct document** out_doc)
 {
-	return daLen(g.hot_mim_states);
-}
-
-static struct mim_state* find_mim_state_by_id(struct mim_state_da* da, int id)
-{
-	const int n = daLen(*da);
-	for (int i=0; i<n; ++i) {
-		struct mim_state* ms = daPtr(*da, i);
-		if (ms->personal_id == id) return ms;
+	struct snapshot* ss = &g.cool_snapshot;
+	const int artist_id = get_my_artist_id();
+	const int num_states = daLen(ss->mim_states);
+	for (int i=0; i<num_states; ++i) {
+		struct mim_state* ms = daPtr(ss->mim_states, i);
+		if ((ms->artist_id==artist_id) && (ms->personal_id==personal_id)) {
+			const int document_id = ms->document_id;
+			assert((document_id > 0) && "invalid document id in mim state");
+			struct document* doc = NULL;
+			const int num_docs = daLen(ss->documents);
+			for (int i=0; i<num_docs; ++i) {
+				struct document* d = daPtr(ss->documents, i);
+				if (d->id == document_id) {
+					doc = d;
+					break;
+				}
+			}
+			assert((doc != NULL) && "invalid document id (not found) in mim state");
+			if (out_mim_state) *out_mim_state = ms;
+			if (out_doc) *out_doc = doc;
+			return;
+		}
 	}
-	return NULL;
-}
-
-struct mim_state* check_my_mim_state(struct mim_state* ms, int id)
-{
-	assert(ms != NULL);
-	assert(ms->artist_id == get_my_artist_id());
-	assert(ms->personal_id == id);
-	return ms;
-}
-
-struct mim_state* get_cool_mim_state_by_personal_id(int id)
-{
-	return check_my_mim_state(find_mim_state_by_id(&g.my_cool_mim_states, id), id);
-}
-
-struct mim_state* get_hot_mim_state_by_personal_id(int id)
-{
-	return check_my_mim_state(find_mim_state_by_id(&g.hot_mim_states, id), id);
-}
-
-struct mim_state* get_mim_state_by_index(int index)
-{
-	return daPtr(g.hot_mim_states, index);
+	assert(!"state not found");
 }
 
 #if 0
@@ -247,136 +263,168 @@ int mim_state_cool_compar(struct mim_state_cool* a, struct mim_state_cool* b)
 	}
 	return 0;
 }
-
-static void mim_chew(struct mim_state_cool* cool, struct mim_state_hot* hot, uint8_t input, int* hot_update)
-{
-	const int is_escape = ('\033'==input);
-	const int is_return = ('\n'==input);
-
-	if (cool != NULL) {
-		switch (cool->mode) {
-		case MIM_COMMAND: {
-			switch (input) {
-			case ':': cool->mode = MIM_EX_COMMAND; break;
-			case '/': cool->mode = MIM_SEARCH_FORWARD; break;
-			case '?': cool->mode = MIM_SEARCH_BACKWARD; break;
-
-			case 'h':
-			case 'j':
-			case 'k':
-			case 'l':
-				printf("mim_chew(): TODO caret movement (%c)\n", input);
-				break;
-
-			case 'i':
-			case 'I':
-			case 'a':
-			case 'A':
-			case 'o':
-			case 'O':
-				// XXX how to handle caret movements and line insertions here?
-				if (hot_update) *hot_update=1;
-				cool->mode = MIM_INSERT;
-				break;
-
-			//default: assert(!"unhandled command"); // XXX harsh?
-			default:
-				printf("mim_chew(): unhandled input [%c/%d]\n", input, input);
-				break;
-			}
-		}	break;
-		case MIM_VISUAL:
-		case MIM_VISUAL_LINE:
-		//MIM_VISUAL_BLOCK?
-			assert(!"TODO visual command");
-		case MIM_EX_COMMAND:
-		case MIM_SEARCH_FORWARD:
-		case MIM_SEARCH_BACKWARD: {
-			if (is_escape) {
-				arrsetlen(cool->query_arr, 0);
-				cool->mode = MIM_COMMAND;
-			} else if (is_return) {
-				arrput(cool->query_arr, 0);
-				char* q = cool->query_arr;
-				if (cool->mode == MIM_EX_COMMAND) {
-					char* q1;
-					for (q1=q; *q1 && *q1!=' '; ++q1) {}
-					*q1=0;
-					if (strcmp("document",q)==0) {
-						const long document_id = strtol(q1+1, NULL, 10);
-						cool->document_id = document_id;
-					} else {
-						printf("mim_chew(): unhandled ex command [%s]\n", q);
-					}
-				} else {
-					assert(!"TODO search");
-				}
-				cool->mode = MIM_COMMAND;
-			} else {
-				arrput(cool->query_arr, input);
-			}
-		}	break;
-		case MIM_INSERT:
-			if (is_escape) {
-				cool->mode = MIM_COMMAND;
-			} else {
-				if (hot_update) *hot_update=1;
-			}
-			break;
-		default: assert(!"unhandled mim mode");
-		}
-	}
-
-	assert((hot == NULL) && "unhandled");
-}
 #endif
 
-#if 0
-static char* wrote_command_cb(const char* buf, void* user, int len)
-{
-	struct ringbuf* rb = &g.command_ringbuf;
-	ringbuf_wrote_linear(rb, len);
-	return ringbuf_get_write_pointer(rb);
-}
-
-static void mimf_raw_va(/*int mim_state_id,*/ const char* fmt, va_list va0)
-{
-	struct codec c = {0};
-	struct ringbuf* rb = &g.command_ringbuf;
-	codec_begin_encode(&c, rb);
-	const size_t w0 = rb->write_cursor;
-	codec_write_varint(&c, -1); // size placeholder
-	const size_t w1 = rb->write_cursor;
-	assert(w1 == (w0+1));
-	va_list va;
-	va_copy(va, va0);
-	stbsp_vsprintfcb(wrote_command_cb, NULL, ringbuf_get_write_pointer(rb), fmt, va);
-	const size_t w2 = rb->write_cursor;
-	const size_t print_size = w2-w1;
-	rb->write_cursor = w0; // reset and write size
-	codec_write_varint64(&c, print_size);
-	const size_t w1b = rb->write_cursor;
-	if ((w1b-w0) > 1) {
-		// oops, 1 byte wasn't enough for the varint length. print again from
-		// the correct position
-		va_copy(va, va0);
-		stbsp_vsprintfcb(wrote_command_cb, NULL, ringbuf_get_write_pointer(rb), fmt, va);
-		assert(((rb->write_cursor - w1b) == print_size) && "expected to print same length again");
-	} else {
-		assert((w1b-w0) == 1);
-		rb->write_cursor = w2; // restore write cursor
-	}
-	codec_end_encode(&c);
-}
-
-static void mimf_raw(/*int mim_state_id, */const char* fmt, ...)
+FORMATPRINTF1
+static void mimerr(const char* fmt, ...)
 {
 	va_list va;
 	va_start(va, fmt);
-	mimf_raw_va(/*mim_state_id, */fmt, va);
+	char msg[1<<12];
+	stbsp_vsnprintf(msg, sizeof msg, fmt, va);
 	va_end(va);
+	fprintf(stderr, "MIMERR :: [%s]\n", msg);
 }
-#endif
+
+static int mim_chew(struct mim_state* ms, struct document* doc, const uint8_t* input, int num_bytes)
+{
+	assert((ms->document_id == doc->id) && "mim state / document mismatch");
+
+	const int num_carets = daLen(ms->carets);
+
+	const char* p = (const char*)input;
+	int remaining = num_bytes;
+
+	static DA(int, number_stack) = {0};
+	daReset(number_stack);
+
+	enum {
+		INIT=1,
+		NUMBER=2,
+		INSERT_STRING=3,
+	};
+
+	enum {
+		ESCAPE='\033',
+	};
+
+	int mode = INIT;
+	int previous_mode = -1;
+	int number=0, number_sign=0;
+	int push_cp = -1;
+	int arg_tag = -1;
+
+	while ((push_cp>=0) || (remaining>0)) {
+		const int cp = (push_cp>=0) ? push_cp : utf8_decode(&p, &remaining);
+		push_cp = -1;
+		if (cp == -1) {
+			mimerr("invalid UTF-8 input");
+			return 0;
+		}
+		const int num_args = daLen(number_stack);
+
+		switch (mode) {
+
+		case INIT: {
+			if (is_digit(cp) || cp=='-') {
+				previous_mode = mode;
+				mode = NUMBER;
+				number = 0;
+				if (cp == '-') {
+					number_sign = -1;
+				} else {
+					number_sign = 1;
+					push_cp = cp;
+				}
+			} else {
+				switch (cp) {
+
+				case 'c': {
+					if (num_args != 3) {
+						mimerr("command 'c' expected 3 arguments; got %d", num_args);
+						return 0;
+					}
+					assert(!"TODO c");
+					daReset(number_stack);
+				}	break;
+
+				case 'C': {
+					if (num_args != 2) {
+						mimerr("command 'C' expected 2 arguments; got %d", num_args);
+						return 0;
+					}
+					assert(!"TODO C");
+					daReset(number_stack);
+				}	break;
+
+				case 'i': {
+					if (num_args != 1) {
+						mimerr("command 'i' expected 1 argument; got %d", num_args);
+						return 0;
+					}
+					arg_tag = daGet(number_stack, 0);
+					daReset(number_stack);
+
+					previous_mode = mode;
+					mode = INSERT_STRING;
+				}	break;
+
+				default:
+					mimerr("invalid command '%c'/%d", cp, cp);
+					return 0;
+
+				}
+			}
+		}	break;
+
+		case NUMBER: {
+			if (is_digit(cp)) {
+				number = ((10*number) + (cp-'0'));
+			} else {
+				number *= number_sign;
+				daPut(number_stack, number);
+				mode = previous_mode;
+				if (cp != ',') push_cp = cp;
+			}
+		}	break;
+
+		case INSERT_STRING: {
+
+			if (cp == ESCAPE) {
+				daReset(number_stack);
+				assert(previous_mode == INIT);
+				mode = previous_mode;
+			} else {
+				if (cp < ' ') {
+					switch (cp) {
+					case '\n':
+					case '\t': // XXX consider not supporting tabs?
+						// accepted control codes
+						break;
+					default:
+						mimerr("invalid control code %d in string", cp);
+						return 0;
+					}
+				}
+				for (int i=0; i<num_carets; ++i) {
+					struct caret* car = daPtr(ms->carets, i);
+					if (car->tag != arg_tag) continue;
+					const int off = document_locate(doc, car->range.to);
+					daIns(doc->fat_chars, off, ((struct fat_char){
+						.codepoint = cp,
+					}));
+				}
+			}
+		}	break;
+
+		default: assert(!"unhandled mim_chew()-mode");
+
+		}
+	}
+
+	if (mode != INIT) {
+		mimerr("mode (%d) not terminated", mode);
+		return 0;
+	}
+
+	const int num_args = daLen(number_stack);
+	if (num_args > 0) {
+		mimerr("non-empty number stack (n=%d) at end of mim-input", num_args);
+		return 0;
+	}
+
+	return 1;
+}
 
 void begin_mim(int personal_mim_state_id)
 {
@@ -402,17 +450,36 @@ static void write_varint64(uint8_t** pp, uint8_t* end, int64_t value)
 void end_mim(void)
 {
 	assert(g.in_mim);
-	const int n = daLen(g.mim_buffer);
-	if (n>0) {
-		// TODO spool applicable changes into cool mim state? (also validate?)
+	const int num_bytes = daLen(g.mim_buffer);
+	if (num_bytes>0) {
+		uint8_t* data = g.mim_buffer.items;
+
+		struct snapshot* ss = &g.cool_snapshot;
+		struct mim_state* msr = snapshot_get_personal_mim_state_by_id(ss, g.using_personal_mim_state_id);
+		struct document* doc = snapshot_get_document_by_id(ss, msr->document_id);
+
+		// make "scratch copies" of state and doc and work on these; this
+		// protects the actual state in case of partially invalid input
+		static struct mim_state scratch_state = {0};
+		static struct document scratch_doc = {0};
+		mim_state_copy(&scratch_state, msr);
+		document_copy(&scratch_doc, doc);
+
+		if (!mim_chew(&scratch_state, &scratch_doc, data, num_bytes)) {
+			assert(!"mim protocol error"); // XXX? should I have a "failable" flag? eg. for human input
+		}
+
+		mim_state_copy(msr, &scratch_state);
+		document_copy(doc, &scratch_doc);
+
 		uint8_t header[1<<8];
 		uint8_t* hp = header;
 		uint8_t* end = header + sizeof(header);
 		write_varint64(&hp, end, g.using_personal_mim_state_id);
-		write_varint64(&hp, end, n);
+		write_varint64(&hp, end, num_bytes);
 		const size_t nh = hp - header;
 		ringbuf_writen(&g.command_ringbuf, header, nh);
-		ringbuf_writen(&g.command_ringbuf, g.mim_buffer.items, n);
+		ringbuf_writen(&g.command_ringbuf, data, num_bytes);
 		ringbuf_commit(&g.command_ringbuf);
 	}
 	g.in_mim = 0;
@@ -437,6 +504,13 @@ void mimf(const char* fmt, ...)
 	va_start(va, fmt);
 	stbsp_vsprintfcb(wrote_mim_cb, NULL, get_mim_buffer_top(), fmt, va);
 	va_end(va);
+}
+
+void mim8(uint8_t v)
+{
+	uint8_t* p = (uint8_t*)get_mim_buffer_top();
+	*p = v;
+	daSetLen(g.mim_buffer, daLen(g.mim_buffer)+1);
 }
 
 void gig_selftest(void)

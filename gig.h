@@ -10,11 +10,9 @@ struct location {
 	int column;
 };
 
-#if 0
 struct range {
 	struct location from, to;
 };
-#endif
 
 struct fat_char {
 	unsigned codepoint;
@@ -26,18 +24,10 @@ struct fat_char {
 	unsigned defer  :1;
 };
 
-struct anchor {
-	int id;
-	struct location loc;
-};
-
 struct caret {
-	int anchor_id;
-};
-
-struct selection {
-	int anchor0_id;
-	int anchor1_id;
+	int tag;
+	//unsigned flags; // visible? visibility-groups?
+	struct range range;
 };
 
 struct mim_state {
@@ -45,9 +35,8 @@ struct mim_state {
 	int personal_id;
 	// [artist_id,personal_id] is the "unique key"
 	int document_id;
-	DA(struct anchor, anchors);
 	DA(struct caret, carets);
-	DA(struct selection, selections);
+	// (update mim_state_copy() when adding da-fields here)
 };
 
 enum document_type {
@@ -82,12 +71,12 @@ enum document_flag {
 };
 
 struct document {
-	int flags;
+	//int flags; // XXX flags? for what?
 	int id;
 	//int version;
 	enum document_type type;
 	DA(struct fat_char, fat_chars);
-	// beware document_copy() when adding new arrays
+	// (update document_copy() when adding da-fields here)
 };
 
 void gig_init(void);
@@ -102,16 +91,9 @@ void end_mim(void);
 
 FORMATPRINTF1
 void mimf(const char* fmt, ...);
+void mim8(uint8_t v);
 
-int get_num_mim_states(void);
-struct mim_state* get_cool_mim_state_by_personal_id(int id);
-struct mim_state* get_hot_mim_state_by_personal_id(int id);
-struct mim_state* get_mim_state_by_index(int index);
-
-int get_num_documents(void);
-struct document* get_document_by_index(int);
-struct document* get_document_by_id(int);
-struct document* find_document_by_id(int);
+void get_state_and_doc(int personal_id, struct mim_state** out_mim_state, struct document** out_doc);
 
 int get_my_artist_id(void);
 
