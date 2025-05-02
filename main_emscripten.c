@@ -15,10 +15,12 @@
 
 #include "utf8.h"
 #include "impl_gl.h"
+#include "da.h"
 
 static struct {
 	int num_cores;
 	double start_time;
+	DA(char, text_buffer);
 } g;
 
 EM_JS(int, canvas_get_width, (void), {
@@ -138,10 +140,11 @@ void* heap_malloc(size_t s)
 }
 
 // (NOTE _handle_text_input in Makefile.emscripten)
-void handle_text_input(const char* s) 
+void handle_text_input(const char* s)
 {
-	// FIXME gui_on_text() must be called before gui_begin_frame() and after gui_draw()
-	gui_on_text(s);
+	const size_t n = strlen(s);
+	char* p = daAddNPtr(g.text_buffer, n);
+	memcpy(p, s, n);
 }
 
 // (NOTE _handle_file_drop in Makefile.emscripten)
@@ -160,6 +163,11 @@ void set_drag_state(int is_dragging)
 static void main_loop(void)
 {
 	gui_begin_frame();
+	if (daLen(g.text_buffer) > 0) {
+		daPut(g.text_buffer, 0);
+		gui_on_text(daPtr0(g.text_buffer));
+		daReset(g.text_buffer);
+	}
 	const int canvas_width = canvas_get_width();
 	const int canvas_height = canvas_get_height();
 	gl_frame(canvas_width, canvas_height);
