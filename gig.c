@@ -87,7 +87,7 @@ static int document_locate(struct document* doc, struct location loc)
 {
 	const int num_chars = daLen(doc->fat_chars);
 	int line=1;
-	int column=1;
+	int column=0;
 	for (int i=0; i<num_chars; ++i) {
 		++column;
 		if ((loc.line < line) || (loc.line == line && loc.column <= column)) {
@@ -405,6 +405,8 @@ static int mim_chew(struct mim_state* ms, struct document* doc, const uint8_t* i
 						.timestamp = get_nanoseconds(),
 						.artist_id = get_my_artist_id(),
 					}));
+					++car->range.to.column;
+					car->range.from = car->range.to;
 				}
 			}
 		}	break;
