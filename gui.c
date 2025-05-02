@@ -1132,10 +1132,10 @@ static void handle_editor_input(struct pane* pane)
 		if (down && mod==0) {
 			switch (code) {
 			// XXX
-			case KEY_ARROW_LEFT:  mimf("h"); break;
-			case KEY_ARROW_RIGHT: mimf("l"); break;
-			case KEY_ARROW_UP:    mimf("k"); break;
-			case KEY_ARROW_DOWN:  mimf("j"); break;
+			case KEY_ARROW_LEFT:  mimf("0Mh"); break;
+			case KEY_ARROW_RIGHT: mimf("0Ml"); break;
+			case KEY_ARROW_UP:    mimf("0Mk"); break;
+			case KEY_ARROW_DOWN:  mimf("0Mj"); break;
 			//case KEY_ENTER:       mimf("\n"); break;
 			//case KEY_ESCAPE:      mimf("\033"); break;
 			default: break;
@@ -1182,12 +1182,42 @@ static void draw_code_pane(struct pane* pane)
 	struct document* doc;
 	get_state_and_doc(pane->code.personal_mim_state_id, &ms, &doc);
 
-	const int num_chars = daLen(doc->fat_chars);
-	int line_index = 0;
-	for (int i=0; i<num_chars; ++i) {
-		struct fat_char* fc = daPtr(doc->fat_chars, i);
+	const int num_carets = daLen(ms->carets);
+
+	struct doc_iterator it = doc_iterator(doc);
+	while (doc_iterator_next(&it)) {
+		int draw_caret = 0;
+		int draw_selection = 0;
+		for (int i=0; i<num_carets; ++i) {
+			struct caret* c = daPtr(ms->carets, i);
+			struct location loc0 = c->range.from;
+			struct location loc1 = c->range.to;
+			const int cmp0 = location_compare(&it.location, &loc0);
+			const int cmp1 = location_compare(&it.location, &loc1);
+			const int is_caret = (0 == location_compare(&loc0, &loc1));
+			if (is_caret && cmp1==0) {
+				draw_caret = 1;
+			} else if (!is_caret && cmp0>=0 && cmp1<0) {
+				draw_selection = 1;
+			}
+		}
+
+		if (draw_caret) {
+			// XXX hax
+			const int save_cursor_x = g.cursor_x;
+			const int save_cursor_y = g.cursor_y;
+			g.cursor_x -= 7;
+			put_char('|');
+			g.cursor_x = save_cursor_x;
+			g.cursor_y = save_cursor_y;
+		}
+		if (draw_selection) assert(!"TODO draw selection");
+
+		struct fat_char* fc = it.fat_char;
+		if (fc == NULL) continue;
 		const unsigned c = fc->codepoint;
 		if (c == '\n') {
+			const int line_index = it.location.line - 1;
 			float /*ascent0,*/ descent0,   line_gap0;
 			float   ascent1, /*descent1,*/ line_gap1;
 			get_current_line_metrics(/*&ascent0*/NULL, &descent0, &line_gap0);
@@ -1195,7 +1225,6 @@ static void draw_code_pane(struct pane* pane)
 			get_current_line_metrics(&ascent1, /*&descent1*/NULL, &line_gap1);
 			const float y_advance = ascent1 - descent0 + (line_gap0 + line_gap1)*.5f;
 			set_color3f(.9,line_index%4,.9);
-			line_index++;
 			g.cursor_x = g.cursor_x0;
 			g.cursor_y += (int)ceilf(y_advance);
 		}
@@ -1205,6 +1234,7 @@ static void draw_code_pane(struct pane* pane)
 		put_char(c);
 	}
 
+	#if 0
 	g.cursor_x = g.cursor_x0;
 	g.cursor_y += 40;
 	set_color3f(.8,.8,.8);
@@ -1224,6 +1254,7 @@ static void draw_code_pane(struct pane* pane)
 		set_color3f(.9,j,.9);
 		for (int i=0;i<4;++i) put_char(SPECIAL_CODEPOINT_BLOCK);
 	}
+	#endif
 }
 
 static void gui_draw1(void)

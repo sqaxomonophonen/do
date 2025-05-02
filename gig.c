@@ -85,21 +85,9 @@ static void mim_state_copy(struct mim_state* dst, struct mim_state* src)
 
 static int document_locate(struct document* doc, struct location loc)
 {
-	const int num_chars = daLen(doc->fat_chars);
-	int line=1;
-	int column=0;
-	for (int i=0; i<num_chars; ++i) {
-		++column;
-		if ((loc.line < line) || (loc.line == line && loc.column <= column)) {
-			return i;
-		}
-		struct fat_char* fc = daPtr(doc->fat_chars, i);
-		if (fc->codepoint == '\n') {
-			++line;
-			column=0;
-		}
-	}
-	return num_chars;
+	struct doc_iterator it = doc_iterator(doc);
+	doc_iterator_locate(&it, loc);
+	return it.offset;
 }
 
 struct snapshot {
@@ -244,27 +232,6 @@ void get_state_and_doc(int personal_id, struct mim_state** out_mim_state, struct
 	assert(!"state not found");
 }
 
-#if 0
-int mim_state_cool_compar(struct mim_state_cool* a, struct mim_state_cool* b)
-{
-	const int d0 = a->document_id - b->document_id;
-	if (d0!=0) return d0;
-	const int d1 = (int)a->mode - (int)b->mode;
-	if (d1!=0) return d1;
-	const int n = arrlen(a->query_arr);
-	const int d2 = n - arrlen(b->query_arr);
-	if (d2!=0) return d2;
-	if (n>0) {
-		const int d3 = memcmp(a->query_arr, b->query_arr, n);
-		if (d3!=0) return d3;
-	}
-	if (arrlen(a->caret_id_arr)>0 || arrlen(b->caret_id_arr)>0) {
-		assert(!"TODO");
-	}
-	return 0;
-}
-#endif
-
 FORMATPRINTF1
 static void mimerr(const char* fmt, ...)
 {
@@ -274,6 +241,13 @@ static void mimerr(const char* fmt, ...)
 	stbsp_vsnprintf(msg, sizeof msg, fmt, va);
 	va_end(va);
 	fprintf(stderr, "MIMERR :: [%s]\n", msg);
+}
+
+static void doc_location_constraint(struct document* doc, struct location* loc)
+{
+	struct doc_iterator it = doc_iterator(doc);
+	doc_iterator_locate(&it, *loc);
+	*loc = it.location;
 }
 
 static int mim_chew(struct mim_state* ms, struct document* doc, const uint8_t* input, int num_bytes)
@@ -292,6 +266,7 @@ static int mim_chew(struct mim_state* ms, struct document* doc, const uint8_t* i
 		INIT=1,
 		NUMBER=2,
 		INSERT_STRING=3,
+		MOTION=4,
 	};
 
 	enum {
@@ -345,6 +320,17 @@ static int mim_chew(struct mim_state* ms, struct document* doc, const uint8_t* i
 					}
 					assert(!"TODO C");
 					daReset(number_stack);
+				}	break;
+
+				case 'M': {
+					if (num_args != 1) {
+						mimerr("command 'i' expected 1 argument; got %d", num_args);
+						return 0;
+					}
+					arg_tag = daGet(number_stack, 0);
+					daReset(number_stack);
+					previous_mode = mode;
+					mode = MOTION;
 				}	break;
 
 				case 'i': {
@@ -411,7 +397,62 @@ static int mim_chew(struct mim_state* ms, struct document* doc, const uint8_t* i
 			}
 		}	break;
 
-		default: assert(!"unhandled mim_chew()-mode");
+		case MOTION: {
+
+			switch (cp) {
+
+			case 'l':   // right
+			case 'h': { // left
+				for (int i=0; i<num_carets; ++i) {
+					struct caret* car = daPtr(ms->carets, i);
+					if (car->tag != arg_tag) continue;
+					struct location* l0 = &car->range.from;
+					struct location* l1 = &car->range.to;
+					const int is_right = (cp=='l');
+					const int is_left  = (cp=='h');
+					if (0 == location_compare(l0,l1)) {
+						if (is_right) {
+							++l1->column;
+							doc_location_constraint(doc, l1);
+						}
+						if (is_left) {
+							--l0->column;
+							doc_location_constraint(doc, l0);
+						}
+					}
+					if (is_left)  *l1 = *l0;
+					if (is_right) *l0 = *l1;
+				}
+			}	break;
+
+			case 'k': { // up
+				for (int i=0; i<num_carets; ++i) {
+					struct caret* car = daPtr(ms->carets, i);
+					if (car->tag != arg_tag) continue;
+					assert(!"TODO up");
+				}
+			}	break;
+
+			case 'j': { // down
+				for (int i=0; i<num_carets; ++i) {
+					struct caret* car = daPtr(ms->carets, i);
+					if (car->tag != arg_tag) continue;
+					assert(!"TODO down");
+				}
+			}	break;
+
+			default:
+				assert(!"unhandled motion char");
+
+			}
+
+			assert(previous_mode == INIT);
+			mode = previous_mode;
+
+		}	break;
+
+		default:
+			assert(!"unhandled mim_chew()-mode");
 
 		}
 	}

@@ -10,6 +10,14 @@ struct location {
 	int column;
 };
 
+static inline int location_compare(struct location* a, struct location* b)
+{
+	const int d0 = a->line - b->line;
+	if (d0 != 0) return d0;
+	const int d1 = a->column - b->column;
+	return d1;
+}
+
 struct range {
 	struct location from, to;
 };
@@ -78,6 +86,70 @@ struct document {
 	DA(struct fat_char, fat_chars);
 	// (update document_copy() when adding da-fields here)
 };
+
+struct doc_iterator {
+	struct document* doc;
+	int offset;
+	struct fat_char* fat_char;
+	struct location location;
+	unsigned new_line :1;
+	unsigned done :1;
+	unsigned last :1;
+};
+
+static inline struct doc_iterator doc_iterator(struct document* doc)
+{
+	return ((struct doc_iterator) {
+		.doc = doc,
+		.new_line = 1,
+		.offset = -1,
+	});
+}
+
+static inline int doc_iterator_next(struct doc_iterator* it)
+{
+	assert((!it->done) && "you cannot call this function after it has returned 0");
+	struct document* d = it->doc;
+	const int num_chars = daLen(d->fat_chars);
+	if (it->last) {
+		it->done = 1;
+		assert(it->offset == num_chars);
+		return 0;
+	}
+
+	if (it->new_line) {
+		++it->location.line;
+		it->location.column = 1;
+		it->new_line = 0;
+	} else {
+		++it->location.column;
+	}
+
+	++it->offset;
+	const int off = it->offset;
+	if (off < num_chars) {
+		it->fat_char = daPtr(d->fat_chars, off);
+		if (it->fat_char->codepoint == '\n') {
+			it->new_line = 1;
+		}
+	} else {
+		assert(off == num_chars);
+		it->fat_char = NULL;
+		it->last = 1;
+	}
+
+	return 1;
+}
+
+static inline void doc_iterator_locate(struct doc_iterator* it, struct location loc)
+{
+	while (doc_iterator_next(it)) {
+		struct location dloc = it->location;
+		if ((loc.line < dloc.line) || (loc.line == dloc.line && loc.column <= dloc.column)) {
+			break;
+		}
+	}
+}
 
 void gig_init(void);
 void gig_spool(void);
