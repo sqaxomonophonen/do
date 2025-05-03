@@ -1238,6 +1238,7 @@ static void draw_code_pane(struct pane* pane)
 			struct caret* c = daPtr(ms->carets, i);
 			struct location* loc0 = &c->loc0;
 			struct location* loc1 = &c->loc1;
+			struct location* loc1r = loc1;
 			location_sort2(&loc0, &loc1);
 			const int d0 = location_line_distance(loc0 , &it.location);
 			const int d1 = location_line_distance(loc1 , &it.location);
@@ -1245,10 +1246,10 @@ static void draw_code_pane(struct pane* pane)
 			if (min_y_dist < 0 || d1 < min_y_dist) min_y_dist = d1;
 			const int cmp0 = location_compare(&it.location, loc0);
 			const int cmp1 = location_compare(&it.location, loc1);
-			const int is_caret = (0 == location_compare(loc0, loc1));
-			if (is_caret && cmp1==0) {
-				draw_caret = 1;
-			} else if (!is_caret && cmp0>=0 && cmp1<0) {
+			const int cmp1r = location_compare(&it.location, loc1r);
+			const int same = (0 == location_compare(loc0, loc1));
+			if (cmp1r==0) draw_caret = 1;
+			if (!same && cmp0>=0 && cmp1<0) {
 				bg_color[2] += 0.5f;
 			}
 		}
