@@ -1280,7 +1280,6 @@ static void draw_code_pane(struct pane* pane)
 		if (cp == 0) continue;
 
 		if (cp == '\n') {
-			const int line_index = it.location.line + 1;
 			float /*ascent0,*/ descent0,   line_gap0;
 			float   ascent1, /*descent1,*/ line_gap1;
 			get_current_line_metrics(/*&ascent0*/NULL, &descent0, &line_gap0);
