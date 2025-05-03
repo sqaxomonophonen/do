@@ -184,10 +184,8 @@ void gig_init(void)
 	};
 	struct caret cr = {
 		.tag=0,
-		.range={
-			.from={.line=1,.column=1},
-			.to={.line=1,.column=1},
-		},
+		.loc0={.line=1,.column=1},
+		.loc1={.line=1,.column=1},
 	};
 	daPut(ms1.carets, cr);
 	daPut(ss->mim_states, ms1);
@@ -279,6 +277,7 @@ static int mim_spool(struct mim_state* ms, struct document* doc, const uint8_t* 
 	int push_cp = -1;
 	int arg_tag = -1;
 	int arg_num = -1;
+	int motion_cmd = -1;
 
 	const int64_t now = get_nanoseconds();
 
@@ -325,6 +324,7 @@ static int mim_spool(struct mim_state* ms, struct document* doc, const uint8_t* 
 					daReset(number_stack);
 				}	break;
 
+				case 'S':
 				case 'M': {
 					if (num_args != 1) {
 						mimerr("command 'i' expected 1 argument; got %d", num_args);
@@ -333,6 +333,7 @@ static int mim_spool(struct mim_state* ms, struct document* doc, const uint8_t* 
 					arg_tag = daGet(number_stack, 0);
 					daReset(number_stack);
 					previous_mode = mode;
+					motion_cmd = cp;
 					mode = MOTION;
 				}	break;
 
@@ -361,13 +362,10 @@ static int mim_spool(struct mim_state* ms, struct document* doc, const uint8_t* 
 					for (int i=0; i<num_carets; ++i) {
 						struct caret* car = daPtr(ms->carets, i);
 						if (car->tag != arg_tag) continue;
-
-						struct location* loc0 = &car->range.from;
-						struct location* loc1 = &car->range.to;
-
+						struct location* loc0 = &car->loc0;
+						struct location* loc1 = &car->loc1;
 						const int off0 = document_locate(doc, loc0);
 						const int off1 = document_locate(doc, loc1);
-
 						if (off0 == off1) {
 							int o = off0;
 							assert(o == off1);
@@ -407,6 +405,7 @@ static int mim_spool(struct mim_state* ms, struct document* doc, const uint8_t* 
 								o += dc;
 							}
 						} else {
+							location_sort2(&loc0, &loc1);
 							assert(!"XXX TODO range delete");
 						}
 					}
@@ -452,7 +451,10 @@ static int mim_spool(struct mim_state* ms, struct document* doc, const uint8_t* 
 				for (int i=0; i<num_carets; ++i) {
 					struct caret* car = daPtr(ms->carets, i);
 					if (car->tag != arg_tag) continue;
-					const int off = document_locate(doc, &car->range.to);
+					struct location* loc0 = &car->loc0;
+					struct location* loc1 = &car->loc1;
+					location_sort2(&loc0, &loc1);
+					const int off = document_locate(doc, loc1);
 					daIns(doc->fat_chars, off, ((struct fat_char){
 						.codepoint = cp,
 						.timestamp = now,
@@ -461,13 +463,13 @@ static int mim_spool(struct mim_state* ms, struct document* doc, const uint8_t* 
 						.flipped_insert = 1,
 					}));
 					if (cp == '\n') {
-						++car->range.to.line;
-						car->range.to.column = 1;
+						++loc1->line;
+						loc1->column = 1;
 					} else {
-						++car->range.to.column;
+						++loc1->column;
 					}
-					doc_location_constraint(doc, &car->range.to);
-					car->range.from = car->range.to;
+					doc_location_constraint(doc, loc1);
+					*loc0 = *loc1;
 				}
 			}
 		}	break;
@@ -484,35 +486,37 @@ static int mim_spool(struct mim_state* ms, struct document* doc, const uint8_t* 
 			case 'k': // up
 			case 'j': // down
 			{
+				const int is_left  = (cp=='h');
+				const int is_right = (cp=='l');
+				const int is_up    = (cp=='k');
+				const int is_down  = (cp=='j');
+
 				for (int i=0; i<num_carets; ++i) {
 					struct caret* car = daPtr(ms->carets, i);
 					if (car->tag != arg_tag) continue;
-					struct location* l0 = &car->range.from;
-					struct location* l1 = &car->range.to;
-					const int is_left  = (cp=='h');
-					const int is_right = (cp=='l');
-					const int is_up    = (cp=='k');
-					const int is_down  = (cp=='j');
-					if (0 == location_compare(l0,l1)) {
+					struct location* loc0 = motion_cmd=='S' ? &car->loc1 : &car->loc0;
+					struct location* loc1 = &car->loc1;
+					location_sort2(&loc0, &loc1);
+					if (0 == location_compare(loc0,loc1)) {
 						if (is_left) {
-							--l0->column;
-							doc_location_constraint(doc, l0);
+							--loc0->column;
+							doc_location_constraint(doc, loc0);
 						}
 						if (is_right) {
-							++l1->column;
-							doc_location_constraint(doc, l1);
+							++loc1->column;
+							doc_location_constraint(doc, loc1);
 						}
 						if (is_up) {
-							--l0->line;
-							doc_location_constraint(doc, l0);
+							--loc0->line;
+							doc_location_constraint(doc, loc0);
 						}
 						if (is_down) {
-							++l1->line;
-							doc_location_constraint(doc, l1);
+							++loc1->line;
+							doc_location_constraint(doc, loc1);
 						}
 					}
-					if (is_left  || is_up  ) *l1 = *l0;
-					if (is_right || is_down) *l0 = *l1;
+					if (is_left  || is_up  ) *loc1 = *loc0;
+					if (is_right || is_down) *loc0 = *loc1;
 				}
 			}	break;
 

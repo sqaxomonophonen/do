@@ -24,9 +24,14 @@ static inline int location_line_distance(struct location* a, struct location* b)
 	return d<0 ? -d : d;
 }
 
-struct range {
-	struct location from, to;
-};
+static inline void location_sort2(struct location** a, struct location** b)
+{
+	if (location_compare(*a,*b) > 0) {
+		struct location* tmp = *a;
+		*a = *b;
+		*b = tmp;
+	}
+}
 
 struct fat_char {
 	unsigned codepoint;
@@ -45,7 +50,10 @@ struct fat_char {
 struct caret {
 	int tag;
 	//unsigned flags; // visible? visibility-groups?
-	struct range range;
+	struct location loc0, loc1;
+	// loc0 & loc1 are "unordered"; loc1 can be before loc0 (this makes
+	// shift+arrows easier because loc0 can be fixed and loc1 can be moving
+	// left/right of loc0)
 };
 
 struct mim_state {

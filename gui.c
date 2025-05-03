@@ -1152,9 +1152,18 @@ static void handle_editor_input(struct pane* pane)
 			case KEY_BACKSPACE   : mimf("0X"); break;
 			case KEY_DELETE      : mimf("0x"); break;
 			//case KEY_ESCAPE       mimf("\033"); break;
-			default: break;
 			}
 		}
+
+		if (down && mod==MOD_SHIFT) {
+			switch (code) {
+			case KEY_ARROW_LEFT  : mimf("0Sh"); break;
+			case KEY_ARROW_RIGHT : mimf("0Sl"); break;
+			case KEY_ARROW_UP    : mimf("0Sk"); break;
+			case KEY_ARROW_DOWN  : mimf("0Sj"); break;
+			}
+		}
+
 		if (down && mod&MOD_CONTROL) {
 			switch (code) {
 			case KEY_ENTER       : assert(!"TODO commit");
@@ -1222,21 +1231,21 @@ static void draw_code_pane(struct pane* pane)
 	while (doc_iterator_next(&it)) {
 		int draw_caret = 0;
 
-
 		float bg_color[3] = {0,0,0};
 
 		int min_y_dist = -1;
 		for (int i=0; i<num_carets; ++i) {
 			struct caret* c = daPtr(ms->carets, i);
-			struct location loc0 = c->range.from;
-			struct location loc1 = c->range.to;
-			const int d0 = location_line_distance(&loc0 , &it.location);
-			const int d1 = location_line_distance(&loc1 , &it.location);
+			struct location* loc0 = &c->loc0;
+			struct location* loc1 = &c->loc1;
+			location_sort2(&loc0, &loc1);
+			const int d0 = location_line_distance(loc0 , &it.location);
+			const int d1 = location_line_distance(loc1 , &it.location);
 			if (min_y_dist < 0 || d0 < min_y_dist) min_y_dist = d0;
 			if (min_y_dist < 0 || d1 < min_y_dist) min_y_dist = d1;
-			const int cmp0 = location_compare(&it.location, &loc0);
-			const int cmp1 = location_compare(&it.location, &loc1);
-			const int is_caret = (0 == location_compare(&loc0, &loc1));
+			const int cmp0 = location_compare(&it.location, loc0);
+			const int cmp1 = location_compare(&it.location, loc1);
+			const int is_caret = (0 == location_compare(loc0, loc1));
 			if (is_caret && cmp1==0) {
 				draw_caret = 1;
 			} else if (!is_caret && cmp0>=0 && cmp1<0) {
