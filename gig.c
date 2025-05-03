@@ -280,6 +280,8 @@ static int mim_spool(struct mim_state* ms, struct document* doc, const uint8_t* 
 	int arg_tag = -1;
 	int arg_num = -1;
 
+	const int64_t now = get_nanoseconds();
+
 	while ((push_cp>=0) || (remaining>0)) {
 		const int cp = (push_cp>=0) ? push_cp : utf8_decode(&p, &remaining);
 		push_cp = -1;
@@ -391,7 +393,11 @@ static int mim_spool(struct mim_state* ms, struct document* doc, const uint8_t* 
 										dc=m1;
 									} else {
 										assert((!fc->is_insert) && (!fc->is_delete));
-										fc->is_delete = 1;
+										if (fc->is_delete == 0) {
+											fc->is_delete = 1;
+											fc->flipped_delete = 1;
+											fc->timestamp = now;
+										}
 										dc=m1;
 									}
 								}
@@ -449,9 +455,10 @@ static int mim_spool(struct mim_state* ms, struct document* doc, const uint8_t* 
 					const int off = document_locate(doc, &car->range.to);
 					daIns(doc->fat_chars, off, ((struct fat_char){
 						.codepoint = cp,
-						.timestamp = get_nanoseconds(),
+						.timestamp = now,
 						.artist_id = get_my_artist_id(),
 						.is_insert = 1,
+						.flipped_insert = 1,
 					}));
 					if (cp == '\n') {
 						++car->range.to.line;

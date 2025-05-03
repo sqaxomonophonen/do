@@ -36,6 +36,10 @@ struct fat_char {
 	unsigned is_insert :1;
 	unsigned is_delete :1;
 	unsigned is_defer  :1;
+	// TODO these should be cleared after being "acknowledged"?
+	unsigned flipped_insert :1;
+	unsigned flipped_delete :1;
+	unsigned flipped_defer  :1;
 };
 
 struct caret {
