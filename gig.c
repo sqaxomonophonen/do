@@ -250,7 +250,7 @@ static void doc_location_constraint(struct document* doc, struct location* loc)
 	*loc = it.location;
 }
 
-static int mim_chew(struct mim_state* ms, struct document* doc, const uint8_t* input, int num_bytes)
+static int mim_spool(struct mim_state* ms, struct document* doc, const uint8_t* input, int num_bytes)
 {
 	assert((ms->document_id == doc->id) && "mim state / document mismatch");
 
@@ -390,8 +390,15 @@ static int mim_chew(struct mim_state* ms, struct document* doc, const uint8_t* i
 						.codepoint = cp,
 						.timestamp = get_nanoseconds(),
 						.artist_id = get_my_artist_id(),
+						.is_insert = 1,
 					}));
-					++car->range.to.column;
+					if (cp == '\n') {
+						++car->range.to.line;
+						car->range.to.column = 1;
+					} else {
+						++car->range.to.column;
+					}
+					doc_location_constraint(doc, &car->range.to);
 					car->range.from = car->range.to;
 				}
 			}
@@ -399,45 +406,45 @@ static int mim_chew(struct mim_state* ms, struct document* doc, const uint8_t* i
 
 		case MOTION: {
 
+			assert(daLen(number_stack) == 0);
+			// TODO read number?
+
 			switch (cp) {
 
-			case 'l':   // right
-			case 'h': { // left
+			case 'h': // left
+			case 'l': // right
+			case 'k': // up
+			case 'j': // down
+			{
 				for (int i=0; i<num_carets; ++i) {
 					struct caret* car = daPtr(ms->carets, i);
 					if (car->tag != arg_tag) continue;
 					struct location* l0 = &car->range.from;
 					struct location* l1 = &car->range.to;
-					const int is_right = (cp=='l');
 					const int is_left  = (cp=='h');
+					const int is_right = (cp=='l');
+					const int is_up    = (cp=='k');
+					const int is_down  = (cp=='j');
 					if (0 == location_compare(l0,l1)) {
-						if (is_right) {
-							++l1->column;
-							doc_location_constraint(doc, l1);
-						}
 						if (is_left) {
 							--l0->column;
 							doc_location_constraint(doc, l0);
 						}
+						if (is_right) {
+							++l1->column;
+							doc_location_constraint(doc, l1);
+						}
+						if (is_up) {
+							--l0->line;
+							doc_location_constraint(doc, l0);
+						}
+						if (is_down) {
+							++l1->line;
+							doc_location_constraint(doc, l1);
+						}
 					}
-					if (is_left)  *l1 = *l0;
-					if (is_right) *l0 = *l1;
-				}
-			}	break;
-
-			case 'k': { // up
-				for (int i=0; i<num_carets; ++i) {
-					struct caret* car = daPtr(ms->carets, i);
-					if (car->tag != arg_tag) continue;
-					assert(!"TODO up");
-				}
-			}	break;
-
-			case 'j': { // down
-				for (int i=0; i<num_carets; ++i) {
-					struct caret* car = daPtr(ms->carets, i);
-					if (car->tag != arg_tag) continue;
-					assert(!"TODO down");
+					if (is_left  || is_up  ) *l1 = *l0;
+					if (is_right || is_down) *l0 = *l1;
 				}
 			}	break;
 
@@ -452,7 +459,7 @@ static int mim_chew(struct mim_state* ms, struct document* doc, const uint8_t* i
 		}	break;
 
 		default:
-			assert(!"unhandled mim_chew()-mode");
+			assert(!"unhandled mim_spool()-mode");
 
 		}
 	}
@@ -510,7 +517,7 @@ void end_mim(void)
 		mim_state_copy(&scratch_state, msr);
 		document_copy(&scratch_doc, doc);
 
-		if (!mim_chew(&scratch_state, &scratch_doc, data, num_bytes)) {
+		if (!mim_spool(&scratch_state, &scratch_doc, data, num_bytes)) {
 			assert(!"mim protocol error"); // XXX? should I have a "failable" flag? eg. for human input
 		}
 

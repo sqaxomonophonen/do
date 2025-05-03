@@ -24,12 +24,12 @@ struct range {
 
 struct fat_char {
 	unsigned codepoint;
-	unsigned timestamp;
+	unsigned timestamp; // last change (or created)
 	unsigned artist_id;
 	unsigned color[3];
-	unsigned insert :1;
-	unsigned delete :1;
-	unsigned defer  :1;
+	unsigned is_insert :1;
+	unsigned is_delete :1;
+	unsigned is_defer  :1;
 };
 
 struct caret {

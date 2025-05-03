@@ -1132,13 +1132,19 @@ static void handle_editor_input(struct pane* pane)
 		if (down && mod==0) {
 			switch (code) {
 			// XXX
-			case KEY_ARROW_LEFT:  mimf("0Mh"); break;
-			case KEY_ARROW_RIGHT: mimf("0Ml"); break;
-			case KEY_ARROW_UP:    mimf("0Mk"); break;
-			case KEY_ARROW_DOWN:  mimf("0Mj"); break;
-			//case KEY_ENTER:       mimf("\n"); break;
-			//case KEY_ESCAPE:      mimf("\033"); break;
+			case KEY_ARROW_LEFT  : mimf("0Mh"); break;
+			case KEY_ARROW_RIGHT : mimf("0Ml"); break;
+			case KEY_ARROW_UP    : mimf("0Mk"); break;
+			case KEY_ARROW_DOWN  : mimf("0Mj"); break;
+			case KEY_ENTER       : mimf("0i\n\033"); break;
+			case KEY_BACKSPACE   : mimf("!"); break;
+			//case KEY_ESCAPE       mimf("\033"); break;
 			default: break;
+			}
+		}
+		if (down && mod&MOD_CONTROL) {
+			switch (code) {
+			case KEY_ENTER       : assert(!"TODO commit");
 			}
 		}
 	}
@@ -1217,7 +1223,7 @@ static void draw_code_pane(struct pane* pane)
 		if (fc == NULL) continue;
 		const unsigned c = fc->codepoint;
 		if (c == '\n') {
-			const int line_index = it.location.line - 1;
+			const int line_index = it.location.line + 1;
 			float /*ascent0,*/ descent0,   line_gap0;
 			float   ascent1, /*descent1,*/ line_gap1;
 			get_current_line_metrics(/*&ascent0*/NULL, &descent0, &line_gap0);
