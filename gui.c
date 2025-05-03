@@ -155,6 +155,13 @@ static float font_config_get_y_stretch_level_scale(struct font_config* fc, int i
 	return fc->y_scalar_min + (fc->y_scalar_max - fc->y_scalar_min) * ((float)index / (float)(n-1));
 }
 
+struct draw_state {
+	int cursor_x0, cursor_x, cursor_y;
+	float current_color[3];
+	int current_font_spec_index;
+	int current_y_stretch_index;
+};
+
 static struct {
 	DA(struct window, windows);
 	DA(struct pane, panes);
@@ -174,17 +181,14 @@ static struct {
 	DA(vertex_index, vertex_indices);
 	int64_t last_frame_time;
 	float fps;
-	int cursor_x0, cursor_x, cursor_y;
 	struct render_mode render_mode;
-	int current_font_spec_index;
-	int current_y_stretch_index;
-	float current_color[4];
 	struct window* current_window;
 	int focus_sequence;
 	int current_focus_id;
 	DA(int, key_buffer);
 	DA(char, text_buffer);
 	int is_dragging;
+	struct draw_state state, save_state;
 } g;
 
 static inline int make_focus_id(void)
@@ -205,14 +209,14 @@ static void unfocus(void)
 
 static struct font_spec* get_current_font_spec(void)
 {
-	return &g.font_config.font_specs[g.current_font_spec_index];
+	return &g.font_config.font_specs[g.state.current_font_spec_index];
 }
 
 static float get_current_y_stretch_scale(void)
 {
 	struct font_spec* spec = get_current_font_spec();
 	if (!spec->uses_y_stretch) return 1.0f;
-	return font_config_get_y_stretch_level_scale(&g.font_config, g.current_y_stretch_index);
+	return font_config_get_y_stretch_level_scale(&g.font_config, g.state.current_y_stretch_index);
 }
 
 int get_num_windows(void)
@@ -400,8 +404,13 @@ static int build_atlas(void)
 							&x0, &y0, &x1, &y1);
 						switch (codepoint) {
 						case SPECIAL_CODEPOINT_MISSING_CHARACTER:
+							// use boxy glyph bbox as-is
+							break;
 						case SPECIAL_CODEPOINT_BLOCK:
-							// ok: use boxy glyph bbox
+							// expand boxy bbox (XXX not sure this is "right"
+							// but it seems to work?)
+							--x0; --y0;
+							++x1; ++y1;
 							break;
 						case SPECIAL_CODEPOINT_CARET:
 							// use boxy height, but our own width for caret
@@ -409,6 +418,7 @@ static int build_atlas(void)
 							// height?)
 							x0=0;
 							x1=2;
+							--y0; ++y1;
 							break;
 						default: assert(!"unhandled case");
 						}
@@ -1031,8 +1041,8 @@ static void put_char(int codepoint)
 		return;
 	}
 	struct atlas_lut_key key = {
-		.font_spec_index = g.current_font_spec_index,
-		.y_stretch_index = g.current_y_stretch_index,
+		.font_spec_index = g.state.current_font_spec_index,
+		.y_stretch_index = g.state.current_y_stretch_index,
 		.codepoint = codepoint,
 	};
 	const struct atlas_lut_info info = hmget(g.atlas_lut, key);
@@ -1047,33 +1057,35 @@ static void put_char(int codepoint)
 			const stbrp_rect rect = daGet(g.atlas_pack_rects, i+info.rect_index0);
 			const float r = b->radius;
 			push_mesh_quad(
-				g.cursor_x + ((float)info.rect.x) - r, // XXX should have `- ascent` too, but looks wrong?
-				g.cursor_y + ((float)info.rect.y) - r,
+				g.state.cursor_x + ((float)info.rect.x) - r, // XXX should have `- ascent` too, but looks wrong?
+				g.state.cursor_y + ((float)info.rect.y) - r,
 				w+r*2   , h+r*2 ,
 				rect.x   , rect.y ,
 				rect.w-1 , rect.h-1,
-				make_hdr_rgba(i, g.current_color)
+				make_hdr_rgba(i, g.state.current_color)
 			);
 		}
 	}
 
-	struct font_spec* spec = &fc->font_specs[g.current_font_spec_index];
-	g.cursor_x += spec->_x_spacing;
+	struct font_spec* spec = &fc->font_specs[g.state.current_font_spec_index];
+	g.state.cursor_x += spec->_x_spacing;
 }
 
 static void set_y_stretch_index(int index)
 {
 	struct font_config* fc = &g.font_config;
 	assert((0 <= index) && (index < fc->num_y_stretch_levels));
-	g.current_y_stretch_index = index;
+	g.state.current_y_stretch_index = index;
+}
+
+static void set_colorv(float color[3])
+{
+	for (int i=0; i<3; ++i) g.state.current_color[i] = color[i];
 }
 
 static void set_color3f(float red, float green, float blue)
 {
-	g.current_color[0] = red;
-	g.current_color[1] = green;
-	g.current_color[2] = blue;
-	g.current_color[3] = 1;
+	set_colorv((float[]){red,green,blue});
 }
 
 static void update_fps(void)
@@ -1159,6 +1171,21 @@ static void handle_editor_input(struct pane* pane)
 	end_mim();
 }
 
+static void save(void)
+{
+	g.save_state = g.state;
+}
+
+static void restore(void)
+{
+	g.state = g.save_state;
+}
+
+static inline int has_light(float color[3])
+{
+	return color[0]>0 || color[1]>0 || color[2]>0;
+}
+
 static void draw_code_pane(struct pane* pane)
 {
 	assert(pane->type == CODE);
@@ -1177,8 +1204,8 @@ static void draw_code_pane(struct pane* pane)
 	set_texture(g.atlas_texture_id);
 
 	const int x0 = pr.x+30;
-	g.cursor_x0 = g.cursor_x = x0;
-	g.cursor_y = pr.y+50;
+	g.state.cursor_x0 = g.state.cursor_x = x0;
+	g.state.cursor_y = pr.y+50;
 
 	set_y_stretch_index(0);
 	//set_color3f(.7, 2.7, .7);
@@ -1193,7 +1220,9 @@ static void draw_code_pane(struct pane* pane)
 	struct doc_iterator it = doc_iterator(doc);
 	while (doc_iterator_next(&it)) {
 		int draw_caret = 0;
-		int draw_selection = 0;
+
+		float bg_color[3] = {0,0,0};
+
 		for (int i=0; i<num_carets; ++i) {
 			struct caret* c = daPtr(ms->carets, i);
 			struct location loc0 = c->range.from;
@@ -1204,25 +1233,34 @@ static void draw_code_pane(struct pane* pane)
 			if (is_caret && cmp1==0) {
 				draw_caret = 1;
 			} else if (!is_caret && cmp0>=0 && cmp1<0) {
-				draw_selection = 1;
+				bg_color[2] += 0.5f;
 			}
 		}
 
 		if (draw_caret) {
-			// XXX hax
-			const int save_cursor_x = g.cursor_x;
-			const int save_cursor_y = g.cursor_y;
-			g.cursor_x -= 7;
-			put_char('|');
-			g.cursor_x = save_cursor_x;
-			g.cursor_y = save_cursor_y;
+			save();
+			set_color3f(1,1,3);
+			put_char(SPECIAL_CODEPOINT_CARET);
+			restore();
 		}
-		if (draw_selection) assert(!"TODO draw selection");
 
 		struct fat_char* fc = it.fat_char;
-		if (fc == NULL) continue;
-		const unsigned c = fc->codepoint;
-		if (c == '\n') {
+		const unsigned cp = fc != NULL ? fc->codepoint : 0;
+
+		if (fc != NULL) {
+			if (fc->is_insert) bg_color[1] += 0.2f;
+			if (fc->is_delete) bg_color[0] += 0.3f;
+		}
+
+		if (has_light(bg_color) && cp >= ' ') {
+			save();
+			set_colorv(bg_color);
+			put_char(SPECIAL_CODEPOINT_BLOCK);
+			restore();
+		}
+
+		if (cp == 0) continue;
+		if (cp == '\n') {
 			const int line_index = it.location.line + 1;
 			float /*ascent0,*/ descent0,   line_gap0;
 			float   ascent1, /*descent1,*/ line_gap1;
@@ -1231,13 +1269,13 @@ static void draw_code_pane(struct pane* pane)
 			get_current_line_metrics(&ascent1, /*&descent1*/NULL, &line_gap1);
 			const float y_advance = ascent1 - descent0 + (line_gap0 + line_gap1)*.5f;
 			set_color3f(.9,line_index%4,.9);
-			g.cursor_x = g.cursor_x0;
-			g.cursor_y += (int)ceilf(y_advance);
+			g.state.cursor_x = g.state.cursor_x0;
+			g.state.cursor_y += (int)ceilf(y_advance);
 		}
 
 		// XXX ostensibly I also need to subtract "ascent" from y? but it looks
 		// wrong... text formatting is hard!
-		put_char(c);
+		put_char(cp);
 	}
 
 	#if 0
