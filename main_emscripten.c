@@ -21,6 +21,7 @@ static struct {
 	int num_cores;
 	double start_time;
 	DA(char, text_buffer);
+	DA(int,  key_buffer);
 } g;
 
 EM_JS(int, canvas_get_width, (void), {
@@ -127,7 +128,8 @@ static bool handle_key_event(int type, const EmscriptenKeyboardEvent* ev, void* 
 		//keycode |= mod;
 		//printf("TODO down=%d keycode=%d mod=%d\n", is_down, keycode, mod);
 		// FIXME gui_on_key() must be called before gui_begin_frame() and after gui_draw()
-		gui_on_key((is_down ? KEY_IS_DOWN : 0) | keycode | mod);
+		const int key = ((is_down ? KEY_IS_DOWN : 0) | keycode | mod);
+		daPut(g.key_buffer, key);
 	}
 
 	return false;
@@ -163,11 +165,17 @@ void set_drag_state(int is_dragging)
 static void main_loop(void)
 {
 	gui_begin_frame();
+
 	if (daLen(g.text_buffer) > 0) {
 		daPut(g.text_buffer, 0);
 		gui_on_text(daPtr0(g.text_buffer));
 		daReset(g.text_buffer);
 	}
+
+	const int num_keys = daLen(g.key_buffer);
+	for (int i=0; i<num_keys; ++i) gui_on_key(daGet(g.key_buffer, i));
+	daReset(g.key_buffer);
+
 	const int canvas_width = canvas_get_width();
 	const int canvas_height = canvas_get_height();
 	gl_frame(canvas_width, canvas_height);
