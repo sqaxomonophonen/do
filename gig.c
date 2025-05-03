@@ -83,7 +83,7 @@ static void mim_state_copy(struct mim_state* dst, struct mim_state* src)
 	daCopy(dst->carets, src->carets);
 }
 
-static int document_locate(struct document* doc, struct location loc)
+static int document_locate(struct document* doc, struct location* loc)
 {
 	struct doc_iterator it = doc_iterator(doc);
 	doc_iterator_locate(&it, loc);
@@ -246,7 +246,7 @@ static void mimerr(const char* fmt, ...)
 static void doc_location_constraint(struct document* doc, struct location* loc)
 {
 	struct doc_iterator it = doc_iterator(doc);
-	doc_iterator_locate(&it, *loc);
+	doc_iterator_locate(&it, loc);
 	*loc = it.location;
 }
 
@@ -278,6 +278,7 @@ static int mim_spool(struct mim_state* ms, struct document* doc, const uint8_t* 
 	int number=0, number_sign=0;
 	int push_cp = -1;
 	int arg_tag = -1;
+	int arg_num = -1;
 
 	while ((push_cp>=0) || (remaining>0)) {
 		const int cp = (push_cp>=0) ? push_cp : utf8_decode(&p, &remaining);
@@ -345,6 +346,66 @@ static int mim_spool(struct mim_state* ms, struct document* doc, const uint8_t* 
 					mode = INSERT_STRING;
 				}	break;
 
+				case 'X': // backspace
+				case 'x': // delete
+				{
+					if (num_args != 1) {
+						mimerr("command 'x' expected 1 argument; got %d", num_args);
+						return 0;
+					}
+					arg_tag = daGet(number_stack, 0);
+					arg_num = 1; // XXX make it an optional arg?
+					daReset(number_stack);
+					for (int i=0; i<num_carets; ++i) {
+						struct caret* car = daPtr(ms->carets, i);
+						if (car->tag != arg_tag) continue;
+
+						struct location* loc0 = &car->range.from;
+						struct location* loc1 = &car->range.to;
+
+						const int off0 = document_locate(doc, loc0);
+						const int off1 = document_locate(doc, loc1);
+
+						if (off0 == off1) {
+							int o = off0;
+							assert(o == off1);
+							int d,m0,m1;
+							if (cp == 'X') { // backspace
+								d=-1; m0=-1; m1=-1;
+							} else if (cp == 'x') { // delete
+								d=0;  m0=0;  m1=1;
+							} else {
+								assert(!"unexpected char");
+							}
+
+							for (int i=0; i<arg_num; ++i) {
+								const int num_chars = daLen(doc->fat_chars);
+								const int od = o+d;
+								int dc;
+								if ((0 <= od) && (od < num_chars)) {
+									struct fat_char* fc = daPtr(doc->fat_chars, od);
+									if (fc->is_insert) {
+										daDel(doc->fat_chars, od);
+										dc=m0;
+									} else if (fc->is_delete) {
+										dc=m1;
+									} else {
+										assert((!fc->is_insert) && (!fc->is_delete));
+										fc->is_delete = 1;
+										dc=m1;
+									}
+								}
+								loc1->column += dc;
+								doc_location_constraint(doc, loc1);
+								*loc0 = *loc1;
+								o += dc;
+							}
+						} else {
+							assert(!"XXX TODO range delete");
+						}
+					}
+				}	break;
+
 				default:
 					mimerr("invalid command '%c'/%d", cp, cp);
 					return 0;
@@ -385,7 +446,7 @@ static int mim_spool(struct mim_state* ms, struct document* doc, const uint8_t* 
 				for (int i=0; i<num_carets; ++i) {
 					struct caret* car = daPtr(ms->carets, i);
 					if (car->tag != arg_tag) continue;
-					const int off = document_locate(doc, car->range.to);
+					const int off = document_locate(doc, &car->range.to);
 					daIns(doc->fat_chars, off, ((struct fat_char){
 						.codepoint = cp,
 						.timestamp = get_nanoseconds(),

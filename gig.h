@@ -18,6 +18,12 @@ static inline int location_compare(struct location* a, struct location* b)
 	return d1;
 }
 
+static inline int location_line_distance(struct location* a, struct location* b)
+{
+	const int d = a->line - b->line;
+	return d<0 ? -d : d;
+}
+
 struct range {
 	struct location from, to;
 };
@@ -141,11 +147,11 @@ static inline int doc_iterator_next(struct doc_iterator* it)
 	return 1;
 }
 
-static inline void doc_iterator_locate(struct doc_iterator* it, struct location loc)
+static inline void doc_iterator_locate(struct doc_iterator* it, struct location* loc)
 {
 	while (doc_iterator_next(it)) {
 		struct location dloc = it->location;
-		if ((loc.line < dloc.line) || (loc.line == dloc.line && loc.column <= dloc.column)) {
+		if ((loc->line < dloc.line) || (loc->line == dloc.line && loc->column <= dloc.column)) {
 			break;
 		}
 	}

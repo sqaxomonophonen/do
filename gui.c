@@ -1149,7 +1149,8 @@ static void handle_editor_input(struct pane* pane)
 			case KEY_ARROW_UP    : mimf("0Mk"); break;
 			case KEY_ARROW_DOWN  : mimf("0Mj"); break;
 			case KEY_ENTER       : mimf("0i\n\033"); break;
-			case KEY_BACKSPACE   : mimf("!"); break;
+			case KEY_BACKSPACE   : mimf("0X"); break;
+			case KEY_DELETE      : mimf("0x"); break;
 			//case KEY_ESCAPE       mimf("\033"); break;
 			default: break;
 			}
@@ -1221,12 +1222,18 @@ static void draw_code_pane(struct pane* pane)
 	while (doc_iterator_next(&it)) {
 		int draw_caret = 0;
 
+
 		float bg_color[3] = {0,0,0};
 
+		int min_y_dist = -1;
 		for (int i=0; i<num_carets; ++i) {
 			struct caret* c = daPtr(ms->carets, i);
 			struct location loc0 = c->range.from;
 			struct location loc1 = c->range.to;
+			const int d0 = location_line_distance(&loc0 , &it.location);
+			const int d1 = location_line_distance(&loc1 , &it.location);
+			if (min_y_dist < 0 || d0 < min_y_dist) min_y_dist = d0;
+			if (min_y_dist < 0 || d1 < min_y_dist) min_y_dist = d1;
 			const int cmp0 = location_compare(&it.location, &loc0);
 			const int cmp1 = location_compare(&it.location, &loc1);
 			const int is_caret = (0 == location_compare(&loc0, &loc1));
@@ -1235,6 +1242,17 @@ static void draw_code_pane(struct pane* pane)
 			} else if (!is_caret && cmp0>=0 && cmp1<0) {
 				bg_color[2] += 0.5f;
 			}
+		}
+
+		{
+			int ylvl;
+			if (min_y_dist < 0) {
+				ylvl = 0;
+			} else {
+				ylvl = g.font_config.num_y_stretch_levels-1-min_y_dist;
+				if (ylvl < 0) ylvl = 0;
+			}
+			set_y_stretch_index(ylvl);
 		}
 
 		if (draw_caret) {
@@ -1260,18 +1278,19 @@ static void draw_code_pane(struct pane* pane)
 		}
 
 		if (cp == 0) continue;
+
 		if (cp == '\n') {
 			const int line_index = it.location.line + 1;
 			float /*ascent0,*/ descent0,   line_gap0;
 			float   ascent1, /*descent1,*/ line_gap1;
 			get_current_line_metrics(/*&ascent0*/NULL, &descent0, &line_gap0);
-			set_y_stretch_index((line_index/2) % 3); // XXX look up proper stretch index for current line
 			get_current_line_metrics(&ascent1, /*&descent1*/NULL, &line_gap1);
 			const float y_advance = ascent1 - descent0 + (line_gap0 + line_gap1)*.5f;
-			set_color3f(.9,line_index%4,.9);
 			g.state.cursor_x = g.state.cursor_x0;
 			g.state.cursor_y += (int)ceilf(y_advance);
 		}
+
+		set_color3f(.6,.6,.6);
 
 		// XXX ostensibly I also need to subtract "ascent" from y? but it looks
 		// wrong... text formatting is hard!
