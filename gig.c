@@ -184,8 +184,8 @@ void gig_init(void)
 	};
 	struct caret cr = {
 		.tag=0,
-		.loc0={.line=1,.column=1},
-		.loc1={.line=1,.column=1},
+		.caret_loc={.line=1,.column=1},
+		.anchor_loc={.line=1,.column=1},
 	};
 	daPut(ms1.carets, cr);
 	daPut(ss->mim_states, ms1);
@@ -248,8 +248,52 @@ static void doc_location_constraint(struct document* doc, struct location* loc)
 	*loc = it.location;
 }
 
-static int mim_spool(struct mim_state* ms, struct document* doc, const uint8_t* input, int num_bytes)
+struct mimop {
+	struct mim_state* ms;
+	struct document* doc;
+};
+
+static void mimop_delete(struct mimop* mo, struct location* loc0, struct location* loc1)
 {
+	struct document* doc = mo->doc;
+	location_sort2(&loc0, &loc1);
+	const int o0 = document_locate(doc, loc0);
+	int o1 = document_locate(doc, loc1);
+	for (int o=o0; o<o1; ++o) {
+		struct fat_char* fc = daPtr(doc->fat_chars, o);
+		if (fc->is_insert) {
+			daDel(doc->fat_chars, o);
+			--o;
+			--o1;
+		} else {
+			fc->is_delete = 1;
+		}
+	}
+}
+
+static void mimop_fill(struct mimop* mo, int offset)
+{
+	struct document* doc = mo->doc;
+	const int num_chars = daLen(doc->fat_chars);
+	for (int dir=0; dir<2; ++dir) {
+		int d,o;
+		if      (dir==0) { d= 1; o=offset  ; }
+		else if (dir==1) { d=-1; o=offset-1; }
+		else assert(!"unreachable");
+		while ((0 <= o) && (o < num_chars)) {
+			struct fat_char* fc = daPtr(doc->fat_chars, o);
+			const int is_fillable = (fc->is_insert || fc->is_delete);
+			if (fc->_fill || fc->is_defer || !is_fillable) break;
+			if (is_fillable) fc->_fill = 1;
+			o += d;
+		}
+	}
+}
+
+static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
+{
+	struct mim_state* ms = mo->ms;
+	struct document* doc = mo->doc;
 	assert((ms->document_id == doc->id) && "mim state / document mismatch");
 
 	const int num_carets = daLen(ms->carets);
@@ -261,30 +305,30 @@ static int mim_spool(struct mim_state* ms, struct document* doc, const uint8_t* 
 	daReset(number_stack);
 
 	enum {
-		INIT=1,
+		ESCAPE='\033',
+	};
+
+	enum {
+		COMMAND=1,
 		NUMBER=2,
 		INSERT_STRING=3,
 		MOTION=4,
 	};
 
-	enum {
-		ESCAPE='\033',
-	};
-
-	int mode = INIT;
+	int mode = COMMAND;
 	int previous_mode = -1;
 	int number=0, number_sign=0;
-	int push_cp = -1;
+	int push_chr = -1;
 	int arg_tag = -1;
 	int arg_num = -1;
 	int motion_cmd = -1;
 
 	const int64_t now = get_nanoseconds();
 
-	while ((push_cp>=0) || (remaining>0)) {
-		const int cp = (push_cp>=0) ? push_cp : utf8_decode(&p, &remaining);
-		push_cp = -1;
-		if (cp == -1) {
+	while ((push_chr>=0) || (remaining>0)) {
+		const int chr = (push_chr>=0) ? push_chr : utf8_decode(&p, &remaining);
+		push_chr = -1;
+		if (chr == -1) {
 			mimerr("invalid UTF-8 input");
 			return 0;
 		}
@@ -292,26 +336,84 @@ static int mim_spool(struct mim_state* ms, struct document* doc, const uint8_t* 
 
 		switch (mode) {
 
-		case INIT: {
-			if (is_digit(cp) || cp=='-') {
+		case COMMAND: {
+			if (is_digit(chr) || chr=='-') {
 				previous_mode = mode;
 				mode = NUMBER;
 				number = 0;
-				if (cp == '-') {
+				if (chr == '-') {
 					number_sign = -1;
 				} else {
 					number_sign = 1;
-					push_cp = cp;
+					push_chr = chr;
 				}
 			} else {
-				switch (cp) {
+				switch (chr) {
+
+				case '!': // commit
+				case '/': // cancel
+				case '-': // defer
+				case '+': // fer
+				{
+					if (num_args != 1) {
+						mimerr("command '%c' expected 1 argument; got %d", chr, num_args);
+						return 0;
+					}
+					arg_tag = daGet(number_stack, 0);
+					daReset(number_stack);
+
+					for (int i=0; i<num_carets; ++i) {
+						struct caret* car = daPtr(ms->carets, i);
+						if (car->tag != arg_tag) continue;
+						struct location* loc0 = &car->caret_loc;
+						struct location* loc1 = &car->anchor_loc;
+						location_sort2(&loc0, &loc1);
+						const int off0 = document_locate(doc, loc0);
+						const int off1 = document_locate(doc, loc1);
+						for (int o=off0; o<=off1; ++o) {
+							mimop_fill(mo, o);
+						}
+						car->anchor_loc = car->caret_loc;
+					}
+
+					int num_chars = daLen(doc->fat_chars);
+					for (int i=0; i<num_chars; ++i) {
+						struct fat_char* fc = daPtr(doc->fat_chars, i);
+						if (!fc->_fill) continue;
+
+						if (chr=='!') {
+							if (fc->is_insert) { // commit
+								fc->_fill=0;
+								fc->is_insert=0;
+							}
+							if (fc->is_delete) {
+								daDel(doc->fat_chars, i);
+								--i;
+								--num_chars;
+							}
+						} else if (chr=='/') { // cancel
+							if (fc->is_insert) {
+								daDel(doc->fat_chars, i);
+								--i;
+								--num_chars;
+							}
+							if (fc->is_delete) {
+								fc->_fill=0;
+								fc->is_delete=0;
+							}
+						} else {
+							assert(!"TODO");
+						}
+					}
+
+				}	break;
 
 				case 'c': {
 					if (num_args != 3) {
 						mimerr("command 'c' expected 3 arguments; got %d", num_args);
 						return 0;
 					}
-					assert(!"TODO c");
+					assert(!"TODO c"); // TODO
 					daReset(number_stack);
 				}	break;
 
@@ -320,20 +422,20 @@ static int mim_spool(struct mim_state* ms, struct document* doc, const uint8_t* 
 						mimerr("command 'C' expected 2 arguments; got %d", num_args);
 						return 0;
 					}
-					assert(!"TODO C");
+					assert(!"TODO C"); // TODO
 					daReset(number_stack);
 				}	break;
 
 				case 'S':
 				case 'M': {
 					if (num_args != 1) {
-						mimerr("command 'i' expected 1 argument; got %d", num_args);
+						mimerr("command '%c' expected 1 argument; got %d", chr, num_args);
 						return 0;
 					}
 					arg_tag = daGet(number_stack, 0);
 					daReset(number_stack);
 					previous_mode = mode;
-					motion_cmd = cp;
+					motion_cmd = chr;
 					mode = MOTION;
 				}	break;
 
@@ -353,7 +455,7 @@ static int mim_spool(struct mim_state* ms, struct document* doc, const uint8_t* 
 				case 'x': // delete
 				{
 					if (num_args != 1) {
-						mimerr("command 'x' expected 1 argument; got %d", num_args);
+						mimerr("command '%c' expected 1 argument; got %d", chr, num_args);
 						return 0;
 					}
 					arg_tag = daGet(number_stack, 0);
@@ -362,17 +464,14 @@ static int mim_spool(struct mim_state* ms, struct document* doc, const uint8_t* 
 					for (int i=0; i<num_carets; ++i) {
 						struct caret* car = daPtr(ms->carets, i);
 						if (car->tag != arg_tag) continue;
-						struct location* loc0 = &car->loc0;
-						struct location* loc1 = &car->loc1;
-						const int off0 = document_locate(doc, loc0);
-						const int off1 = document_locate(doc, loc1);
-						if (off0 == off1) {
-							int o = off0;
-							assert(o == off1);
+						struct location* caret_loc = &car->caret_loc;
+						struct location* anchor_loc = &car->anchor_loc;
+						if (0 == location_compare(caret_loc, anchor_loc)) {
+							int o = document_locate(doc, caret_loc);
 							int d,m0,m1;
-							if (cp == 'X') { // backspace
+							if (chr == 'X') { // backspace
 								d=-1; m0=-1; m1=-1;
-							} else if (cp == 'x') { // delete
+							} else if (chr == 'x') { // delete
 								d=0;  m0=0;  m1=1;
 							} else {
 								assert(!"unexpected char");
@@ -399,20 +498,19 @@ static int mim_spool(struct mim_state* ms, struct document* doc, const uint8_t* 
 										dc=m1;
 									}
 								}
-								loc1->column += dc;
-								doc_location_constraint(doc, loc1);
-								*loc0 = *loc1;
+								caret_loc->column += dc;
+								doc_location_constraint(doc, caret_loc);
 								o += dc;
 							}
 						} else {
-							location_sort2(&loc0, &loc1);
-							assert(!"XXX TODO range delete");
+							mimop_delete(mo, caret_loc, anchor_loc);
 						}
+						*anchor_loc = *caret_loc;
 					}
 				}	break;
 
 				default:
-					mimerr("invalid command '%c'/%d", cp, cp);
+					mimerr("invalid command '%c'/%d", chr, chr);
 					return 0;
 
 				}
@@ -420,56 +518,59 @@ static int mim_spool(struct mim_state* ms, struct document* doc, const uint8_t* 
 		}	break;
 
 		case NUMBER: {
-			if (is_digit(cp)) {
-				number = ((10*number) + (cp-'0'));
+			if (is_digit(chr)) {
+				number = ((10*number) + (chr-'0'));
 			} else {
 				number *= number_sign;
 				daPut(number_stack, number);
 				mode = previous_mode;
-				if (cp != ',') push_cp = cp;
+				if (chr != ',') push_chr = chr;
 			}
 		}	break;
 
 		case INSERT_STRING: {
 
-			if (cp == ESCAPE) {
+			if (chr == ESCAPE) {
 				daReset(number_stack);
-				assert(previous_mode == INIT);
+				assert(previous_mode == COMMAND);
 				mode = previous_mode;
 			} else {
-				if (cp < ' ') {
-					switch (cp) {
+				if (chr < ' ') {
+					switch (chr) {
 					case '\n':
 					case '\t': // XXX consider not supporting tabs?
 						// accepted control codes
 						break;
 					default:
-						mimerr("invalid control code %d in string", cp);
+						mimerr("invalid control code %d in string", chr);
 						return 0;
 					}
 				}
 				for (int i=0; i<num_carets; ++i) {
 					struct caret* car = daPtr(ms->carets, i);
 					if (car->tag != arg_tag) continue;
-					struct location* loc0 = &car->loc0;
-					struct location* loc1 = &car->loc1;
-					location_sort2(&loc0, &loc1);
-					const int off = document_locate(doc, loc1);
+
+					struct location* loc = &car->caret_loc;
+					struct location* anchor = &car->anchor_loc;
+					if (0 != location_compare(loc, anchor)) mimop_delete(mo, loc, anchor);
+					*anchor = *loc;
+
+					const int off = document_locate(doc, loc);
 					daIns(doc->fat_chars, off, ((struct fat_char){
-						.codepoint = cp,
+						.codepoint = chr,
 						.timestamp = now,
 						.artist_id = get_my_artist_id(),
 						.is_insert = 1,
 						.flipped_insert = 1,
 					}));
-					if (cp == '\n') {
-						++loc1->line;
-						loc1->column = 1;
+					if (chr == '\n') {
+						++loc->line;
+						loc->column = 1;
 					} else {
-						++loc1->column;
+						++loc->column;
 					}
-					doc_location_constraint(doc, loc1);
-					*loc0 = *loc1;
+					doc_location_constraint(doc, loc);
+					*anchor = *loc;
 				}
 			}
 		}	break;
@@ -479,23 +580,23 @@ static int mim_spool(struct mim_state* ms, struct document* doc, const uint8_t* 
 			assert(daLen(number_stack) == 0);
 			// TODO read number?
 
-			switch (cp) {
+			switch (chr) {
 
 			case 'h': // left
 			case 'l': // right
 			case 'k': // up
 			case 'j': // down
 			{
-				const int is_left  = (cp=='h');
-				const int is_right = (cp=='l');
-				const int is_up    = (cp=='k');
-				const int is_down  = (cp=='j');
+				const int is_left  = (chr=='h');
+				const int is_right = (chr=='l');
+				const int is_up    = (chr=='k');
+				const int is_down  = (chr=='j');
 
 				for (int i=0; i<num_carets; ++i) {
 					struct caret* car = daPtr(ms->carets, i);
 					if (car->tag != arg_tag) continue;
-					struct location* loc0 = motion_cmd=='S' ? &car->loc1 : &car->loc0;
-					struct location* loc1 = &car->loc1;
+					struct location* loc0 = motion_cmd=='S' ? &car->caret_loc : &car->anchor_loc;
+					struct location* loc1 = &car->caret_loc;
 					location_sort2(&loc0, &loc1);
 					if (0 == location_compare(loc0,loc1)) {
 						if (is_left) {
@@ -525,7 +626,7 @@ static int mim_spool(struct mim_state* ms, struct document* doc, const uint8_t* 
 
 			}
 
-			assert(previous_mode == INIT);
+			assert(previous_mode == COMMAND);
 			mode = previous_mode;
 
 		}	break;
@@ -536,7 +637,7 @@ static int mim_spool(struct mim_state* ms, struct document* doc, const uint8_t* 
 		}
 	}
 
-	if (mode != INIT) {
+	if (mode != COMMAND) {
 		mimerr("mode (%d) not terminated", mode);
 		return 0;
 	}
@@ -589,7 +690,8 @@ void end_mim(void)
 		mim_state_copy(&scratch_state, msr);
 		document_copy(&scratch_doc, doc);
 
-		if (!mim_spool(&scratch_state, &scratch_doc, data, num_bytes)) {
+		struct mimop mo = { .ms=&scratch_state, .doc=&scratch_doc, };
+		if (!mim_spool(&mo, data, num_bytes)) {
 			assert(!"mim protocol error"); // XXX? should I have a "failable" flag? eg. for human input
 		}
 

@@ -1164,11 +1164,8 @@ static void handle_editor_input(struct pane* pane)
 			}
 		}
 
-		if (down && mod&MOD_CONTROL) {
-			switch (code) {
-			case KEY_ENTER       : assert(!"TODO commit");
-			}
-		}
+		if (down && mod==MOD_CONTROL && code==KEY_ENTER) mimf("0!");
+		if (down && mod==MOD_CONTROL && code==' ') mimf("0/");
 	}
 
 	const int num_chars = utf8_strlen(daPtr0(g.text_buffer));
@@ -1236,17 +1233,17 @@ static void draw_code_pane(struct pane* pane)
 		int min_y_dist = -1;
 		for (int i=0; i<num_carets; ++i) {
 			struct caret* c = daPtr(ms->carets, i);
-			struct location* loc0 = &c->loc0;
-			struct location* loc1 = &c->loc1;
-			struct location* loc1r = loc1;
+			struct location* loc0 = &c->caret_loc;
+			struct location* loc1 = &c->anchor_loc;
 			location_sort2(&loc0, &loc1);
+			struct location* crloc = &c->caret_loc;
 			const int d0 = location_line_distance(loc0 , &it.location);
 			const int d1 = location_line_distance(loc1 , &it.location);
 			if (min_y_dist < 0 || d0 < min_y_dist) min_y_dist = d0;
 			if (min_y_dist < 0 || d1 < min_y_dist) min_y_dist = d1;
 			const int cmp0 = location_compare(&it.location, loc0);
 			const int cmp1 = location_compare(&it.location, loc1);
-			const int cmp1r = location_compare(&it.location, loc1r);
+			const int cmp1r = location_compare(&it.location, crloc);
 			const int same = (0 == location_compare(loc0, loc1));
 			if (cmp1r==0) draw_caret = 1;
 			if (!same && cmp0>=0 && cmp1<0) {

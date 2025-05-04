@@ -45,15 +45,18 @@ struct fat_char {
 	unsigned flipped_insert :1;
 	unsigned flipped_delete :1;
 	unsigned flipped_defer  :1;
+	unsigned _fill  :1;
 };
 
 struct caret {
 	int tag;
 	//unsigned flags; // visible? visibility-groups?
-	struct location loc0, loc1;
+	//struct location loc0, loc1;
 	// loc0 & loc1 are "unordered"; loc1 can be before loc0 (this makes
 	// shift+arrows easier because loc0 can be fixed and loc1 can be moving
-	// left/right of loc0)
+	// left/right of loc0). XXX this is actually convention now, because I also
+	// always use loc1 to render caret; can I find better names? caret/anchor?
+	struct location caret_loc, anchor_loc;
 };
 
 struct mim_state {
