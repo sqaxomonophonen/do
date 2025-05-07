@@ -271,25 +271,7 @@ static void mimop_delete(struct mimop* mo, struct location* loc0, struct locatio
 	}
 }
 
-static void mimop_fill(struct mimop* mo, int offset)
-{
-	struct document* doc = mo->doc;
-	const int num_chars = daLen(doc->fat_chars);
-	for (int dir=0; dir<2; ++dir) {
-		int d,o;
-		if      (dir==0) { d= 1; o=offset  ; }
-		else if (dir==1) { d=-1; o=offset-1; }
-		else assert(!"unreachable");
-		while ((0 <= o) && (o < num_chars)) {
-			struct fat_char* fc = daPtr(doc->fat_chars, o);
-			const int is_fillable = (fc->is_insert || fc->is_delete);
-			if (fc->_fill || fc->is_defer || !is_fillable) break;
-			if (is_fillable) fc->_fill = 1;
-			o += d;
-		}
-	}
-}
-
+// parses a mim message, typically written by mimf()/mim8()
 static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 {
 	struct mim_state* ms = mo->ms;
@@ -353,7 +335,8 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 				case '!': // commit
 				case '/': // cancel
 				case '-': // defer
-				case '+': // fer
+				case '+': // fer (XXX stops at defer, hmm...)
+				case '*': // toggle fer/defer..?
 				{
 					if (num_args != 1) {
 						mimerr("command '%c' expected 1 argument; got %d", chr, num_args);
@@ -362,6 +345,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 					arg_tag = daGet(number_stack, 0);
 					daReset(number_stack);
 
+					int num_chars = daLen(doc->fat_chars);
 					for (int i=0; i<num_carets; ++i) {
 						struct caret* car = daPtr(ms->carets, i);
 						if (car->tag != arg_tag) continue;
@@ -370,13 +354,24 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 						location_sort2(&loc0, &loc1);
 						const int off0 = document_locate(doc, loc0);
 						const int off1 = document_locate(doc, loc1);
-						for (int o=off0; o<=off1; ++o) {
-							mimop_fill(mo, o);
+						for (int off=off0; off<=off1; ++off) {
+							for (int dir=0; dir<2; ++dir) {
+								int d,o;
+								if      (dir==0) { d= 1; o=off  ; }
+								else if (dir==1) { d=-1; o=off-1; }
+								else assert(!"unreachable");
+								while ((0 <= o) && (o < num_chars)) {
+									struct fat_char* fc = daPtr(doc->fat_chars, o);
+									const int is_fillable = (fc->is_insert || fc->is_delete);
+									if (fc->_fill || fc->is_defer || !is_fillable) break;
+									if (is_fillable) fc->_fill = 1;
+									o += d;
+								}
+							}
 						}
 						car->anchor_loc = car->caret_loc;
 					}
 
-					int num_chars = daLen(doc->fat_chars);
 					for (int i=0; i<num_chars; ++i) {
 						struct fat_char* fc = daPtr(doc->fat_chars, i);
 						if (!fc->_fill) continue;
@@ -402,7 +397,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 								fc->is_delete=0;
 							}
 						} else {
-							assert(!"TODO");
+							assert(!"unhandled command");
 						}
 					}
 
@@ -480,7 +475,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 							for (int i=0; i<arg_num; ++i) {
 								const int num_chars = daLen(doc->fat_chars);
 								const int od = o+d;
-								int dc;
+								int dc=0;
 								if ((0 <= od) && (od < num_chars)) {
 									struct fat_char* fc = daPtr(doc->fat_chars, od);
 									if (fc->is_insert) {
@@ -557,9 +552,12 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 
 					const int off = document_locate(doc, loc);
 					daIns(doc->fat_chars, off, ((struct fat_char){
-						.codepoint = chr,
+						.thicchar = {
+							.codepoint = chr,
+							// TODO color?
+						},
 						.timestamp = now,
-						.artist_id = get_my_artist_id(),
+						//.artist_id = get_my_artist_id(),
 						.is_insert = 1,
 						.flipped_insert = 1,
 					}));
@@ -672,6 +670,24 @@ static void write_varint64(uint8_t** pp, uint8_t* end, int64_t value)
 	leb128_encode_int64(u8pp_write, pp, value);
 }
 
+struct thicchar_da DA_STRUCT_BODY(struct thicchar);
+
+static void document_to_thicchar_da(struct thicchar_da* da, struct document* doc)
+{
+	const int num_src = daLen(doc->fat_chars);
+	daSetMinCap(*da, num_src);
+	daReset(*da);
+	for (int i=0; i<num_src; ++i) {
+		struct fat_char* fc = daPtr(doc->fat_chars, i);
+		if (fc->is_insert) continue; // not yet inserted
+		daPut(*da, fc->thicchar);
+	}
+}
+
+//const int num_chars = daLen(scratch_doc.fat_chars);
+//for (int i=0; i<num_chars
+//static DA(struct thicchar, dodoc);
+
 void end_mim(void)
 {
 	assert(g.in_mim);
@@ -694,6 +710,11 @@ void end_mim(void)
 		if (!mim_spool(&mo, data, num_bytes)) {
 			assert(!"mim protocol error"); // XXX? should I have a "failable" flag? eg. for human input
 		}
+
+		static struct thicchar_da dodoc;
+		document_to_thicchar_da(&dodoc, &scratch_doc);
+		struct vmii vm = {0}; // XXX
+		mii_compile_thicc(&vm, dodoc.items, daLen(dodoc));
 
 		mim_state_copy(msr, &scratch_state);
 		document_copy(doc, &scratch_doc);

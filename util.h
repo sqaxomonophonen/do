@@ -1,5 +1,7 @@
 #ifndef UTIL_H
 
+#include <stdlib.h>
+
 #define ARRAY_LENGTH(xs) (sizeof(xs)/sizeof((xs)[0]))
 
 // TODO non gcc/clang defines?
@@ -15,7 +17,11 @@
 
 // XXX there's std::hardware_destructive_interference_size in C++, doesn't seem
 // to exist in C
-#define CACHE_LINE_SIZE (64)
+#define CACHE_LINE_SIZE_LOG2 (6)
+#define CACHE_LINE_SIZE      (1LL<<(CACHE_LINE_SIZE_LOG2))
+#define CACHE_ALIGN(s)       (((s)+CACHE_LINE_SIZE-1) & ~(CACHE_LINE_SIZE-1))
+
+#define IS_POWER_OF_TWO(v)   (((v)&((v)-1))==0)
 
 static inline int is_digit(int c) { return ('0'<=c) && (c<='9'); }
 

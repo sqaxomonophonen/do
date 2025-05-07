@@ -1,7 +1,9 @@
 #ifndef GIG_H
 
+#include <stdlib.h>
 #include <stdint.h>
 
+#include "mii.h"
 #include "util.h"
 #include "da.h"
 
@@ -20,8 +22,7 @@ static inline int location_compare(struct location* a, struct location* b)
 
 static inline int location_line_distance(struct location* a, struct location* b)
 {
-	const int d = a->line - b->line;
-	return d<0 ? -d : d;
+	return abs(a->line - b->line);
 }
 
 static inline void location_sort2(struct location** a, struct location** b)
@@ -34,10 +35,11 @@ static inline void location_sort2(struct location** a, struct location** b)
 }
 
 struct fat_char {
-	unsigned codepoint;
+	struct thicchar thicchar;
 	unsigned timestamp; // last change (or created)
-	unsigned artist_id;
-	unsigned color[3];
+	//unsigned artist_id; 
+	// why do we want `artist_id`? I don't think "commit only my own stuff" is
+	// a thing, and the journal tells the story if you really want to know?
 	unsigned is_insert :1;
 	unsigned is_delete :1;
 	unsigned is_defer  :1;
@@ -45,6 +47,7 @@ struct fat_char {
 	unsigned flipped_insert :1;
 	unsigned flipped_delete :1;
 	unsigned flipped_defer  :1;
+	// internal use:
 	unsigned _fill  :1;
 };
 
@@ -150,7 +153,7 @@ static inline int doc_iterator_next(struct doc_iterator* it)
 	const int off = it->offset;
 	if (off < num_chars) {
 		it->fat_char = daPtr(d->fat_chars, off);
-		if (it->fat_char->codepoint == '\n') {
+		if (it->fat_char->thicchar.codepoint == '\n') {
 			it->new_line = 1;
 		}
 	} else {
@@ -178,6 +181,29 @@ void gig_thread_tick(void);
 void gig_selftest(void);
 
 void mim_set_latency(double mu, double sigma);
+
+// TODO I think I may want to support some kind of "dry run", or "exploratory
+// fork", or something; specifically I'm considering having "commit intention
+// markers" implemented using mim state carets (having another tag than your
+// standard carets?).
+//  - they reveal your near-future intents to your fellow artists
+//  - allows you to commit multiple disjoint diffs at once
+//  - it can check/test/run your mi code and give you feedback for every
+//    tiny change instead of waiting for ctrl+enter
+// you may say that you can "just" drag a selection around what you want to
+// commit and ctrl+enter, and it may usually be fine, but:
+//  - your intent is more ambiguous and only revealed few moments before a
+//    commit occurs
+//  - if you have "foo..bar..baz" then you can't drag a selection that touches
+//    only "foo" and "baz" but not "bar". with intent markers you just place
+//    markers inside "foo" and "baz"
+//  - the program can't tell /why/ you're selecting text (it's a multi-purpose
+//    tool!) so it can't really test your code in the same way that intent
+//    markers can. so if your code has detectable errors, you may end up making
+//    the same selection multiple times until you get it right (also you can't
+//    type text, and you lose your caret positions, when you make selections;
+//    intent markers have their own "tag space" so they don't cause these
+//    problems)
 
 void begin_mim(int personal_mim_state_id);
 void end_mim(void);

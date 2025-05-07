@@ -112,15 +112,21 @@ editor:
    delete text ([backspace]/[delete]) it'll be marked red (instead of actually
    being deleted). these are "staged changes", not yet active. you'll have
    keyboard shortcuts for:
-   - committing all staged edits
-   - committing one edit
-   - cancelling all staged edits
-   - cancelling one edit
-   (probably allow committing/cancelling other people's edits too?)
-   (I have a fear that deletes are going to be confusing because they just mark
-   text as red... but: try it out, and possibly allow/try a version where "red
-   sections" are collapsed to a single line between two character cells,
-   although it only works for multiline deletes, which is weird?)
+   - committing touching staged edits
+   - cancelling touching staged edits
+   and maybe:
+   - defer/fer
+   - non-filling? (alt? so ctrl+alt+enter?)
+   I think fills don't care who wrote the commit, as long as it touches?
+
+ - color picker?
+
+ - immediate change (no commit):
+   - number sliders?
+   - bulk color change
+   - curves? bitmaps?
+   - no-commit zones? 1-char step sequencer patterns? always replace-mode?
+     maybe even caret tempo follow mode?
 
  - "obvious errors" should probably be prevented from being committed.
    - syntax errors:
@@ -134,6 +140,22 @@ editor:
      - out-of-bounds heap accesses
      - divide-by-zeroes (unless they just make NaNs or something)
 
+ - commit markers?
+   - they're "carets", meaning they're stable, but they have a special tag or
+     type hint? so they may be rendered differently, they may cause "primed
+     diffs" to glow differently...
+   - alt+click to set a commit marker? alt+enter to commit all marked diffs?
+   - allows checking the code (syntax, tests, asserts,...) before you attempt
+     to commit
+   - there isn't really an automatic solution: "commit only my stuff" breaks
+     down when artists author a diff together; if alice wrote "ro" and bob
+     wrote "om" and it says "room", then ctrl+enter currently doesn't care
+     about the different authors (and shouldn't imo). also, a recurring thing
+     is that I end up working on several ideas at once, and want to commit only
+     one "idea": "commit only my stuff" is useless here, but
+     whitelist/blacklist markers are fine?
+   - Q: are "deferred diffs" necessary if markers work well? hmmm.... there
+     could also be a commit-suppression marker, like the anti-marker? :)
 
 
 ui (main):
@@ -163,8 +185,8 @@ ui (main):
    - video synth settings?
    - OSC/MIDI setup/mapping?
    - joystick mapping? (could be used for alternative inputs on web? on Linux
-	 you can also create virtual joysticks, so you can use OSC/MIDI or anything
-	 to generate joystick events)
+     you can also create virtual joysticks, so you can use OSC/MIDI or anything
+     to generate joystick events)
    - keymap, scroll sensitivity?
    - editor modes?
    - settings import/export/migration? (possibly allow importing/exporting a

@@ -7,6 +7,7 @@
 
 #include "main.h"
 #include "util.h"
+#include "allocator.h"
 #include "gui.h"
 #include "stb_rect_pack.h"
 #include "stb_truetype.h"
@@ -341,10 +342,9 @@ static int build_atlas(void)
 		spec->_px_scale = stbtt_ScaleForPixelHeight(&font->fontinfo, spec->px);
 	}
 
-	if (g.atlas_lut != NULL) {
-		hmfree(g.atlas_lut);
-	}
+	if (g.atlas_lut != NULL) hmfree(g.atlas_lut);
 	assert(g.atlas_lut == NULL);
+	hminit(g.atlas_lut, get_system_allocator());
 
 	daReset(g.atlas_pack_rects);
 
@@ -1247,7 +1247,8 @@ static void draw_code_pane(struct pane* pane)
 			const int same = (0 == location_compare(loc0, loc1));
 			if (cmp1r==0) draw_caret = 1;
 			if (!same && cmp0>=0 && cmp1<0) {
-				bg_color[2] += 0.5f;
+				bg_color[1] += 0.1f;
+				bg_color[2] += 0.3f;
 			}
 		}
 
@@ -1270,7 +1271,7 @@ static void draw_code_pane(struct pane* pane)
 		}
 
 		struct fat_char* fc = it.fat_char;
-		const unsigned cp = fc != NULL ? fc->codepoint : 0;
+		const unsigned cp = fc != NULL ? fc->thicchar.codepoint : 0;
 
 		if (fc != NULL) {
 			if (fc->is_insert) bg_color[1] += 0.2f;

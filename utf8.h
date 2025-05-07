@@ -2,6 +2,8 @@
 
 #include <stdint.h>
 
+#define UTF8_MAX_SIZE (4)
+
 static inline int utf8_num_bytes_for_first_byte(uint8_t v)
 {
 	if ((v & 0x80) == 0x00) return 1; // U+0000   - U+007F   : 0xxxxxxx
@@ -24,6 +26,12 @@ int utf8_decode(const char** inputpp, int* remaining);
 // string, and `remaining` is the number of bytes remaining of the string. both
 // are updated (inputpp is incremented, remaining is decremented). it returns
 // the codepoint for the decoded utf8 sequence, or -1 if unsuccessful.
+
+char* utf8_encode(char* p, int codepoint);
+// encodes codepoint into p and returns the new position. function writes at
+// most 4 bytes.
+
+
 
 int utf8_convert_lowercase_codepoint_to_uppercase(int lowercase_codepoint);
 // returns the uppercase codepoint for a lowercase codepoint. if codepoint
@@ -304,6 +312,38 @@ int utf8_decode(const char** inputpp, int* remaining)
 	assert(!"unreachable");
 }
 
+char* utf8_encode(char* p, int codepoint)
+{
+	const unsigned c = codepoint;
+	if (c < (1<<7)) {
+		// 1-byte/7-bit ascii: 0b0xxxxxxx
+		p[0] = (char)c;
+		p += 1;
+	} else if (c < (1<<11)) {
+		// 2-byte/11-bit utf8 c: 0b110xxxxx 0b10xxxxxx
+		p[0] = (char)(0xc0 | (char)((c >> 6) & 0x1f));
+		p[1] = (char)(0x80 | (char)(c & 0x3f));
+		p += 2;
+	} else if (c < (1<<16)) {
+		// 3-byte/16-bit utf8 c: 0b1110xxxx 0b10xxxxxx 0b10xxxxxx
+		p[0] = (char)(0xe0 | (char)((c >> 12) & 0x0f));
+		p[1] = (char)(0x80 | (char)((c >> 6) & 0x3f));
+		p[2] = (char)(0x80 | (char)(c & 0x3f));
+		p += 3;
+	} else if (c < (1<<21)) {
+		// 4-byte/21-bit utf8 c: 0b11110xxx 0b10xxxxxx 0b10xxxxxx 0b10xxxxxx
+		p[0] = (char)(0xf0 | (char)((c >> 18) & 0x07));
+		p[1] = (char)(0x80 | (char)((c >> 12) & 0x3f));
+		p[2] = (char)(0x80 | (char)((c >> 6) & 0x3f));
+		p[3] = (char)(0x80 | (char)(c & 0x3f));
+		p += 4;
+	}
+	return p;
+}
+
+
+
+
 // TODO do we also want a stateful decoder that you push bytes into?
 
 int utf8_convert_lowercase_codepoint_to_uppercase(int lowercase_codepoint)
@@ -434,6 +474,35 @@ void utf8_unit_test(void)
 		expect_utf8_decode(&p, &n, 0x1fffff);
 		assert(p == (p0+4));
 		assert(n == 0);
+	}
+
+	{
+		const char* roundtrip_tests[] = {
+			"foobar",
+			"¿føö bær?",
+		};
+		const int n = sizeof(roundtrip_tests)/sizeof(roundtrip_tests[0]);
+		int codepoints[1<<8];
+		int num_codepoints;
+		char output[1<<8];
+		for (int i=0; i<n; ++i) {
+			num_codepoints = 0;
+			const char* input = roundtrip_tests[i];
+			const char* p0 = input;
+			int remaining = strlen(p0);
+			while (remaining > 0) {
+				const int c = utf8_decode(&p0, &remaining);
+				assert((c > 0) && "bad decode");
+				codepoints[num_codepoints++] = c;
+			}
+			char* p1 = output;
+			for (int ii=0; ii<num_codepoints; ++ii) {
+				p1 = utf8_encode(p1, codepoints[ii]);
+				assert((p1-output) < sizeof(output));
+				*p1=0;
+			}
+			assert(strcmp(input, output) == 0);
+		}
 	}
 }
 #endif
