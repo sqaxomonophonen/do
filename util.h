@@ -1,8 +1,11 @@
 #ifndef UTIL_H
 
 #include <stdlib.h>
+#include <stdio.h>
 
 #define ARRAY_LENGTH(xs) (sizeof(xs)/sizeof((xs)[0]))
+#define STR2(x) #x
+#define STR(x) STR2(x)
 
 // TODO non gcc/clang defines?
 #define NO_RETURN      __attribute__((noreturn))
@@ -24,6 +27,27 @@
 #define IS_POWER_OF_TWO(v)   (((v)&((v)-1))==0)
 
 static inline int is_digit(int c) { return ('0'<=c) && (c<='9'); }
+
+static inline int bounds_check(int index, int length, const char* location)
+{
+	if (!((0 <= index) && (index < length))) {
+		// XXX write to different output?
+		fprintf(stderr, "bounds check (0<=%d<%d) failed at %s\n", index, length, location);
+		abort();
+	}
+	return index;
+}
+
+// maybe put these in stb_ds.h? (although XXX: I need the bounds check handler
+// to be a function)
+#define arrchk(xs,index) bounds_check(index, arrlen(xs), __FILE__ ":" STR(__LINE__))
+#define arrcpy(dst,src) ((void)((dst)==(src)), /* try to emit warning if not same type */ \
+                        arrsetlen(dst,arrlen(src)),\
+						memcpy(dst, src, sizeof(*(dst))*arrlen(dst)))
+#define arrchkget(xs,index) ((xs)[arrchk(xs,index)])
+#define arrchkptr(xs,index) (&(arrchkget(xs,index)))
+#define arrreset(xs) arrsetlen(xs,0)
+#define arrsetmincap(xs,mincap) ((mincap)>arrcap(xs)?arrsetcap(xs,mincap):0)
 
 #define UTIL_H
 #endif

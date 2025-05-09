@@ -8,7 +8,7 @@ struct allocator {
 	void(*fn_free)(void*,void*);
 };
 
-struct allocator* get_system_allocator(void);
+extern struct allocator system_allocator;
 
 // scratch allocator: it doesn't support freeing individual allocations
 // (fn_free is a no-op); you can only free everything at once

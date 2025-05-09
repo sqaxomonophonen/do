@@ -13,9 +13,10 @@
 #include <GLES3/gl3.h>
 #include <EGL/egl.h>
 
+#include "stb_ds_sysalloc.h"
+
 #include "utf8.h"
 #include "impl_gl.h"
-#include "da.h"
 
 static struct {
 	int num_cores;

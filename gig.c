@@ -6,6 +6,7 @@
 #include <string.h>
 #include <stdio.h> // XXX
 
+#include "stb_ds_sysalloc.h"
 #include "stb_sprintf.h"
 
 #include "gig.h"
@@ -13,7 +14,6 @@
 #include "leb128.h"
 #include "utf8.h"
 #include "main.h"
-#include "da.h"
 
 struct ringbuf {
 	uint8_t* data;
@@ -70,8 +70,8 @@ static void document_copy(struct document* dst, struct document* src)
 	struct document tmp;
 	memcpy(&tmp, src, sizeof *src);
 	memcpy(dst, src, sizeof *src);
-	dst->fat_chars = tmp.fat_chars;
-	daCopy(dst->fat_chars, src->fat_chars);
+	dst->fat_char_arr = tmp.fat_char_arr;
+	arrcpy(dst->fat_char_arr, src->fat_char_arr);
 }
 
 static void mim_state_copy(struct mim_state* dst, struct mim_state* src)
@@ -79,8 +79,8 @@ static void mim_state_copy(struct mim_state* dst, struct mim_state* src)
 	struct mim_state tmp;
 	memcpy(&tmp, src, sizeof *src);
 	memcpy(dst, src, sizeof *src);
-	dst->carets = tmp.carets;
-	daCopy(dst->carets, src->carets);
+	dst->caret_arr = tmp.caret_arr;
+	arrcpy(dst->caret_arr, src->caret_arr);
 }
 
 static int document_locate(struct document* doc, struct location* loc)
@@ -92,18 +92,18 @@ static int document_locate(struct document* doc, struct location* loc)
 
 struct snapshot {
 	size_t journal_cursor;
-	DA(struct document, documents);
-	DA(struct mim_state, mim_states);
+	struct document* document_arr;
+	struct mim_state* mim_state_arr;
 };
 
 static int snapshot_get_num_documents(struct snapshot* ss)
 {
-	return daLen(ss->documents);
+	return arrlen(ss->document_arr);
 }
 
 struct document* snapshot_get_document_by_index(struct snapshot* ss, int index)
 {
-	return daPtr(ss->documents, index);
+	return arrchkptr(ss->document_arr, index);
 }
 
 struct document* snapshot_find_document_by_id(struct snapshot* ss, int id)
@@ -125,9 +125,9 @@ struct document* snapshot_get_document_by_id(struct snapshot* ss, int id)
 
 static struct mim_state* snapshot_get_mim_state_by_ids(struct snapshot* ss, int artist_id, int personal_id)
 {
-	const int n = daLen(ss->mim_states);
+	const int n = arrlen(ss->mim_state_arr);
 	for (int i=0; i<n; ++i) {
-		struct mim_state* s = daPtr(ss->mim_states, i);
+		struct mim_state* s = arrchkptr(ss->mim_state_arr, i);
 		if ((s->artist_id == artist_id) &&  (s->personal_id == personal_id)) {
 			return s;
 		}
@@ -146,7 +146,7 @@ static struct {
 	struct snapshot cool_snapshot, hot_snapshot;
 	struct ringbuf journal_ringbuf;
 	int my_artist_id;
-	DA(uint8_t, mim_buffer);
+	uint8_t* mim_buffer_arr;
 	int using_personal_mim_state_id;
 	int in_mim;
 } g;
@@ -174,7 +174,7 @@ void gig_init(void)
 	g.my_artist_id = 1;
 	const int doc_id = 1;
 	struct snapshot* ss = &g.cool_snapshot;
-	struct document* doc = daAddNPtr(ss->documents, 1);
+	struct document* doc = arraddnptr(ss->document_arr, 1);
 	memset(doc, 0, sizeof *doc);
 	doc->id = doc_id;
 	struct mim_state ms1 = {
@@ -187,8 +187,8 @@ void gig_init(void)
 		.caret_loc={.line=1,.column=1},
 		.anchor_loc={.line=1,.column=1},
 	};
-	daPut(ms1.carets, cr);
-	daPut(ss->mim_states, ms1);
+	arrput(ms1.caret_arr, cr);
+	arrput(ss->mim_state_arr, ms1);
 
 
 	#if 0
@@ -206,16 +206,16 @@ void get_state_and_doc(int personal_id, struct mim_state** out_mim_state, struct
 {
 	struct snapshot* ss = &g.cool_snapshot;
 	const int artist_id = get_my_artist_id();
-	const int num_states = daLen(ss->mim_states);
+	const int num_states = arrlen(ss->mim_state_arr);
 	for (int i=0; i<num_states; ++i) {
-		struct mim_state* ms = daPtr(ss->mim_states, i);
+		struct mim_state* ms = arrchkptr(ss->mim_state_arr, i);
 		if ((ms->artist_id==artist_id) && (ms->personal_id==personal_id)) {
 			const int document_id = ms->document_id;
 			assert((document_id > 0) && "invalid document id in mim state");
 			struct document* doc = NULL;
-			const int num_docs = daLen(ss->documents);
+			const int num_docs = arrlen(ss->document_arr);
 			for (int i=0; i<num_docs; ++i) {
-				struct document* d = daPtr(ss->documents, i);
+				struct document* d = arrchkptr(ss->document_arr, i);
 				if (d->id == document_id) {
 					doc = d;
 					break;
@@ -260,9 +260,9 @@ static void mimop_delete(struct mimop* mo, struct location* loc0, struct locatio
 	const int o0 = document_locate(doc, loc0);
 	int o1 = document_locate(doc, loc1);
 	for (int o=o0; o<o1; ++o) {
-		struct fat_char* fc = daPtr(doc->fat_chars, o);
+		struct fat_char* fc = arrchkptr(doc->fat_char_arr, o);
 		if (fc->is_insert) {
-			daDel(doc->fat_chars, o);
+			arrdel(doc->fat_char_arr, arrchk(doc->fat_char_arr, o));
 			--o;
 			--o1;
 		} else {
@@ -278,13 +278,13 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 	struct document* doc = mo->doc;
 	assert((ms->document_id == doc->id) && "mim state / document mismatch");
 
-	const int num_carets = daLen(ms->carets);
+	const int num_carets = arrlen(ms->caret_arr);
 
 	const char* p = (const char*)input;
 	int remaining = num_bytes;
 
-	static DA(int, number_stack) = {0};
-	daReset(number_stack);
+	static int* number_stack_arr = NULL;
+	arrreset(number_stack_arr);
 
 	enum {
 		ESCAPE='\033',
@@ -314,7 +314,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 			mimerr("invalid UTF-8 input");
 			return 0;
 		}
-		const int num_args = daLen(number_stack);
+		const int num_args = arrlen(number_stack_arr);
 
 		switch (mode) {
 
@@ -342,12 +342,12 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 						mimerr("command '%c' expected 1 argument; got %d", chr, num_args);
 						return 0;
 					}
-					arg_tag = daGet(number_stack, 0);
-					daReset(number_stack);
+					arg_tag = arrchkget(number_stack_arr, 0);
+					arrreset(number_stack_arr);
 
-					int num_chars = daLen(doc->fat_chars);
+					int num_chars = arrlen(doc->fat_char_arr);
 					for (int i=0; i<num_carets; ++i) {
-						struct caret* car = daPtr(ms->carets, i);
+						struct caret* car = arrchkptr(ms->caret_arr, i);
 						if (car->tag != arg_tag) continue;
 						struct location* loc0 = &car->caret_loc;
 						struct location* loc1 = &car->anchor_loc;
@@ -361,7 +361,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 								else if (dir==1) { d=-1; o=off-1; }
 								else assert(!"unreachable");
 								while ((0 <= o) && (o < num_chars)) {
-									struct fat_char* fc = daPtr(doc->fat_chars, o);
+									struct fat_char* fc = arrchkptr(doc->fat_char_arr, o);
 									const int is_fillable = (fc->is_insert || fc->is_delete);
 									if (fc->_fill || fc->is_defer || !is_fillable) break;
 									if (is_fillable) fc->_fill = 1;
@@ -373,7 +373,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 					}
 
 					for (int i=0; i<num_chars; ++i) {
-						struct fat_char* fc = daPtr(doc->fat_chars, i);
+						struct fat_char* fc = arrchkptr(doc->fat_char_arr, i);
 						if (!fc->_fill) continue;
 
 						if (chr=='!') {
@@ -382,13 +382,13 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 								fc->is_insert=0;
 							}
 							if (fc->is_delete) {
-								daDel(doc->fat_chars, i);
+								arrdel(doc->fat_char_arr, arrchk(doc->fat_char_arr, i));
 								--i;
 								--num_chars;
 							}
 						} else if (chr=='/') { // cancel
 							if (fc->is_insert) {
-								daDel(doc->fat_chars, i);
+								arrdel(doc->fat_char_arr, arrchk(doc->fat_char_arr, i));
 								--i;
 								--num_chars;
 							}
@@ -409,7 +409,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 						return 0;
 					}
 					assert(!"TODO c"); // TODO
-					daReset(number_stack);
+					arrreset(number_stack_arr);
 				}	break;
 
 				case 'C': {
@@ -418,7 +418,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 						return 0;
 					}
 					assert(!"TODO C"); // TODO
-					daReset(number_stack);
+					arrreset(number_stack_arr);
 				}	break;
 
 				case 'S':
@@ -427,8 +427,8 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 						mimerr("command '%c' expected 1 argument; got %d", chr, num_args);
 						return 0;
 					}
-					arg_tag = daGet(number_stack, 0);
-					daReset(number_stack);
+					arg_tag = arrchkget(number_stack_arr, 0);
+					arrreset(number_stack_arr);
 					previous_mode = mode;
 					motion_cmd = chr;
 					mode = MOTION;
@@ -439,8 +439,8 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 						mimerr("command 'i' expected 1 argument; got %d", num_args);
 						return 0;
 					}
-					arg_tag = daGet(number_stack, 0);
-					daReset(number_stack);
+					arg_tag = arrchkget(number_stack_arr, 0);
+					arrreset(number_stack_arr);
 
 					previous_mode = mode;
 					mode = INSERT_STRING;
@@ -453,11 +453,11 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 						mimerr("command '%c' expected 1 argument; got %d", chr, num_args);
 						return 0;
 					}
-					arg_tag = daGet(number_stack, 0);
+					arg_tag = arrchkget(number_stack_arr, 0);
 					arg_num = 1; // XXX make it an optional arg?
-					daReset(number_stack);
+					arrreset(number_stack_arr);
 					for (int i=0; i<num_carets; ++i) {
-						struct caret* car = daPtr(ms->carets, i);
+						struct caret* car = arrchkptr(ms->caret_arr, i);
 						if (car->tag != arg_tag) continue;
 						struct location* caret_loc = &car->caret_loc;
 						struct location* anchor_loc = &car->anchor_loc;
@@ -473,13 +473,13 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 							}
 
 							for (int i=0; i<arg_num; ++i) {
-								const int num_chars = daLen(doc->fat_chars);
+								const int num_chars = arrlen(doc->fat_char_arr);
 								const int od = o+d;
 								int dc=0;
 								if ((0 <= od) && (od < num_chars)) {
-									struct fat_char* fc = daPtr(doc->fat_chars, od);
+									struct fat_char* fc = arrchkptr(doc->fat_char_arr, od);
 									if (fc->is_insert) {
-										daDel(doc->fat_chars, od);
+										arrdel(doc->fat_char_arr, od);
 										dc=m0;
 									} else if (fc->is_delete) {
 										dc=m1;
@@ -517,7 +517,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 				number = ((10*number) + (chr-'0'));
 			} else {
 				number *= number_sign;
-				daPut(number_stack, number);
+				arrput(number_stack_arr, number);
 				mode = previous_mode;
 				if (chr != ',') push_chr = chr;
 			}
@@ -526,7 +526,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 		case INSERT_STRING: {
 
 			if (chr == ESCAPE) {
-				daReset(number_stack);
+				arrreset(number_stack_arr);
 				assert(previous_mode == COMMAND);
 				mode = previous_mode;
 			} else {
@@ -542,7 +542,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 					}
 				}
 				for (int i=0; i<num_carets; ++i) {
-					struct caret* car = daPtr(ms->carets, i);
+					struct caret* car = arrchkptr(ms->caret_arr, i);
 					if (car->tag != arg_tag) continue;
 
 					struct location* loc = &car->caret_loc;
@@ -551,7 +551,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 					*anchor = *loc;
 
 					const int off = document_locate(doc, loc);
-					daIns(doc->fat_chars, off, ((struct fat_char){
+					arrins(doc->fat_char_arr, off, ((struct fat_char){
 						.thicchar = {
 							.codepoint = chr,
 							// TODO color?
@@ -575,7 +575,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 
 		case MOTION: {
 
-			assert(daLen(number_stack) == 0);
+			assert(arrlen(number_stack_arr) == 0);
 			// TODO read number?
 
 			switch (chr) {
@@ -591,7 +591,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 				const int is_down  = (chr=='j');
 
 				for (int i=0; i<num_carets; ++i) {
-					struct caret* car = daPtr(ms->carets, i);
+					struct caret* car = arrchkptr(ms->caret_arr, i);
 					if (car->tag != arg_tag) continue;
 					struct location* loc0 = motion_cmd=='S' ? &car->caret_loc : &car->anchor_loc;
 					struct location* loc1 = &car->caret_loc;
@@ -640,7 +640,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 		return 0;
 	}
 
-	const int num_args = daLen(number_stack);
+	const int num_args = arrlen(number_stack_arr);
 	if (num_args > 0) {
 		mimerr("non-empty number stack (n=%d) at end of mim-input", num_args);
 		return 0;
@@ -654,7 +654,7 @@ void begin_mim(int personal_mim_state_id)
 	assert(!g.in_mim);
 	g.in_mim = 1;
 	g.using_personal_mim_state_id = personal_mim_state_id;
-	daReset(g.mim_buffer);
+	arrreset(g.mim_buffer_arr);
 }
 
 static void u8pp_write(uint8_t v, void* userdata)
@@ -670,17 +670,15 @@ static void write_varint64(uint8_t** pp, uint8_t* end, int64_t value)
 	leb128_encode_int64(u8pp_write, pp, value);
 }
 
-struct thicchar_da DA_STRUCT_BODY(struct thicchar);
-
-static void document_to_thicchar_da(struct thicchar_da* da, struct document* doc)
+static void document_to_thicchar_da(struct thicchar** arr, struct document* doc)
 {
-	const int num_src = daLen(doc->fat_chars);
-	daSetMinCap(*da, num_src);
-	daReset(*da);
+	const int num_src = arrlen(doc->fat_char_arr);
+	arrsetmincap(*arr, num_src);
+	arrreset(*arr);
 	for (int i=0; i<num_src; ++i) {
-		struct fat_char* fc = daPtr(doc->fat_chars, i);
+		struct fat_char* fc = arrchkptr(doc->fat_char_arr, i);
 		if (fc->is_insert) continue; // not yet inserted
-		daPut(*da, fc->thicchar);
+		arrput(*arr, fc->thicchar);
 	}
 }
 
@@ -691,9 +689,9 @@ static void document_to_thicchar_da(struct thicchar_da* da, struct document* doc
 void end_mim(void)
 {
 	assert(g.in_mim);
-	const int num_bytes = daLen(g.mim_buffer);
+	const int num_bytes = arrlen(g.mim_buffer_arr);
 	if (num_bytes>0) {
-		uint8_t* data = g.mim_buffer.items;
+		uint8_t* data = g.mim_buffer_arr;
 
 		struct snapshot* ss = &g.cool_snapshot;
 		struct mim_state* msr = snapshot_get_personal_mim_state_by_id(ss, g.using_personal_mim_state_id);
@@ -711,10 +709,10 @@ void end_mim(void)
 			assert(!"mim protocol error"); // XXX? should I have a "failable" flag? eg. for human input
 		}
 
-		static struct thicchar_da dodoc;
-		document_to_thicchar_da(&dodoc, &scratch_doc);
+		static struct thicchar* dodoc_arr = NULL;
+		document_to_thicchar_da(&dodoc_arr, &scratch_doc);
 		struct vmii vm = {0}; // XXX
-		mii_compile_thicc(&vm, dodoc.items, daLen(dodoc));
+		mii_compile_thicc(&vm, dodoc_arr, arrlen(dodoc_arr));
 
 		mim_state_copy(msr, &scratch_state);
 		document_copy(doc, &scratch_doc);
@@ -734,13 +732,13 @@ void end_mim(void)
 
 static char* get_mim_buffer_top(void)
 {
-	daSetMinCap(g.mim_buffer, daLen(g.mim_buffer) + STB_SPRINTF_MIN);
-	return (char*)g.mim_buffer.items + daLen(g.mim_buffer);
+	arrsetmincap(g.mim_buffer_arr, arrlen(g.mim_buffer_arr) + STB_SPRINTF_MIN);
+	return (char*)g.mim_buffer_arr + arrlen(g.mim_buffer_arr);
 }
 
 static char* wrote_mim_cb(const char* buf, void* user, int len)
 {
-	daSetLen(g.mim_buffer, daLen(g.mim_buffer)+len);
+	arrsetlen(g.mim_buffer_arr, arrlen(g.mim_buffer_arr)+len);
 	return get_mim_buffer_top();
 }
 
@@ -757,7 +755,7 @@ void mim8(uint8_t v)
 {
 	uint8_t* p = (uint8_t*)get_mim_buffer_top();
 	*p = v;
-	daSetLen(g.mim_buffer, daLen(g.mim_buffer)+1);
+	arrsetlen(g.mim_buffer_arr, arrlen(g.mim_buffer_arr)+1);
 }
 
 void gig_selftest(void)
@@ -847,4 +845,39 @@ void gig_selftest(void)
 		}
 	}
 	#endif
+}
+
+int doc_iterator_next(struct doc_iterator* it)
+{
+	assert((!it->done) && "you cannot call this function after it has returned 0");
+	struct document* d = it->doc;
+	const int num_chars = arrlen(d->fat_char_arr);
+	if (it->last) {
+		it->done = 1;
+		assert(it->offset == num_chars);
+		return 0;
+	}
+
+	if (it->new_line) {
+		++it->location.line;
+		it->location.column = 1;
+		it->new_line = 0;
+	} else {
+		++it->location.column;
+	}
+
+	++it->offset;
+	const int off = it->offset;
+	if (off < num_chars) {
+		it->fat_char = arrchkptr(d->fat_char_arr, off);
+		if (it->fat_char->thicchar.codepoint == '\n') {
+			it->new_line = 1;
+		}
+	} else {
+		assert(off == num_chars);
+		it->fat_char = NULL;
+		it->last = 1;
+	}
+
+	return 1;
 }

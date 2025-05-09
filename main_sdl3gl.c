@@ -4,6 +4,8 @@
 
 #include <SDL3/SDL_main.h> // required on Android, maybe other platforms?
 
+#include "stb_ds_sysalloc.h"
+
 #include "main.h"
 
 #include "impl_sdl3.h"

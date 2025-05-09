@@ -2,10 +2,10 @@
 
 #include <stdlib.h>
 #include <stdint.h>
+#include <assert.h>
 
 #include "mii.h"
 #include "util.h"
-#include "da.h"
 
 struct location {
 	int line;
@@ -67,7 +67,7 @@ struct mim_state {
 	int personal_id;
 	// [artist_id,personal_id] is the "unique key"
 	int document_id;
-	DA(struct caret, carets);
+	struct caret* caret_arr;
 	// (update mim_state_copy() when adding da-fields here)
 };
 
@@ -107,7 +107,7 @@ struct document {
 	int id;
 	//int version;
 	enum document_type type;
-	DA(struct fat_char, fat_chars);
+	struct fat_char* fat_char_arr;
 	// (update document_copy() when adding da-fields here)
 };
 
@@ -130,41 +130,7 @@ static inline struct doc_iterator doc_iterator(struct document* doc)
 	});
 }
 
-static inline int doc_iterator_next(struct doc_iterator* it)
-{
-	assert((!it->done) && "you cannot call this function after it has returned 0");
-	struct document* d = it->doc;
-	const int num_chars = daLen(d->fat_chars);
-	if (it->last) {
-		it->done = 1;
-		assert(it->offset == num_chars);
-		return 0;
-	}
-
-	if (it->new_line) {
-		++it->location.line;
-		it->location.column = 1;
-		it->new_line = 0;
-	} else {
-		++it->location.column;
-	}
-
-	++it->offset;
-	const int off = it->offset;
-	if (off < num_chars) {
-		it->fat_char = daPtr(d->fat_chars, off);
-		if (it->fat_char->thicchar.codepoint == '\n') {
-			it->new_line = 1;
-		}
-	} else {
-		assert(off == num_chars);
-		it->fat_char = NULL;
-		it->last = 1;
-	}
-
-	return 1;
-}
-
+int doc_iterator_next(struct doc_iterator* it);
 static inline void doc_iterator_locate(struct doc_iterator* it, struct location* loc)
 {
 	while (doc_iterator_next(it)) {

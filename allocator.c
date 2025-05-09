@@ -18,16 +18,10 @@ static void free_wrapper(void* allocator_context, void* ptr)
 	free(ptr);
 }
 
-static struct allocator system_allocator = {
+struct allocator system_allocator = {
 	.fn_realloc = realloc_wrapper,
 	.fn_free    = free_wrapper,
 };
-
-struct allocator* get_system_allocator(void)
-{
-	assert((system_allocator.fn_realloc!=NULL) && (system_allocator.fn_free != NULL));
-	return &system_allocator;
-}
 
 #define SCRATCH_HEADER_SIZE CACHE_ALIGN(sizeof(struct scratch_context_header))
 

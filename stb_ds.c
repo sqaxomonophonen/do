@@ -7,7 +7,7 @@
 
 static void* my_realloc(void* context, void *ptr, size_t size)
 {
-	assert((context != NULL) && "realloc used without context; perhaps see get_system_allocator()?");
+	assert((context != NULL) && "STBDS_REALLOC() called without context; allocator is missing");
 	struct allocator* a = context;
 	assert((a->fn_realloc != NULL) && "allocator not initialized?");
 	return a->fn_realloc(a->allocator_context, ptr, size);
@@ -15,7 +15,7 @@ static void* my_realloc(void* context, void *ptr, size_t size)
 
 static void my_free(void* context, void *ptr)
 {
-	assert((context != NULL) && "realloc used without context; perhaps see get_system_allocator()?");
+	assert((context != NULL) && "STBDS_FREE() called without context; allocator is missing");
 	struct allocator* a = context;
 	if (a->fn_free == NULL) return; // no-free allocators are allowed; just do nothing
 	a->fn_free(a->allocator_context, ptr);

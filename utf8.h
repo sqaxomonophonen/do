@@ -284,12 +284,12 @@ int utf8_strlen(const char* str)
 
 int utf8_decode(const char** inputpp, int* remaining)
 {
-	const uint8_t** c0 = (const uint8_t**)inputpp;
-	const uint8_t* b = *c0;
+	const char** c0 = inputpp;
+	const char* b = *c0;
 	if (*remaining < 1) return -1;
 	--(*remaining);
 	++(*c0);
-	const uint8_t b0 = b[0];
+	const uint8_t b0 = (uint8_t)b[0];
 	const int nb = utf8_num_bytes_for_first_byte(b0);
 	if (nb == -1) return -1;
 	if (nb == 1) return b0;
@@ -305,9 +305,9 @@ int utf8_decode(const char** inputpp, int* remaining)
 	(*c0) += nb1;
 	const int m6 = 0x3f;
 	switch (nb) {
-	case 2: return ((b[0] & 0x1f) << 6)  +  (b[1] & m6);
-	case 3: return ((b[0] & 0x0f) << 12) + ((b[1] & m6) << 6)  +  (b[2] & m6);
-	case 4: return ((b[0] & 0x07) << 18) + ((b[1] & m6) << 12) + ((b[2] & m6) << 6) + (b[3] & m6);
+	case 2: return (((uint8_t)b[0] & 0x1f) << 6)  +  ((uint8_t)b[1] & m6);
+	case 3: return (((uint8_t)b[0] & 0x0f) << 12) + (((uint8_t)b[1] & m6) << 6)  +  ((uint8_t)b[2] & m6);
+	case 4: return (((uint8_t)b[0] & 0x07) << 18) + (((uint8_t)b[1] & m6) << 12) + (((uint8_t)b[2] & m6) << 6) + ((uint8_t)b[3] & m6);
 	}
 	assert(!"unreachable");
 }

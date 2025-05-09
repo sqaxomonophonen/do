@@ -48,12 +48,17 @@ COMPILE-TIME OPTIONS
 
      By default stb_ds uses stdlib realloc() and free() for memory management. You can
      substitute your own functions instead by defining these symbols. You must either
-     define both, or neither. Note that at the moment, 'context' will always be NULL.
-     @TODO add an array/hash initialization function that takes a memory context pointer.
+     define both, or neither.
 
   #define STBDS_UNIT_TESTS
 
      Defines a function stbds_unit_tests() that checks the functioning of the data structures.
+
+  #define STBDS_DEFAULT_CONTEXT
+
+     Sets the default context for STBDS_REALLOC/STBDS_FREE in /any/ file in which you
+     include stb_ds.h. If not defined, NULL is used. The default context is used on
+     demand with the entire API unless you explicitly set it with arrinit()/hminit()/shinit()
 
   Note that on older versions of gcc (e.g. 5.x.x) you may need to build with '-std=c++0x'
      (or equivalentally '-std=c++11') when using anonymous structures as seen on the web
@@ -371,6 +376,7 @@ CREDITS
   Per Vognsen  -- idea for hash table API/implementation
   Rafael Sachetto -- arrpop()
   github:HeroicKatora -- arraddn() reworking
+  github:sqaxomonophonen - added realloc/free context support
 
   Bugfixes:
     Andy Durdin
@@ -383,6 +389,10 @@ CREDITS
     Andreas Vennstrom
     Tobias Mansfield-Williams
 */
+
+#ifndef STBDS_DEFAULT_CONTEXT
+#define STBDS_DEFAULT_CONTEXT NULL
+#endif
 
 #ifdef STBDS_UNIT_TESTS
 #define _CRT_SECURE_NO_WARNINGS
@@ -450,6 +460,8 @@ CREDITS
 #define shdefaults  stbds_shdefaults
 #define sh_new_arena  stbds_sh_new_arena
 #define sh_new_strdup stbds_sh_new_strdup
+#define sh_new_arena_with_context  stbds_sh_new_arena_with_context
+#define sh_new_strdup_with_context stbds_sh_new_strdup_with_context
 
 #define stralloc    stbds_stralloc
 #define strreset    stbds_strreset
@@ -485,15 +497,15 @@ extern void stbds_unit_tests(void);
 // Everything below here is implementation details
 //
 
-extern void * stbds_arrgrowf(void *a, size_t elemsize, size_t addlen, size_t min_cap, void *context);
+extern void * stbds_arrgrowf(void *a, size_t elemsize, size_t addlen, size_t min_cap, void *context, int must_init);
 extern void   stbds_arrfreef(void *a);
 extern void   stbds_hmfree_func(void *p, size_t elemsize);
-extern void * stbds_hmget_key(void *a, size_t elemsize, void *key, size_t keysize, int mode);
-extern void * stbds_hmget_key_ts(void *a, size_t elemsize, void *key, size_t keysize, ptrdiff_t *temp, int mode);
-extern void * stbds_hmput_default(void *a, size_t elemsize, void *init_context);
-extern void * stbds_hmput_key(void *a, size_t elemsize, void *key, size_t keysize, int mode);
+extern void * stbds_hmget_key(void *a, size_t elemsize, void *key, size_t keysize, int mode, void *default_context);
+extern void * stbds_hmget_key_ts(void *a, size_t elemsize, void *key, size_t keysize, ptrdiff_t *temp, int mode, void *default_context);
+extern void * stbds_hmput_default(void *a, size_t elemsize, void *default_context);
+extern void * stbds_hmput_key(void *a, size_t elemsize, void *key, size_t keysize, int mode, void *default_context);
 extern void * stbds_hmdel_key(void *a, size_t elemsize, void *key, size_t keysize, size_t keyoffset, int mode);
-extern void * stbds_shmode_func(size_t elemsize, int mode);
+extern void * stbds_shmode_func(size_t elemsize, int mode, void *init_context);
 
 #ifdef __cplusplus
 }
@@ -530,10 +542,10 @@ extern void * stbds_shmode_func(size_t elemsize, int mode);
 #define stbds_context(t)  stbds_header(t)->context
 #define stbds_temp_key(t) (*(char **) stbds_header(t)->hash_table)
 
-#define stbds_arrsetcap(a,n)   (stbds_arrgrow(a,0,n,0))
+#define stbds_arrsetcap(a,n)   (stbds_arrgrow(a,0,n,STBDS_DEFAULT_CONTEXT,0))
 #define stbds_arrsetlen(a,n)   ((stbds_arrcap(a) < (size_t) (n) ? stbds_arrsetcap((a),(size_t)(n)),0 : 0), (a) ? stbds_header(a)->length = (size_t) (n) : 0)
 #define stbds_arrcap(a)        ((a) ? stbds_header(a)->capacity : 0)
-#define stbds_arrinit(a,c)     (stbds_arrgrow(a,0,0,c))
+#define stbds_arrinit(a,c)     (stbds_arrgrow(a,0,0,c,1))
 #define stbds_arrlen(a)        ((a) ? (ptrdiff_t) stbds_header(a)->length : 0)
 #define stbds_arrlenu(a)       ((a) ?             stbds_header(a)->length : 0)
 #define stbds_arrput(a,v)      (stbds_arrmaybegrow(a,1), (a)[stbds_header(a)->length++] = (v))
@@ -552,27 +564,27 @@ extern void * stbds_shmode_func(size_t elemsize, int mode);
 #define stbds_arrins(a,i,v)    (stbds_arrinsn((a),(i),1), (a)[i]=(v))
 
 #define stbds_arrmaybegrow(a,n)  ((!(a) || stbds_header(a)->length + (n) > stbds_header(a)->capacity) \
-                                  ? (stbds_arrgrow(a,n,0,0),0) : 0)
+                                  ? (stbds_arrgrow(a,n,0,STBDS_DEFAULT_CONTEXT,0),0) : 0)
 
-#define stbds_arrgrow(a,b,c,x)   ((a) = stbds_arrgrowf_wrapper((a), sizeof *(a), (b), (c), (x)))
+#define stbds_arrgrow(a,b,c,x,i) ((a) = stbds_arrgrowf_wrapper((a), sizeof *(a), (b), (c), (x), (i)))
 
 #define stbds_hminit(t, c) ((t) = stbds_hmput_default_wrapper((t), sizeof *(t), c))
 
 #define stbds_hmput(t, k, v) \
-    ((t) = stbds_hmput_key_wrapper((t), sizeof *(t), (void*) STBDS_ADDRESSOF((t)->key, (k)), sizeof (t)->key, 0),   \
+    ((t) = stbds_hmput_key_wrapper((t), sizeof *(t), (void*) STBDS_ADDRESSOF((t)->key, (k)), sizeof (t)->key, 0, STBDS_DEFAULT_CONTEXT),   \
      (t)[stbds_temp((t)-1)].key = (k),    \
      (t)[stbds_temp((t)-1)].value = (v))
 
 #define stbds_hmputs(t, s) \
-    ((t) = stbds_hmput_key_wrapper((t), sizeof *(t), &(s).key, sizeof (s).key, STBDS_HM_BINARY), \
+    ((t) = stbds_hmput_key_wrapper((t), sizeof *(t), &(s).key, sizeof (s).key, STBDS_HM_BINARY, STBDS_DEFAULT_CONTEXT), \
      (t)[stbds_temp((t)-1)] = (s))
 
 #define stbds_hmgeti(t,k) \
-    ((t) = stbds_hmget_key_wrapper((t), sizeof *(t), (void*) STBDS_ADDRESSOF((t)->key, (k)), sizeof (t)->key, STBDS_HM_BINARY), \
+    ((t) = stbds_hmget_key_wrapper((t), sizeof *(t), (void*) STBDS_ADDRESSOF((t)->key, (k)), sizeof (t)->key, STBDS_HM_BINARY, STBDS_DEFAULT_CONTEXT), \
       stbds_temp((t)-1))
 
 #define stbds_hmgeti_ts(t,k,temp) \
-    ((t) = stbds_hmget_key_ts_wrapper((t), sizeof *(t), (void*) STBDS_ADDRESSOF((t)->key, (k)), sizeof (t)->key, &(temp), STBDS_HM_BINARY), \
+    ((t) = stbds_hmget_key_ts_wrapper((t), sizeof *(t), (void*) STBDS_ADDRESSOF((t)->key, (k)), sizeof (t)->key, &(temp), STBDS_HM_BINARY, STBDS_DEFAULT_CONTEXT), \
       (temp))
 
 #define stbds_hmgetp(t, k) \
@@ -585,10 +597,10 @@ extern void * stbds_shmode_func(size_t elemsize, int mode);
     (((t) = stbds_hmdel_key_wrapper((t),sizeof *(t), (void*) STBDS_ADDRESSOF((t)->key, (k)), sizeof (t)->key, STBDS_OFFSETOF((t),key), STBDS_HM_BINARY)),(t)?stbds_temp((t)-1):0)
 
 #define stbds_hmdefault(t, v) \
-    ((t) = stbds_hmput_default_wrapper((t), sizeof *(t)), (t)[-1].value = (v))
+    ((t) = stbds_hmput_default_wrapper((t), sizeof *(t), STBDS_DEFAULT_CONTEXT), (t)[-1].value = (v))
 
 #define stbds_hmdefaults(t, s) \
-    ((t) = stbds_hmput_default_wrapper((t), sizeof *(t)), (t)[-1] = (s))
+    ((t) = stbds_hmput_default_wrapper((t), sizeof *(t), STBDS_DEFAULT_CONTEXT), (t)[-1] = (s))
 
 #define stbds_hmfree(p)        \
     ((void) ((p) != NULL ? stbds_hmfree_func((p)-1,sizeof*(p)),0 : 0),(p)=NULL)
@@ -603,28 +615,28 @@ extern void * stbds_shmode_func(size_t elemsize, int mode);
 #define stbds_shinit(t, c) stbds_hminit(t, c)
 
 #define stbds_shput(t, k, v) \
-    ((t) = stbds_hmput_key_wrapper((t), sizeof *(t), (void*) (k), sizeof (t)->key, STBDS_HM_STRING),   \
+    ((t) = stbds_hmput_key_wrapper((t), sizeof *(t), (void*) (k), sizeof (t)->key, STBDS_HM_STRING, STBDS_DEFAULT_CONTEXT),   \
      (t)[stbds_temp((t)-1)].value = (v))
 
 #define stbds_shputi(t, k, v) \
-    ((t) = stbds_hmput_key_wrapper((t), sizeof *(t), (void*) (k), sizeof (t)->key, STBDS_HM_STRING),   \
+    ((t) = stbds_hmput_key_wrapper((t), sizeof *(t), (void*) (k), sizeof (t)->key, STBDS_HM_STRING, STBDS_DEFAULT_CONTEXT),   \
      (t)[stbds_temp((t)-1)].value = (v), stbds_temp((t)-1))
 
 #define stbds_shputs(t, s) \
-    ((t) = stbds_hmput_key_wrapper((t), sizeof *(t), (void*) (s).key, sizeof (s).key, STBDS_HM_STRING), \
+    ((t) = stbds_hmput_key_wrapper((t), sizeof *(t), (void*) (s).key, sizeof (s).key, STBDS_HM_STRING, STBDS_DEFAULT_CONTEXT), \
      (t)[stbds_temp((t)-1)] = (s), \
      (t)[stbds_temp((t)-1)].key = stbds_temp_key((t)-1)) // above line overwrites whole structure, so must rewrite key here if it was allocated internally
 
 #define stbds_pshput(t, p) \
-    ((t) = stbds_hmput_key_wrapper((t), sizeof *(t), (void*) (p)->key, sizeof (p)->key, STBDS_HM_PTR_TO_STRING), \
+    ((t) = stbds_hmput_key_wrapper((t), sizeof *(t), (void*) (p)->key, sizeof (p)->key, STBDS_HM_PTR_TO_STRING, STBDS_DEFAULT_CONTEXT), \
      (t)[stbds_temp((t)-1)] = (p))
 
 #define stbds_shgeti(t,k) \
-     ((t) = stbds_hmget_key_wrapper((t), sizeof *(t), (void*) (k), sizeof (t)->key, STBDS_HM_STRING), \
+     ((t) = stbds_hmget_key_wrapper((t), sizeof *(t), (void*) (k), sizeof (t)->key, STBDS_HM_STRING, STBDS_DEFAULT_CONTEXT), \
       stbds_temp((t)-1))
 
 #define stbds_pshgeti(t,k) \
-     ((t) = stbds_hmget_key_wrapper((t), sizeof *(t), (void*) (k), sizeof (*(t))->key, STBDS_HM_PTR_TO_STRING), \
+     ((t) = stbds_hmget_key_wrapper((t), sizeof *(t), (void*) (k), sizeof (*(t))->key, STBDS_HM_PTR_TO_STRING, STBDS_DEFAULT_CONTEXT), \
       stbds_temp((t)-1))
 
 #define stbds_shgetp(t, k) \
@@ -635,13 +647,19 @@ extern void * stbds_shmode_func(size_t elemsize, int mode);
 
 #define stbds_shdel(t,k) \
     (((t) = stbds_hmdel_key_wrapper((t),sizeof *(t), (void*) (k), sizeof (t)->key, STBDS_OFFSETOF((t),key), STBDS_HM_STRING)),(t)?stbds_temp((t)-1):0)
+
 #define stbds_pshdel(t,k) \
     (((t) = stbds_hmdel_key_wrapper((t),sizeof *(t), (void*) (k), sizeof (*(t))->key, STBDS_OFFSETOF(*(t),key), STBDS_HM_PTR_TO_STRING)),(t)?stbds_temp((t)-1):0)
 
-#define stbds_sh_new_arena(t)  \
-    ((t) = stbds_shmode_func_wrapper(t, sizeof *(t), STBDS_SH_ARENA))
-#define stbds_sh_new_strdup(t) \
-    ((t) = stbds_shmode_func_wrapper(t, sizeof *(t), STBDS_SH_STRDUP))
+#define stbds_sh_new_arena_with_context(t,c)  \
+    ((t) = stbds_shmode_func_wrapper(t, sizeof *(t), STBDS_SH_ARENA, c))
+
+#define stbds_sh_new_arena(t) stbds_sh_new_arena_with_context(t, STBDS_DEFAULT_CONTEXT)
+
+#define stbds_sh_new_strdup_with_context(t,c) \
+    ((t) = stbds_shmode_func_wrapper(t, sizeof *(t), STBDS_SH_STRDUP, c))
+
+#define stbds_sh_new_strdup(t) stbds_sh_new_strdup_with_context(t, STBDS_DEFAULT_CONTEXT)
 
 #define stbds_shdefault(t, v)  stbds_hmdefault(t,v)
 #define stbds_shdefaults(t, s) stbds_hmdefaults(t,s)
@@ -692,17 +710,17 @@ enum
 #ifdef __cplusplus
 // in C we use implicit assignment from these void*-returning functions to T*.
 // in C++ these templates make the same code work
-template<class T> static T * stbds_arrgrowf_wrapper(T *a, size_t elemsize, size_t addlen, size_t min_cap, void *context) {
-  return (T*)stbds_arrgrowf((void *)a, elemsize, addlen, min_cap, context);
+template<class T> static T * stbds_arrgrowf_wrapper(T *a, size_t elemsize, size_t addlen, size_t min_cap, void *context, int must_init) {
+  return (T*)stbds_arrgrowf((void *)a, elemsize, addlen, min_cap, context, must_init);
 }
-template<class T> static T * stbds_hmget_key_wrapper(T *a, size_t elemsize, void *key, size_t keysize, int mode) {
-  return (T*)stbds_hmget_key((void*)a, elemsize, key, keysize, mode);
+template<class T> static T * stbds_hmget_key_wrapper(T *a, size_t elemsize, void *key, size_t keysize, int mode, void *default_context) {
+  return (T*)stbds_hmget_key((void*)a, elemsize, key, keysize, mode, default_context);
 }
-template<class T> static T * stbds_hmget_key_ts_wrapper(T *a, size_t elemsize, void *key, size_t keysize, ptrdiff_t *temp, int mode) {
-  return (T*)stbds_hmget_key_ts((void*)a, elemsize, key, keysize, temp, mode);
+template<class T> static T * stbds_hmget_key_ts_wrapper(T *a, size_t elemsize, void *key, size_t keysize, ptrdiff_t *temp, int mode, void *default_context) {
+  return (T*)stbds_hmget_key_ts((void*)a, elemsize, key, keysize, temp, mode, default_context);
 }
-template<class T> static T * stbds_hmput_default_wrapper(T *a, size_t elemsize, void *init_context) {
-  return (T*)stbds_hmput_default((void *)a, elemsize, init_context);
+template<class T> static T * stbds_hmput_default_wrapper(T *a, size_t elemsize, void *default_context) {
+  return (T*)stbds_hmput_default((void *)a, elemsize, default_context);
 }
 template<class T> static T * stbds_hmput_key_wrapper(T *a, size_t elemsize, void *key, size_t keysize, int mode) {
   return (T*)stbds_hmput_key((void*)a, elemsize, key, keysize, mode);
@@ -710,17 +728,17 @@ template<class T> static T * stbds_hmput_key_wrapper(T *a, size_t elemsize, void
 template<class T> static T * stbds_hmdel_key_wrapper(T *a, size_t elemsize, void *key, size_t keysize, size_t keyoffset, int mode){
   return (T*)stbds_hmdel_key((void*)a, elemsize, key, keysize, keyoffset, mode);
 }
-template<class T> static T * stbds_shmode_func_wrapper(T *, size_t elemsize, int mode) {
-  return (T*)stbds_shmode_func(elemsize, mode);
+template<class T> static T * stbds_shmode_func_wrapper(T *, size_t elemsize, int mode, void *init_context) {
+  return (T*)stbds_shmode_func(elemsize, mode, init_context);
 }
 #else
-#define stbds_arrgrowf_wrapper            stbds_arrgrowf
-#define stbds_hmget_key_wrapper           stbds_hmget_key
-#define stbds_hmget_key_ts_wrapper        stbds_hmget_key_ts
-#define stbds_hmput_default_wrapper       stbds_hmput_default
-#define stbds_hmput_key_wrapper           stbds_hmput_key
-#define stbds_hmdel_key_wrapper           stbds_hmdel_key
-#define stbds_shmode_func_wrapper(t,e,m)  stbds_shmode_func(e,m)
+#define stbds_arrgrowf_wrapper              stbds_arrgrowf
+#define stbds_hmget_key_wrapper             stbds_hmget_key
+#define stbds_hmget_key_ts_wrapper          stbds_hmget_key_ts
+#define stbds_hmput_default_wrapper         stbds_hmput_default
+#define stbds_hmput_key_wrapper             stbds_hmput_key
+#define stbds_hmdel_key_wrapper             stbds_hmdel_key
+#define stbds_shmode_func_wrapper(t,e,m,c)  stbds_shmode_func(e,m,c)
 #endif
 
 #endif // INCLUDE_STB_DS_H
@@ -770,7 +788,7 @@ size_t stbds_rehash_items;
 //int *prev_allocs[65536];
 //int num_prev;
 
-void *stbds_arrgrowf(void *a, size_t elemsize, size_t addlen, size_t min_cap, void *context)
+void *stbds_arrgrowf(void *a, size_t elemsize, size_t addlen, size_t min_cap, void *init_context, int must_init)
 {
   stbds_array_header temp={0}; // force debugging
   void *b;
@@ -781,7 +799,7 @@ void *stbds_arrgrowf(void *a, size_t elemsize, size_t addlen, size_t min_cap, vo
   if (min_len > min_cap)
     min_cap = min_len;
 
-  if (!context && min_cap <= stbds_arrcap(a))
+  if (!init_context && !must_init && min_cap <= stbds_arrcap(a))
     return a;
 
   // increase needed capacity to guarantee O(1) amortized
@@ -790,27 +808,21 @@ void *stbds_arrgrowf(void *a, size_t elemsize, size_t addlen, size_t min_cap, vo
   else if (min_cap < 4)
     min_cap = 4;
 
-  // context must either be null or match the context in our array
-  if (context && a)
-    STBDS_ASSERT(context == stbds_context(a));
-  if (a)
-    context = stbds_context(a);
-
   //if (num_prev < 65536) if (a) prev_allocs[num_prev++] = (int *) ((char *) a+1);
   //if (num_prev == 2201)
   //  num_prev = num_prev;
-  b = STBDS_REALLOC(context, (a) ? stbds_header(a) : 0, elemsize * min_cap + sizeof(stbds_array_header));
+  b = STBDS_REALLOC(a ? stbds_context(a) : init_context, (a) ? stbds_header(a) : 0, elemsize * min_cap + sizeof(stbds_array_header));
   //if (num_prev < 65536) prev_allocs[num_prev++] = (int *) (char *) b;
   b = (char *) b + sizeof(stbds_array_header);
   if (a == NULL) {
     stbds_header(b)->length = 0;
     stbds_header(b)->hash_table = 0;
     stbds_header(b)->temp = 0;
+    stbds_context(b) = init_context;
   } else {
     STBDS_STATS(++stbds_array_grow);
   }
   stbds_header(b)->capacity = min_cap;
-  stbds_context(b) = context;
 
   return b;
 }
@@ -1297,12 +1309,12 @@ static ptrdiff_t stbds_hm_find_slot(void *a, size_t elemsize, void *key, size_t 
   /* NOTREACHED */
 }
 
-void * stbds_hmget_key_ts(void *a, size_t elemsize, void *key, size_t keysize, ptrdiff_t *temp, int mode)
+void * stbds_hmget_key_ts(void *a, size_t elemsize, void *key, size_t keysize, ptrdiff_t *temp, int mode, void* default_context)
 {
   size_t keyoffset = 0;
   if (a == NULL) {
     // make it non-empty so we can return a temp
-    a = stbds_arrgrowf(0, elemsize, 0, 1, 0);
+    a = stbds_arrgrowf(0, elemsize, 0, 1, default_context, 0);
     stbds_header(a)->length += 1;
     memset(a, 0, elemsize);
     *temp = STBDS_INDEX_EMPTY;
@@ -1328,46 +1340,40 @@ void * stbds_hmget_key_ts(void *a, size_t elemsize, void *key, size_t keysize, p
   }
 }
 
-void * stbds_hmget_key(void *a, size_t elemsize, void *key, size_t keysize, int mode)
+void * stbds_hmget_key(void *a, size_t elemsize, void *key, size_t keysize, int mode, void *default_context)
 {
   ptrdiff_t temp;
-  void *p = stbds_hmget_key_ts(a, elemsize, key, keysize, &temp, mode);
+  void *p = stbds_hmget_key_ts(a, elemsize, key, keysize, &temp, mode, default_context);
   stbds_temp(STBDS_HASH_TO_ARR(p,elemsize)) = temp;
   return p;
 }
 
-void * stbds_hmput_default(void *a, size_t elemsize, void *init_context)
+void * stbds_hmput_default(void *a, size_t elemsize, void *default_context)
 {
   // three cases:
   //   a is NULL <- allocate
   //   a has a hash table but no entries, because of shmode <- grow
   //   a has entries <- do nothing
   if (a == NULL || stbds_header(STBDS_HASH_TO_ARR(a,elemsize))->length == 0) {
-    a = stbds_arrgrowf(a ? STBDS_HASH_TO_ARR(a,elemsize) : NULL, elemsize, 0, 1, a ? stbds_context(a) : init_context);
-    STBDS_ASSERT(stbds_context(a) == init_context);
+    a = stbds_arrgrowf(a ? STBDS_HASH_TO_ARR(a,elemsize) : NULL, elemsize, 0, 1, a ? stbds_context(a) : default_context, 0);
     stbds_header(a)->length += 1;
     memset(a, 0, elemsize);
     a=STBDS_ARR_TO_HASH(a,elemsize);
   }
-  if (init_context)
-    stbds_context(a) = init_context;
-
-  STBDS_ASSERT(stbds_context(a) == init_context);
-  STBDS_ASSERT(stbds_context(STBDS_HASH_TO_ARR(a,elemsize)) == init_context);
 
   return a;
 }
 
 static char *stbds_strdup(char *str, void *context);
 
-void *stbds_hmput_key(void *a, size_t elemsize, void *key, size_t keysize, int mode)
+void *stbds_hmput_key(void *a, size_t elemsize, void *key, size_t keysize, int mode, void *default_context)
 {
   size_t keyoffset=0;
   void *raw_a;
   stbds_hash_index *table;
 
   if (a == NULL) {
-    a = stbds_arrgrowf(0, elemsize, 0, 1, 0);
+    a = stbds_arrgrowf(0, elemsize, 0, 1, default_context, 0);
     memset(a, 0, elemsize);
     stbds_header(a)->length += 1;
     // adjust a to point AFTER the default element
@@ -1463,7 +1469,7 @@ void *stbds_hmput_key(void *a, size_t elemsize, void *key, size_t keysize, int m
       ptrdiff_t i = (ptrdiff_t) stbds_arrlen(a);
       // we want to do stbds_arraddn(1), but we can't use the macros since we don't have something of the right type
       if ((size_t) i+1 > stbds_arrcap(a))
-        *(void **) &a = stbds_arrgrowf(a, elemsize, 1, 0, stbds_context(a));
+        *(void **) &a = stbds_arrgrowf(a, elemsize, 1, 0, stbds_context(a), 0);
       raw_a = STBDS_ARR_TO_HASH(a,elemsize);
 
       STBDS_ASSERT((size_t) i+1 <= stbds_arrcap(a));
@@ -1484,9 +1490,9 @@ void *stbds_hmput_key(void *a, size_t elemsize, void *key, size_t keysize, int m
   }
 }
 
-void * stbds_shmode_func(size_t elemsize, int mode)
+void * stbds_shmode_func(size_t elemsize, int mode, void *init_context)
 {
-  void *a = stbds_arrgrowf(0, elemsize, 0, 1, 0);
+  void *a = stbds_arrgrowf(0, elemsize, 0, 1, init_context, 0);
   stbds_hash_index *h;
   memset(a, 0, elemsize);
   stbds_header(a)->length = 1;

@@ -6,28 +6,32 @@ Overview of source files
 (When both foo.c and foo.h exists, the most notable is mentioned and the other
 is omitted)
 
-gig.c - "state of the gig", shared, collaborative state, and an interface to it
-
-gui.c - main GUI code (cross-platform)
+main logic code
+  gig.c - collaboratively edited state
+  gui.c - main GUI code (cross-platform)
+  mii.c - mii-compiler, and vmii virtual machine
 
 main_*.c - entrypoint (main) for GUI frontends
   main_emscripten.c - web app, using emscripten/webgl
   main_sdl3gl.c     - desktop app, using SDL3 + OpenGL ES 3
   main.h            - shared code / interface for main_*.c
 
-impl_*.h - "backend implementations" for various stuff
-  impl_sdl3.h - SDL3
-  impl_gl.h   - GL code (OpenGL ES 3 / WebGL)
+impl_*.h - backend implementations
+  impl_sdl3.h - SDL3 for windowing (https://libsdl.org)
+  impl_gl.h   - GL code for OpenGL ES 3 / WebGL rendering
+  (the "web backend" is fully contained in main_emscripten.c)
 
 fonts
   fonts.c - font list
   font0.c - embedded system font
 
 utility code
-  utf8.c      - UTF-8 implementation
-  sep2dconv.c - separable 2D convolution (used for HDR blur)
   util.h      - misc shared utility code
+  allocator.c - allocator interface and allocators
   leb128.h    - LEB128 variable-length integer codec
+  utf8.c      - UTF-8 code
+  sep2dconv.c - separable 2D convolution (used for HDR blur)
+  see also: stb_ds_sysalloc.h
 
 tests
   test_*.c   - stand-alone tests

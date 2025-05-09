@@ -1,4 +1,8 @@
 
+ - If you use the stb_ds.h dynamic array, please add an `_arr`-suffix to the
+   field name; normally a declaration reveals what the type is, but with this
+   it's "hidden" so I prefer "int* id_arr" instead of "int* ids"
+
  - Prefix out/return argument names with `out_`. These are pointer arguments
    used to return multiple/optional values. It should typically be valid to
    pass NULL if you don't want a particular return value.
