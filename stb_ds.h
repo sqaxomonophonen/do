@@ -186,6 +186,13 @@ DOCUMENTATION
 
     Function interface (actually macros):
 
+      hminit
+      shinit
+        void hminit(T*, void* context);
+        void shinit(T*, void* context);
+          Initializes the hashmap with a given context. See also
+          sh_new_strdup_with_context() and sh_new_arena_with_context().
+
       hmfree
       shfree
         void hmfree(T*);
@@ -281,13 +288,17 @@ DOCUMENTATION
     Function interface (actually macros) for strings only:
 
       sh_new_strdup
+      sh_new_strdup_with_context
         void sh_new_strdup(T*);
+        void sh_new_strdup_with_context(T*,void* context);
           Overwrites the existing pointer with a newly allocated
           string hashmap which will automatically allocate and free
           each string key using realloc/free
 
       sh_new_arena
+      sh_new_arena_with_context
         void sh_new_arena(T*);
+        void sh_new_arena_with_context(T*,void* context);
           Overwrites the existing pointer with a newly allocated
           string hashmap which will automatically allocate each string
           key to a string arena. Every string key ever used by this
@@ -1498,7 +1509,9 @@ void * stbds_shmode_func(size_t elemsize, int mode, void *init_context)
   stbds_header(a)->length = 1;
   stbds_header(a)->hash_table = h = (stbds_hash_index *) stbds_make_hash_index(STBDS_BUCKET_LENGTH, NULL, stbds_context(a));
   h->string.mode = (unsigned char) mode;
-  return STBDS_ARR_TO_HASH(a,elemsize);
+  a = STBDS_ARR_TO_HASH(a,elemsize);
+  stbds_context(a) = init_context;
+  return a;
 }
 
 void * stbds_hmdel_key(void *a, size_t elemsize, void *key, size_t keysize, size_t keyoffset, int mode)

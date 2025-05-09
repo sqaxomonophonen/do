@@ -2,13 +2,12 @@
 
 #include <stdint.h>
 
-struct thicchar {
-	int32_t codepoint;
-	uint8_t color[4];
-};
+#include "gig.h"
 
 struct vmii {
+	int has_compile_error;
 	const char* compile_error;
+	struct location compile_error_location;
 };
 
 void mii_init(void);

@@ -1,5 +1,4 @@
 #include <assert.h>
-#include <stdio.h> // XXX
 #include <stdlib.h>
 #include <string.h>
 
@@ -29,7 +28,7 @@ struct scratch_allocation_header {
 	size_t capacity;
 };
 
-static struct scratch_allocation_header* get_scratch_header(void* ptr)
+static struct scratch_allocation_header* ptr_to_scratch_header(void* ptr)
 {
 	return ((struct scratch_allocation_header*)ptr) - 1;
 }
@@ -52,7 +51,8 @@ static void* scratch_malloc(void* allocator_context, size_t sz)
 		assert(!"unreachable");
 	}
 
-	void* ptr = (void*)h + SCRATCH_HEADER_SIZE + h->allocated;
+	void* ptr = (void*)h + SCRATCH_HEADER_SIZE + h->allocated + hsz;
+	ptr_to_scratch_header(ptr)->capacity = sz;
 	h->allocated = required;
 	return ptr;
 }
@@ -62,12 +62,13 @@ static void* scratch_realloc(void* allocator_context, void* ptr, size_t sz)
 	if (ptr == NULL) {
 		return scratch_malloc(allocator_context, sz);
 	} else {
-		const size_t cap = get_scratch_header(ptr)->capacity;
+		const size_t cap = ptr_to_scratch_header(ptr)->capacity;
 		if (sz <= cap) {
 			return ptr;
 		} else {
 			void* ptr2 = scratch_malloc(allocator_context, sz);
-			memcpy(ptr2, ptr, cap);
+			const size_t ex = sizeof(struct scratch_allocation_header);
+			memcpy(ptr2-ex, ptr-ex, cap+ex);
 			return ptr2;
 		}
 	}

@@ -4,7 +4,6 @@
 #include <stdint.h>
 #include <assert.h>
 
-#include "mii.h"
 #include "util.h"
 
 struct location {
@@ -33,6 +32,11 @@ static inline void location_sort2(struct location** a, struct location** b)
 		*b = tmp;
 	}
 }
+
+struct thicchar {
+	int32_t codepoint;
+	uint8_t color[4];
+};
 
 struct fat_char {
 	struct thicchar thicchar;

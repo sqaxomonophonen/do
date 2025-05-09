@@ -713,6 +713,9 @@ void end_mim(void)
 		document_to_thicchar_da(&dodoc_arr, &scratch_doc);
 		struct vmii vm = {0}; // XXX
 		mii_compile_thicc(&vm, dodoc_arr, arrlen(dodoc_arr));
+		if (vm.has_compile_error) {
+			printf("TODO compile error [%s]\n", vm.compile_error);
+		}
 
 		mim_state_copy(msr, &scratch_state);
 		document_copy(doc, &scratch_doc);
