@@ -1,4 +1,19 @@
-#include <stdio.h> // XXX
+// mii (forth-like language) compiler and vmii virtual machine
+//  - see mii_selftest() near bottom for small programs that test compiler+vm
+//  - see built-in word definitions near top of this file
+//  - copious use of macros, including "X macros". search for e.g. BINOP for
+//    how binary operators (like `a+b`/`a b +`) are implemented with macros
+//  - compilation and program execution (vmii) uses "scratch memory" to
+//    simplify memory mangement. this implies that 1) you can have "complex
+//    lifetimes" without worrying about memory leaks because you don't need to
+//    free individual allocations (in fact, the scratch allocator's fn_free()
+//    is a no-op) and, 2) memory allocation is very fast (see scratch_realloc()
+//    in allocator.c; O(1) although upsizing realloc()s do a O(N) memcpy()).
+//    since we don't want resource-heavy and/or long-running compilations
+//    and/or executions in a live-coding environment, scratch memory seems like
+//    a good fit.
+
+#include <stdio.h> // XXX remove me eventually?
 #include <string.h>
 #include <stdlib.h>
 #include <assert.h>
@@ -42,14 +57,14 @@
 	/* ==========,==========,============================================== */ \
 	X( NOP       , NULL     , "No operation ( -- )") \
 	X( RETURN    , "return" , "Return from subroutine [returnaddr -- ]") \
-	X( PICK      , "pick"   , "Duplicate stack value (n -- stack[-1-n])") \
 	X( DROP      , "drop"   , "Remove top element from stack (x --)") \
+	X( PICK      , "pick"   , "Duplicate stack value (n -- stack[-1-n])") \
 	X( ROLL      , "roll"   , "Pop n, rotate left n+1 items on stack (example : a b c 2 -- b c a)") \
 	X( LLOR      , "llor"   , "Pop n, rotate right n+1 items on stack (example: a b c 2 -- c a b)") \
 	X( EQ        , "="      , "Equals (x y -- x=y)") \
 	X( TYPEOF    , NULL     , "Get type (x -- typeof(x))") \
 	X( CAST      , NULL     , "Set type (x T -- T(x))") \
-	X( HERE      , "here"   , "Push current instruction pointer to rstack {-- ip}") \
+	X( HERE      , "here"   , "Push current instruction pointer to rstack [-- ip]") \
 	X( I2R       , "I>R"    , "Moves integer value to rstack (i --) [-- i]") \
 	X( R2I       , "R>I"    , "Moves integer value back from rstack [i --] (-- i)") \
 	X( JMPI      , NULL     , "Pop address from rstack => indirect jump [addr -- ]" ) \
@@ -64,6 +79,7 @@
 	X( FDIV      , "F/"     , "Floating-point division (x y -- x/y)") \
 	X( FLT       , "F<"     , "Floating-point less than (x y -- x<y)") \
 	X( FLE       , "F<="    , "Floating-point less than or equal (x y -- x<=y)") \
+	X( FNE       , "F!="    , "Floating-point not equal (x y -- x!=y)") \
 	X( FEQ       , "F="     , "Floating-point equal (x y -- x=y)") \
 	X( FGE       , "F>="    , "Floating-point greater than or equal (x y -- x>=y)") \
 	X( FGT       , "F>"     , "Floating-point greater than (x y -- x>y)") \
@@ -82,6 +98,7 @@
 	X( ILT       , "I<"     , "Integer less than (x y -- x<y)") \
 	X( ILE       , "I<="    , "Integer less than or equal (x y -- x<=y)") \
 	X( IEQ       , "I="     , "Integer equal (x y -- x=y)") \
+	X( INE       , "I!="    , "Integer equal (x y -- x!=y)") \
 	X( IGE       , "I>="    , "Integer greater than or equal (x y -- x>=y)") \
 	X( IGT       , "I>"     , "Integer greater than (x y -- x>y)") \
 	/* ==========,==========,============================================== */ \
@@ -950,7 +967,19 @@ int vmii_run2(struct vmii* vm)
 				if (TRACE) printf(" RETURN pc -> %d\n", next_pc);
 			}	break;
 
+			case OP_DROP: {
+				if (STACK_HEIGHT() == 0) {
+					vmii_error(vm, "DROP called on empty stack");
+					return -1;
+				}
+				(void)arrpop(vm->stack_arr);
+			}	break;
+
 			case OP_PICK: {
+				if (STACK_HEIGHT() == 0) {
+					vmii_error(vm, "PICK called on empty stack");
+					return -1;
+				}
 				struct val vi = arrpop(vm->stack_arr);
 				int i=0;
 				if (!val2int(vi, &i)) {
@@ -995,6 +1024,7 @@ int vmii_run2(struct vmii* vm)
 			DEF_FBINOP( OP_FLT  , VAL_INT   , .i32=(a<b)        )
 			DEF_FBINOP( OP_FLE  , VAL_INT   , .i32=(a<=b)       )
 			DEF_FBINOP( OP_FEQ  , VAL_INT   , .i32=(a==b)       )
+			DEF_FBINOP( OP_FNE  , VAL_INT   , .i32=(a!=b)       )
 			DEF_FBINOP( OP_FGE  , VAL_INT   , .i32=(a>=b)       )
 			DEF_FBINOP( OP_FGT  , VAL_INT   , .i32=(a>b)        )
 			#undef DEF_FBINOP
@@ -1047,6 +1077,7 @@ int vmii_run2(struct vmii* vm)
 			DEF_IBINOP( OP_ILT     , (a<b)  )
 			DEF_IBINOP( OP_ILE     , (a<=b) )
 			DEF_IBINOP( OP_IEQ     , (a==b) )
+			DEF_IBINOP( OP_INE     , (a!=b) )
 			DEF_IBINOP( OP_IGE     , (a>=b) )
 			DEF_IBINOP( OP_IGT     , (a>b)  )
 			#undef DEF_IBINOP
@@ -1145,6 +1176,12 @@ void mii_selftest(void)
 		":",
 		": foo ",
 		": foo 42",
+		// various unbalanced comments:
+		"42 (",
+		"42 ((",
+		"42 (()",
+		"42 ())",
+		"42 (()))",
 	};
 
 	for (int i=0; i<ARRAY_LENGTH(programs_that_fail_to_compile); ++i) {
@@ -1156,23 +1193,31 @@ void mii_selftest(void)
 		}
 	}
 
-	// TODO runtime errors?
+	// TODO test runtime errors?
 
 	// these must all leave 1i (and only 1i) on the stack after execution
 	const char* programs_that_eval_to_1i[] = {
 		"1i",
-		"NOP 1i",
+		"NOP 1i (blah (blah)) NOP",
+		"1i 1i I=",
+		"1i 0i I!=",
 		"-1i I~",
+		"1i 0i pick drop",
 		"1i I~ I~",
 		"-1i 2i I+",
 		"1 1 F=",
 		"1 -1 F~ F=",
 		"-1 F~ 1 F=",
+		// NOTE euclidean integer division tests (e.g. -3/4=-1); some would
+		// fail with "truncating integer division" (-3/4=0) (you can try this
+		// for yourself by changing `stb_div_eucl(a,b)` to `a/b` somewhere
+		// above, assuming your CPU/compiler uses truncating division)
 		"7i 4i I/",
-		"-7i 10 I/ I~", // NOTE euclidean divide; would fail with truncating divide
+		"-3i 4 I/ I~",
+		"-5i -7i I/",
 		": fsqr 0 pick F* ; 42 fsqr 1764 F=",
 		": fsqr 0 : foo 101 ; pick F* ; -42 fsqr 1764 F=",
-		"-1i : foo 101 ; I~",
+		"-1i : foo 101 drop ; foo foo I~ foo foo",
 	};
 
 	for (int i=0; i<ARRAY_LENGTH(programs_that_eval_to_1i); ++i) {
