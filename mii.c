@@ -10,6 +10,7 @@
 #include "util.h"
 #include "utf8.h"
 #include "stb_sprintf.h"
+#include "stb_divide.h"
 #include "stb_ds.h" // NOTE we use various allocators, so no stb_ds_sysalloc.h
 #include "allocator.h"
 
@@ -35,7 +36,7 @@
 	/* ==========,========,============================================== */
 
 
-// direct mapping to vmii VM ops
+// these have direct mappings to vmii VM ops
 #define LIST_OF_OP_WORDS \
 	/*<ENUM>      <STR>     <DOC> */ \
 	/* ==========,==========,============================================== */ \
@@ -70,7 +71,7 @@
 	X( IADD      , "I+"     , "Integer add (x y -- x+y)") \
 	X( INEG      , "I~"     , "Integer negate (x -- -x)") \
 	X( IMUL      , "I*"     , "Integer multiply (x y -- x*y)") \
-	X( IDIV      , "I//"    , "Integer euclidean division (x y -- x//y)") \
+	X( IDIV      , "I/"     , "Integer euclidean division (x y -- x//y)") \
 	X( IMOD      , "I%"     , "Integer euclidean remainder/modulus (x y -- x%y)") \
 	X( IAND      , "I&"     , "Integer bitwise AND (x y -- x&y)") \
 	X( IOR       , "I|"     , "Integer bitwise OR (x y -- x|y)") \
@@ -217,38 +218,24 @@ struct compiler {
 	char* error_message;
 };
 
-enum val_type {
-	V_INT,
-	V_FLOAT,
-	_V_FIRST_DERIVED_TYPE_,
-};
-
-struct val {
-	int type;
-	union {
-		int32_t i32;
-		float   f32;
-	};
-};
-
-static int val2int(struct val v, int* out_int)
+static inline int val2int(struct val v, int* out_int)
 {
 	int i;
 	switch (v.type) {
-	case V_INT:   i=v.i32; break;
-	case V_FLOAT: i=(int)roundf(v.f32); break;
+	case VAL_INT:   i=v.i32; break;
+	case VAL_FLOAT: i=(int)roundf(v.f32); break;
 	default: return 0;
 	}
 	if (out_int) *out_int=i;
 	return 1;
 }
 
-static int val2float(struct val v, float* out_float)
+static inline int val2float(struct val v, float* out_float)
 {
 	int f;
 	switch (v.type) {
-	case V_INT:   f=v.i32; break;
-	case V_FLOAT: f=v.f32; break;
+	case VAL_INT:   f=v.i32; break;
+	case VAL_FLOAT: f=v.f32; break;
 	default: return 0;
 	}
 	if (out_float) *out_float=f;
@@ -271,6 +258,7 @@ static struct {
 	//mtx_t program_alloc_mutex;
 	struct program* program_arr;
 	int* program_freelist_arr;
+	unsigned globals_were_initialized  :1;
 } g;
 
 THREAD_LOCAL static struct {
@@ -279,6 +267,7 @@ THREAD_LOCAL static struct {
 	struct scratch_context_header* scratch_header;
 	struct vmii vmii;
 	const char* error_message;
+	unsigned thread_locals_were_initialized  :1;
 } tlg; // thread-local globals
 
 FORMATPRINTF2
@@ -719,8 +708,20 @@ static void compiler_end(struct compiler* cm)
 	case COMMENT: compiler_errorf(cm, "EOF in unterminated comment"); break;
 	default:      compiler_errorf(cm, "EOF in unexpected compiler state (%d)", cm->state); break;
 	}
+	if (cm->has_error) return;
 
-	#if 1
+	if (cm->remaining_suffix_words > 0) {
+		compiler_errorf(cm, "EOF while expecting %d more suffix word(s)", cm->remaining_suffix_words);
+		return;
+	}
+
+	const int depth = arrlen(cm->wordscope0_arr);
+	if (depth > 0) {
+		compiler_errorf(cm, "EOF inside word definition (depth=%d)", depth);
+		return;
+	}
+
+	#if 0
 	// stats
 	const int num_runtime_ops  = arrlen(cm->runtime_program->op_arr);
 	const int num_comptime_ops = arrlen(cm->comptime_program.op_arr);
@@ -777,8 +778,12 @@ int mii_compile_thicc(const struct thicchar* src, int num_chars)
 	const int program_index = alloc_program_index();
 	struct compiler* cm = &tlg.compiler;
 	compiler_begin(cm, get_program(program_index));
-	for (int i=0; i<num_chars; ++i) compiler_push_char(cm, src[i]);
+	for (int i=0; i<num_chars; ++i) {
+		compiler_push_char(cm, src[i]);
+		if (cm->has_error) return -1;
+	}
 	compiler_end(cm);
+	if (cm->has_error) return -1;
 	return program_index;
 }
 
@@ -794,8 +799,10 @@ int mii_compile_graycode(const char* utf8src, int num_bytes)
 		unsigned codepoint = utf8_decode(&p, &remaining);
 		if (codepoint == -1) continue;
 		compiler_push_char(cm, ((struct thicchar){.codepoint = codepoint}));
+		if (cm->has_error) return -1;
 	}
 	compiler_end(cm);
+	if (cm->has_error) return -1;
 	return program_index;
 }
 
@@ -804,21 +811,26 @@ const char* mii_error(void)
 	return tlg.error_message;
 }
 
-static void vmii_init(struct vmii* vm)
+static void global_init(void)
 {
+	if (g.globals_were_initialized) return;
+	g.globals_were_initialized = 1;
+	//assert(thrd_success == mtx_init(&g.program_alloc_mutex, mtx_plain));
+	arrinit(g.program_arr, &system_allocator);
+	arrinit(g.program_freelist_arr, &system_allocator);
+}
+
+void mii_thread_init(void)
+{
+	global_init();
+	if (tlg.thread_locals_were_initialized) return;
+	tlg.thread_locals_were_initialized = 1;
+	tlg.scratch_header = init_scratch_allocator(&tlg.scratch_allocator, 1L<<24);
+	struct vmii* vm = &tlg.vmii;
 	memset(vm, 0, sizeof *vm);
 	arrinit(vm->stack_arr, &tlg.scratch_allocator);
 	arrinit(vm->rstack_arr, &tlg.scratch_allocator);
 	vm->error_message = calloc(MAX_ERROR_MESSAGE_SIZE, sizeof *vm->error_message);
-}
-
-void mii_init(void)
-{
-	//assert(thrd_success == mtx_init(&g.program_alloc_mutex, mtx_plain));
-	tlg.scratch_header = init_scratch_allocator(&tlg.scratch_allocator, 1L<<24);
-	arrinit(g.program_arr, &system_allocator);
-	arrinit(g.program_freelist_arr, &system_allocator);
-	vmii_init(&tlg.vmii);
 }
 
 void vmii_reset2(struct vmii* vm, struct program* program)
@@ -852,17 +864,20 @@ void vmii_error(struct vmii* vm, const char* fmt, ...)
 
 int vmii_run2(struct vmii* vm)
 {
+	const int TRACE = 0;
+
 	struct program const* prg = vm->program;
+	assert((prg != NULL) && "no program; forgot vmii_reset()?");
 	const int prg_len = arrlen(prg->op_arr);
 	int pc = vm->pc;
-	//union pword w0;
 	int num_defer = 0;
 	uint32_t deferred_op = 0;
+	// TODO cycle limiting in while() condition?
 	while ((0 <= pc) && (pc < prg_len)) {
 		if (vm->has_error) return -1;
 
-		int next_pc = pc+1;
 		union pword* pw = &prg->op_arr[pc];
+		int next_pc = pc+1;
 		int set_num_defer = 0;
 
 		#define STACK_HEIGHT()  ((int)arrlen(vm->stack_arr))
@@ -873,28 +888,28 @@ int vmii_run2(struct vmii* vm)
 			switch (deferred_op) {
 
 			case OP_JMP:
-				printf(" JMP pc %d->%d\n", pc, pw->u32); // XXX
+				if (TRACE) printf(" JMP pc %d->%d\n", pc, pw->u32);
 				next_pc = pw->u32;
 				break;
 
 			case OP_JSR:
-				printf(" JSR pc %d->%d %d=>R\n", pc, pw->u32, pc+2); // XXX
-				arrput(vm->rstack_arr, pc+2);
+				if (TRACE) printf(" JSR pc %d->%d %d=>R\n", pc, pw->u32, pc+2);
+				arrput(vm->rstack_arr, (pc+1));
 				next_pc = pw->u32;
 				break;
 
 			case OP_INT_LITERAL:
-				printf(" INT_LITERAL %d\n", pw->i32);
+				if (TRACE) printf(" INT_LITERAL %d\n", pw->i32);
 				arrput(vm->stack_arr, ((struct val){
-					.type = V_INT,
+					.type = VAL_INT,
 					.i32 = pw->i32,
 				}));
 				break;
 
 			case OP_FLOAT_LITERAL:
-				printf(" FLITERAL %f\n", pw->f32);
+				if (TRACE) printf(" FLITERAL %f\n", pw->f32);
 				arrput(vm->stack_arr, ((struct val){
-					.type = V_FLOAT,
+					.type = VAL_FLOAT,
 					.f32 = pw->f32,
 				}));
 				break;
@@ -909,9 +924,13 @@ int vmii_run2(struct vmii* vm)
 		} else {
 			const uint32_t op = prg->op_arr[pc].u32;
 
-			printf("[%.4x] %.2x %s\n", pc, op, get_opcode_str(op));
+			if (TRACE) printf("[%.4x] %.2x %s\n", pc, op, get_opcode_str(op));
 
 			switch (op) {
+
+			case OP_NOP:
+				if (TRACE) printf(" NOP\n");
+				break;
 
 			// these ops take another argument
 			case OP_JMP:
@@ -928,6 +947,7 @@ int vmii_run2(struct vmii* vm)
 					return -1;
 				}
 				next_pc = arrpop(vm->rstack_arr);
+				if (TRACE) printf(" RETURN pc -> %d\n", next_pc);
 			}	break;
 
 			case OP_PICK: {
@@ -968,15 +988,15 @@ int vmii_run2(struct vmii* vm)
 					ASSIGN, \
 				})); \
 			}	break;
-			DEF_FBINOP( OP_FADD , V_FLOAT , .f32=(a+b)        )
-			DEF_FBINOP( OP_FMUL , V_FLOAT , .f32=(a*b)        )
-			DEF_FBINOP( OP_FMOD , V_FLOAT , .f32=(fmodf(a,b)) )
-			DEF_FBINOP( OP_FDIV , V_FLOAT , .f32=(a/b)        )
-			DEF_FBINOP( OP_FLT  , V_INT   , .i32=(a<b)        )
-			DEF_FBINOP( OP_FLE  , V_INT   , .i32=(a<=b)       )
-			DEF_FBINOP( OP_FEQ  , V_INT   , .i32=(a==b)       )
-			DEF_FBINOP( OP_FGE  , V_INT   , .i32=(a>=b)       )
-			DEF_FBINOP( OP_FGT  , V_INT   , .i32=(a>b)        )
+			DEF_FBINOP( OP_FADD , VAL_FLOAT , .f32=(a+b)        )
+			DEF_FBINOP( OP_FMUL , VAL_FLOAT , .f32=(a*b)        )
+			DEF_FBINOP( OP_FDIV , VAL_FLOAT , .f32=(a/b)        )
+			DEF_FBINOP( OP_FMOD , VAL_FLOAT , .f32=(fmodf(a,b)) )
+			DEF_FBINOP( OP_FLT  , VAL_INT   , .i32=(a<b)        )
+			DEF_FBINOP( OP_FLE  , VAL_INT   , .i32=(a<=b)       )
+			DEF_FBINOP( OP_FEQ  , VAL_INT   , .i32=(a==b)       )
+			DEF_FBINOP( OP_FGE  , VAL_INT   , .i32=(a>=b)       )
+			DEF_FBINOP( OP_FGT  , VAL_INT   , .i32=(a>b)        )
 			#undef DEF_FBINOP
 
 			// == floating-point unary ops ==
@@ -994,9 +1014,61 @@ int vmii_run2(struct vmii* vm)
 					ASSIGN, \
 				})); \
 			}	break;
-			DEF_FUNOP( OP_FNEG , V_FLOAT , .f32=(-a)     )
-			DEF_FUNOP( OP_FINV , V_FLOAT , .f32=(1.0f/a) )
+			DEF_FUNOP( OP_FNEG , VAL_FLOAT , .f32=(-a)     )
+			DEF_FUNOP( OP_FINV , VAL_FLOAT , .f32=(1.0f/a) )
 			#undef DEF_FUNOP
+
+			// == integer binary ops ==
+
+			#define DEF_IBINOP(ENUM, EXPR) \
+			case ENUM: { \
+				if (STACK_HEIGHT() < 2) { \
+					vmii_error(vm, "`%s` requires 2 arguments, stack height was %d", #ENUM, STACK_HEIGHT()); \
+					return -1; \
+				} \
+				const struct val vb = arrpop(vm->stack_arr); \
+				const struct val va = arrpop(vm->stack_arr); \
+				const int32_t a=va.i32; \
+				const int32_t b=vb.i32; \
+				arrput(vm->stack_arr, ((struct val){ \
+					.type=VAL_INT, \
+					.i32=(EXPR), \
+				})); \
+			}	break;
+			DEF_IBINOP( OP_IADD    , (a+b)  )
+			DEF_IBINOP( OP_IMUL    , (a*b)  )
+			DEF_IBINOP( OP_IDIV    , (stb_div_eucl(a,b)) )
+			DEF_IBINOP( OP_IMOD    , (stb_mod_eucl(a,b)) )
+			DEF_IBINOP( OP_IAND    , (a&b)  )
+			DEF_IBINOP( OP_IOR     , (a|b)  )
+			DEF_IBINOP( OP_IXOR    , (a^b)  )
+			DEF_IBINOP( OP_ILSHIFT , (a<<b) )
+			DEF_IBINOP( OP_IRSHIFT , (a>>b) )
+			DEF_IBINOP( OP_ILT     , (a<b)  )
+			DEF_IBINOP( OP_ILE     , (a<=b) )
+			DEF_IBINOP( OP_IEQ     , (a==b) )
+			DEF_IBINOP( OP_IGE     , (a>=b) )
+			DEF_IBINOP( OP_IGT     , (a>b)  )
+			#undef DEF_IBINOP
+
+			// == integer unary ops ==
+
+			#define DEF_IUNOP(ENUM, EXPR) \
+			case ENUM: { \
+				if (STACK_HEIGHT() < 1) { \
+					vmii_error(vm, "`%s` requires 1 argument, stack height was %d", #ENUM, STACK_HEIGHT()); \
+					return -1; \
+				} \
+				const struct val va = arrpop(vm->stack_arr); \
+				const int32_t a=va.i32; \
+				arrput(vm->stack_arr, ((struct val){ \
+					.type=VAL_INT, \
+					.i32=(EXPR), \
+				})); \
+			}	break;
+			DEF_IUNOP( OP_INEG , (-a) )
+			DEF_IUNOP( OP_INOT , (~a) )
+			#undef DEF_IUNOP
 
 			// ==============================
 
@@ -1022,15 +1094,106 @@ int vmii_run(void)
 	return vmii_run2(&tlg.vmii);
 }
 
-float vmii_floatval(int i)
+int vmii_get_stack_height(void)
+{
+	struct vmii* vm = &tlg.vmii;
+	return arrlen(vm->stack_arr);
+}
+
+struct val vmii_val(int i)
 {
 	struct vmii* vm = &tlg.vmii;
 	struct val v = arrchkget(vm->stack_arr, arrlen(vm->stack_arr)-1-i);
-	float f;
-	if (val2float(v, &f)) {
-		return f;
-	} else {
-		return -1;
+	return v;
+}
+
+static void selftest_fail(const char* context, const char* src)
+{
+	fprintf(stderr, "selftest %s error [%s] for:\n %s\n", context, mii_error(), src);
+	abort();
+}
+
+static void selftest_dump_val(struct val v)
+{
+	FILE* out = stderr;
+	switch (v.type) {
+	case VAL_INT:    fprintf(out, "%di", v.i32); break;
+	case VAL_FLOAT:  fprintf(out, "%f", v.f32); break;
+	default:         fprintf(out, "%uT:%u(?)", v.type, v.u32); break;
+	}
+}
+
+static void selftest_dump_stack(void)
+{
+	const int d = vmii_get_stack_height();
+	fprintf(stderr, "=== STACK ===\n");
+	for (int i=0; i<d; ++i) {
+		struct val v = vmii_val(i);
+		fprintf(stderr, " stack[%d] = ", (-1-i));
+		selftest_dump_val(v);
+		fprintf(stderr, "\n");
+	}
+}
+
+void mii_selftest(void)
+{
+	mii_thread_init();
+
+	const char* programs_that_fail_to_compile[] = {
+		"xxxxxxxxxxxx", // word not defined
+		// word not closed:
+		":",
+		": foo ",
+		": foo 42",
+	};
+
+	for (int i=0; i<ARRAY_LENGTH(programs_that_fail_to_compile); ++i) {
+		const char* src = programs_that_fail_to_compile[i];
+		const int prg = mii_compile_graycode(src, strlen(src));
+		if (prg != -1) {
+			fprintf(stderr, "selftest expected compile error, but didn't get it for:\n %s\n", src);
+			abort();
+		}
+	}
+
+	// TODO runtime errors?
+
+	// these must all leave 1i (and only 1i) on the stack after execution
+	const char* programs_that_eval_to_1i[] = {
+		"1i",
+		"NOP 1i",
+		"-1i I~",
+		"1i I~ I~",
+		"-1i 2i I+",
+		"1 1 F=",
+		"1 -1 F~ F=",
+		"-1 F~ 1 F=",
+		"7i 4i I/",
+		"-7i 10 I/ I~", // NOTE euclidean divide; would fail with truncating divide
+		": fsqr 0 pick F* ; 42 fsqr 1764 F=",
+		": fsqr 0 : foo 101 ; pick F* ; -42 fsqr 1764 F=",
+		"-1i : foo 101 ; I~",
+	};
+
+	for (int i=0; i<ARRAY_LENGTH(programs_that_eval_to_1i); ++i) {
+		const char* src = programs_that_eval_to_1i[i];
+		const int prg = mii_compile_graycode(src, strlen(src));
+		if (prg == -1) selftest_fail("compile", src);
+		vmii_reset(prg);
+		const int r = vmii_run();
+		if (r == -1) selftest_fail("run", src);
+		if (r != 1) {
+			fprintf(stderr, "selftest assert fail, expected stack height of 1\n");
+			selftest_dump_stack();
+			abort();
+		}
+		struct val v = vmii_val(0);
+		if (v.type != VAL_INT || v.i32 != 1) {
+			fprintf(stderr, "selftest expected one stack element, 1i, got: ");
+			selftest_dump_val(v);
+			fprintf(stderr, " for:\n %s\n", src);
+			abort();
+		}
 	}
 }
 

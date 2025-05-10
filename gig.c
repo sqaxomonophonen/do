@@ -712,7 +712,7 @@ void end_mim(void)
 		static struct thicchar* dodoc_arr = NULL;
 		document_to_thicchar_da(&dodoc_arr, &scratch_doc);
 		const int prg = mii_compile_thicc(dodoc_arr, arrlen(dodoc_arr));
-		printf("prg=%d\n", prg);
+		//printf("prg=%d\n", prg);
 		if (prg == -1) {
 			printf("TODO compile error [%s]\n", mii_error());
 		} else {

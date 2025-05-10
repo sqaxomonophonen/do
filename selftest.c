@@ -50,5 +50,6 @@ void run_selftest(void)
     leb128_unit_test();
 	const int64_t dt = get_nanoseconds() - t0;
 	gig_selftest();
+	mii_selftest();
 	printf("selftest took %.5fs\n", (double)dt * 1e-9);
 }

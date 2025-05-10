@@ -4,7 +4,24 @@
 
 #include "gig.h"
 
-void mii_init(void); // TODO mii_thread_init() instead? (thread-local stuff)
+enum val_type {
+	VAL_INT,
+	VAL_FLOAT,
+	_VAL_FIRST_DERIVED_TYPE_,
+};
+
+struct val {
+	int type;
+	union {
+		int32_t  i32;
+		uint32_t u32;
+		float    f32;
+	};
+};
+
+void mii_thread_init(void);
+// must be called at least once from any thread wishing to use this API.
+// subsequent calls are no-ops.
 
 int mii_compile_thicc(const struct thicchar*, int num_chars);
 int mii_compile_graycode(const char* utf8src, int num_bytes);
@@ -16,9 +33,12 @@ void mii_program_free(int program_index);
 
 void vmii_reset(int program_index);
 int vmii_run(void);
-float vmii_floatval(int i);
+int vmii_get_stack_height(void);
+struct val vmii_val(int i);
 
 const char* mii_error(void);
+
+void mii_selftest(void);
 
 #define MII_H
 #endif
