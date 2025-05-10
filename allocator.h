@@ -2,6 +2,8 @@
 
 #include <setjmp.h>
 
+#include "util.h"
+
 struct allocator {
 	void* allocator_context;
 	void*(*fn_realloc)(void*,void*,size_t);
@@ -24,6 +26,7 @@ struct scratch_context_header {
 	size_t allocated, capacity;
 };
 
+NO_DISCARD
 struct scratch_context_header* init_scratch_allocator(struct allocator*, size_t capacity);
 // the returned scratch_context_header can be modified:
 //   use reset_scratch() to free everything and start over
