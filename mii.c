@@ -48,7 +48,7 @@
 	X( COMPTIME  , "comptime" , "Compile-time prefix for next word") \
 	X( ENTER_SEW , "<#"       , "Start writing instructions outside of comptime (\"sewing\")") \
 	X( LEAVE_SEW , "#>"       , "Stop writing instructions outside of comptime") \
-	/* ====================================================================== */ \
+	/* ====================================================================== */
 
 
 // these words have direct 1:1 mappings to vmii VM ops.
@@ -61,6 +61,7 @@
 	/*<ENUM>      <STR>       <DOC> */ \
 	/* ====================================================================== */ \
 	X( NOP       , NULL       , "No operation ( -- )") \
+	X( HALT      , "halt"     , "Halt execution with an error") \
 	X( RETURN    , "return"   , "Return from subroutine [returnaddr -- ]") \
 	X( DROP      , "drop"     , "Remove top element from stack (x --)") \
 	X( PICK      , NULL       , "Pop n:i32, duplicate stack value (n -- stack[-1-n])") \
@@ -495,6 +496,12 @@ int vmii_run2(struct vmii* vm)
 
 			case OP_NOP: {
 				if (TRACE) printf(" NOP\n");
+			}	break;
+
+			case OP_HALT: {
+				if (TRACE) printf(" HALT\n");
+				vmii_error(vm, "HALT");
+				return -1;
 			}	break;
 
 			case OP_SEW: {
@@ -994,9 +1001,7 @@ static void compiler_push_word(struct compiler* cm, const char* word)
 		}
 
 		if (do_encode_opcode != _OP_NONE_) {
-			if (cm->sew_depth > 0) {
-				assert(!"TODO sew built-in op!");
-			} else if (!cm->prefix_comptime) {
+			if (!cm->prefix_comptime) {
 				compiler_push_opcode(cm, do_encode_opcode);
 			} else {
 				assert(!"TODO execute comptime'd opcode");
@@ -1372,7 +1377,26 @@ void mii_selftest(void)
 		}
 	}
 
-	// TODO test runtime errors?
+	const char* programs_that_fail_at_runtime[] = {
+		"halt", // halt always fails
+
+		// a bunch of stack underflows
+		"drop",
+		"ROTATE",
+		"F*",
+	};
+
+	for (int i=0; i<ARRAY_LENGTH(programs_that_fail_at_runtime); ++i) {
+		const char* src = programs_that_fail_at_runtime[i];
+		const int prg = mii_compile_graycode(src, strlen(src));
+		if (prg == -1) selftest_fail("compile", src);
+		vmii_reset(prg);
+		const int r = vmii_run();
+		if (r != -1) {
+			fprintf(stderr, "selftest expected runtime error, but didn't get it for:\n %s\n", src);
+			abort();
+		}
+	}
 
 	// these must all leave 1i (and only 1i) on the stack after execution
 	const char* programs_that_eval_to_1i[] = {
@@ -1419,6 +1443,7 @@ void mii_selftest(void)
 		" comptime : foo ;   1i ",
 		" 1i comptime : foo ;   foo ",
 		" comptime : foo <# 1i #> ;  foo",
+		" comptime : div-7 <# -7i I/ #> ;  -5i div-7 ",
 
 	};
 
