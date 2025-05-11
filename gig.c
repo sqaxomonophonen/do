@@ -711,14 +711,14 @@ void end_mim(void)
 
 		static struct thicchar* dodoc_arr = NULL;
 		document_to_thicchar_da(&dodoc_arr, &scratch_doc);
-		const int prg = mii_compile_thicc(dodoc_arr, arrlen(dodoc_arr));
+		const int prg = mie_compile_thicc(dodoc_arr, arrlen(dodoc_arr));
 		//printf("prg=%d\n", prg);
 		if (prg == -1) {
-			printf("TODO compile error [%s]\n", mii_error());
+			printf("TODO compile error [%s]\n", mie_error());
 		} else {
-			vmii_reset(prg);
-			vmii_run();
-			mii_program_free(prg);
+			vmie_reset(prg);
+			vmie_run();
+			mie_program_free(prg);
 		}
 
 		mim_state_copy(msr, &scratch_state);

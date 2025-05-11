@@ -9,7 +9,7 @@ is omitted)
 main logic code
   gig.c - collaboratively edited state
   gui.c - main GUI code (cross-platform)
-  mii.c - mii-compiler, and vmii virtual machine
+  mie.c - mie-compiler, and vmie virtual machine
 
 main_*.c - entrypoint (main) for GUI frontends
   main_emscripten.c - web app, using emscripten/webgl

@@ -1,9 +1,9 @@
-// mii (forth-like language) compiler and vmii virtual machine
-//  - see mii_selftest() near bottom for small programs that test compiler+vm
+// mie (forth-like language) compiler and vmie virtual machine
+//  - see mie_selftest() near bottom for small programs that test compiler+vm
 //  - see built-in word definitions near top of this file
 //  - copious use of macros, including "X macros". search for e.g. BINOP for
 //    how binary operators (like `a+b`/`a b +`) are implemented with macros
-//  - compilation and program execution (vmii) uses "scratch memory" to
+//  - compilation and program execution (vmie) uses "scratch memory" to
 //    simplify memory mangement. this implies that 1) you can have "complex
 //    lifetimes" without worrying about memory leaks because you don't need to
 //    free individual allocations (in fact, the scratch allocator's fn_free()
@@ -20,7 +20,7 @@
 #include <limits.h>
 #include <math.h>
 
-#include "mii.h"
+#include "mie.h"
 #include "gig.h"
 #include "util.h"
 #include "utf8.h"
@@ -51,7 +51,7 @@
 	/* ====================================================================== */
 
 
-// these words have direct 1:1 mappings to vmii VM ops.
+// these words have direct 1:1 mappings to vmie VM ops.
 // `foo:i32` means `foo` is bitwise ("reinterpret") cast to i32, i.e. without
 // any type checking. by convention, words that do bitwise casting should not
 // be lowercased since that "namespace" is reserved for typesafe words (so
@@ -290,7 +290,7 @@ static inline int val2float(struct val v, float* out_float)
 	return 1;
 }
 
-struct vmii {
+struct vmie {
 	// TODO?
 	//  - globals?
 	//  - instruction counter/remaining (for cycle limiting)
@@ -314,7 +314,7 @@ THREAD_LOCAL static struct {
 	struct compiler compiler;
 	struct allocator scratch_allocator;
 	struct scratch_context_header* scratch_header;
-	struct vmii vmii;
+	struct vmie vmie;
 	const char* error_message;
 	unsigned thread_locals_were_initialized  :1;
 } tlg; // thread-local globals
@@ -395,7 +395,7 @@ static void compiler_errorf(struct compiler* cm, const char* fmt, ...)
 }
 
 FORMATPRINTF2
-void vmii_error(struct vmii* vm, const char* fmt, ...)
+void vmie_error(struct vmie* vm, const char* fmt, ...)
 {
 	char* p = vm->error_message;
 	int r = MAX_ERROR_MESSAGE_SIZE;
@@ -410,7 +410,7 @@ void vmii_error(struct vmii* vm, const char* fmt, ...)
 	tlg.error_message = vm->error_message;
 }
 
-void vmii_reset2(struct vmii* vm, struct program* program)
+void vmie_reset2(struct vmie* vm, struct program* program)
 {
 	arrreset(vm->stack_arr);
 	arrreset(vm->rstack_arr);
@@ -422,18 +422,18 @@ void vmii_reset2(struct vmii* vm, struct program* program)
 	vm->sew_target = NULL;
 }
 
-#define VMII_OP_STACK_GUARD(OPSTR,N) \
+#define VMIE_OP_STACK_GUARD(OPSTR,N) \
 	if (STACK_HEIGHT() < (N)) { \
-		vmii_error(vm, "%s expected a minimum stack height of %d, but it was only %d", OPSTR, (N), STACK_HEIGHT()); \
+		vmie_error(vm, "%s expected a minimum stack height of %d, but it was only %d", OPSTR, (N), STACK_HEIGHT()); \
 		return -1; \
 	}
 
-int vmii_run2(struct vmii* vm)
+int vmie_run2(struct vmie* vm)
 {
 	const int TRACE = 0;
 
 	struct program const* prg = vm->program;
-	assert((prg != NULL) && "no program; forgot vmii_reset()?");
+	assert((prg != NULL) && "no program; forgot vmie_reset()?");
 	const int prg_len = arrlen(prg->op_arr);
 	int pc = vm->pc;
 	int num_defer = 0;
@@ -481,7 +481,7 @@ int vmii_run2(struct vmii* vm)
 				break;
 
 			default:
-				fprintf(stderr, "vmii: unhandled deferred op %s (%u)\n", get_opcode_str(deferred_op), deferred_op);
+				fprintf(stderr, "vmie: unhandled deferred op %s (%u)\n", get_opcode_str(deferred_op), deferred_op);
 				abort();
 				break;
 			}
@@ -500,22 +500,22 @@ int vmii_run2(struct vmii* vm)
 
 			case OP_HALT: {
 				if (TRACE) printf(" HALT\n");
-				vmii_error(vm, "HALT");
+				vmie_error(vm, "HALT");
 				return -1;
 			}	break;
 
 			case OP_SEW: {
-				VMII_OP_STACK_GUARD("OP_SEW",1)
+				VMIE_OP_STACK_GUARD("OP_SEW",1)
 				const struct val v = arrpop(vm->stack_arr);
 				if (vm->sew_target == NULL) {
-					vmii_error(vm, "SEW has no target (was it called outside of comptime?)");
+					vmie_error(vm, "SEW has no target (was it called outside of comptime?)");
 					return -1;
 				}
 				switch (v.type) {
 				case VAL_INT:   program_push(vm->sew_target, PWORD_INT(v.i32)); break;
 				case VAL_FLOAT: program_push(vm->sew_target, PWORD_FLOAT(v.f32)); break;
 				default:
-					vmii_error(vm, "SEW with unhandled value type (%d)", v.type);
+					vmie_error(vm, "SEW with unhandled value type (%d)", v.type);
 					return -1;
 				}
 			}	break;
@@ -531,7 +531,7 @@ int vmii_run2(struct vmii* vm)
 
 			case OP_RETURN: {
 				if (RSTACK_HEIGHT() == 0) {
-					vmii_error(vm, "rstack underflow due to RETURN at pc=%d\n", pc);
+					vmie_error(vm, "rstack underflow due to RETURN at pc=%d\n", pc);
 					return -1;
 				}
 				next_pc = arrpop(vm->rstack_arr);
@@ -540,21 +540,21 @@ int vmii_run2(struct vmii* vm)
 
 
 			case OP_DROP: {
-				VMII_OP_STACK_GUARD("OP_DROP",1)
+				VMIE_OP_STACK_GUARD("OP_DROP",1)
 				(void)arrpop(vm->stack_arr);
 			}	break;
 
 			case OP_PICK: {
-				VMII_OP_STACK_GUARD("OP_PICK",1)
+				VMIE_OP_STACK_GUARD("OP_PICK",1)
 				struct val vi = arrpop(vm->stack_arr);
 				const int i = vi.i32;
 				if (i<0) {
-					vmii_error(vm, "`%d PICK` - negative pick is invalid", i);
+					vmie_error(vm, "`%d PICK` - negative pick is invalid", i);
 					return -1;
 				}
 				const int min_height = 1+i;
 				if (STACK_HEIGHT() < min_height) {
-					vmii_error(vm, "%d pick out-of-bounds; stack height is only %d", i, STACK_HEIGHT());
+					vmie_error(vm, "%d pick out-of-bounds; stack height is only %d", i, STACK_HEIGHT());
 					return -1;
 				}
 				struct val vd = arrchkget(vm->stack_arr, STACK_HEIGHT()-1-i);
@@ -562,13 +562,13 @@ int vmii_run2(struct vmii* vm)
 			}	break;
 
 			case OP_ROTATE: {
-				VMII_OP_STACK_GUARD("OP_ROTATE",2)
+				VMIE_OP_STACK_GUARD("OP_ROTATE",2)
 				const struct val vd = arrpop(vm->stack_arr); \
 				const struct val vn = arrpop(vm->stack_arr); \
 				const int d=vd.i32; \
 				const int n=vn.i32; \
 				if (STACK_HEIGHT() < n) {
-					vmii_error(vm, "ROTATE of n=%d elements, but stack height is only %d", n, STACK_HEIGHT());
+					vmie_error(vm, "ROTATE of n=%d elements, but stack height is only %d", n, STACK_HEIGHT());
 					return -1;
 				}
 				if (n>=2) { // n<2 is a no-op
@@ -586,7 +586,7 @@ int vmii_run2(struct vmii* vm)
 
 			#define DEF_FBINOP(ENUM, TYPE, ASSIGN) \
 			case ENUM: { \
-				VMII_OP_STACK_GUARD(#ENUM,2) \
+				VMIE_OP_STACK_GUARD(#ENUM,2) \
 				const struct val vb = arrpop(vm->stack_arr); \
 				const struct val va = arrpop(vm->stack_arr); \
 				const float a=va.f32; \
@@ -612,7 +612,7 @@ int vmii_run2(struct vmii* vm)
 
 			#define DEF_FUNOP(ENUM, TYPE, ASSIGN) \
 			case ENUM: { \
-				VMII_OP_STACK_GUARD(#ENUM,1) \
+				VMIE_OP_STACK_GUARD(#ENUM,1) \
 				const struct val va = arrpop(vm->stack_arr); \
 				const float a=va.f32; \
 				arrput(vm->stack_arr, ((struct val){ \
@@ -628,7 +628,7 @@ int vmii_run2(struct vmii* vm)
 
 			#define DEF_IBINOP(ENUM, EXPR) \
 			case ENUM: { \
-				VMII_OP_STACK_GUARD(#ENUM,2) \
+				VMIE_OP_STACK_GUARD(#ENUM,2) \
 				const struct val vb = arrpop(vm->stack_arr); \
 				const struct val va = arrpop(vm->stack_arr); \
 				const int32_t a=va.i32; \
@@ -664,7 +664,7 @@ int vmii_run2(struct vmii* vm)
 
 			#define DEF_IUNOP(ENUM, EXPR) \
 			case ENUM: { \
-				VMII_OP_STACK_GUARD(#ENUM,1) \
+				VMIE_OP_STACK_GUARD(#ENUM,1) \
 				const struct val va = arrpop(vm->stack_arr); \
 				const int32_t a=va.i32; \
 				arrput(vm->stack_arr, ((struct val){ \
@@ -680,7 +680,7 @@ int vmii_run2(struct vmii* vm)
 			// ==============================
 
 			default:
-				fprintf(stderr, "vmii: unhandled op %s (%u) at pc=%d\n", get_opcode_str(op), op, pc);
+				fprintf(stderr, "vmie: unhandled op %s (%u) at pc=%d\n", get_opcode_str(op), op, pc);
 				abort();
 				break;
 			}
@@ -697,11 +697,11 @@ int vmii_run2(struct vmii* vm)
 	return STACK_HEIGHT();
 }
 
-static void vmii_call(struct vmii* vm, int addr)
+static void vmie_call(struct vmie* vm, int addr)
 {
 	vm->pc = addr;
 	arrput(vm->rstack_arr, -1); // exit on RETURN
-	vmii_run2(vm);
+	vmie_run2(vm);
 }
 
 static void compiler_begin(struct compiler* cm, struct program* program)
@@ -1027,12 +1027,12 @@ static void compiler_push_word(struct compiler* cm, const char* word)
 		if (cm->sew_depth > 0) {
 			assert(!"TODO sew user word!");
 		} else if (info->is_comptime) {
-			struct vmii* vm = &tlg.vmii;
-			vmii_reset2(vm, cm->program);
+			struct vmie* vm = &tlg.vmie;
+			vmie_reset2(vm, cm->program);
 			assert(!vm->has_error);
 			assert(vm->sew_target == NULL);
 			vm->sew_target = vm->program;
-			vmii_call(vm, info->addr);
+			vmie_call(vm, info->addr);
 			if (vm->has_error) {
 				compiler_errorf(cm, "[comptime run error] %s", vm->error_message);
 				return;
@@ -1199,7 +1199,7 @@ static int alloc_program_index(void)
 	return r;
 }
 
-void mii_program_free(int program_index)
+void mie_program_free(int program_index)
 {
 	//assert(thrd_success == mtx_lock(&g.program_alloc_mutex));
 	// XXX this could be regarded as an "expensive assert"?
@@ -1216,7 +1216,7 @@ static struct program* get_program(int index)
 	return arrchkptr(g.program_arr, index);
 }
 
-int mii_compile_thicc(const struct thicchar* src, int num_chars)
+int mie_compile_thicc(const struct thicchar* src, int num_chars)
 {
 	const int program_index = alloc_program_index();
 	struct compiler* cm = &tlg.compiler;
@@ -1231,7 +1231,7 @@ int mii_compile_thicc(const struct thicchar* src, int num_chars)
 }
 
 // with apologies to Frank Gray
-int mii_compile_graycode(const char* utf8src, int num_bytes)
+int mie_compile_graycode(const char* utf8src, int num_bytes)
 {
 	const int program_index = alloc_program_index();
 	struct compiler* cm = &tlg.compiler;
@@ -1249,7 +1249,7 @@ int mii_compile_graycode(const char* utf8src, int num_bytes)
 	return program_index;
 }
 
-const char* mii_error(void)
+const char* mie_error(void)
 {
 	return tlg.error_message;
 }
@@ -1263,45 +1263,45 @@ static void global_init(void)
 	arrinit(g.program_freelist_arr, &system_allocator);
 }
 
-void mii_thread_init(void)
+void mie_thread_init(void)
 {
 	global_init();
 	if (tlg.thread_locals_were_initialized) return;
 	tlg.thread_locals_were_initialized = 1;
 	tlg.scratch_header = init_scratch_allocator(&tlg.scratch_allocator, 1L<<24);
-	struct vmii* vm = &tlg.vmii;
+	struct vmie* vm = &tlg.vmie;
 	memset(vm, 0, sizeof *vm);
 	arrinit(vm->stack_arr, &tlg.scratch_allocator);
 	arrinit(vm->rstack_arr, &tlg.scratch_allocator);
 	vm->error_message = calloc(MAX_ERROR_MESSAGE_SIZE, sizeof *vm->error_message);
 }
 
-void vmii_reset(int program_index)
+void vmie_reset(int program_index)
 {
-	vmii_reset2(&tlg.vmii, get_program(program_index));
+	vmie_reset2(&tlg.vmie, get_program(program_index));
 }
 
-int vmii_run(void)
+int vmie_run(void)
 {
-	return vmii_run2(&tlg.vmii);
+	return vmie_run2(&tlg.vmie);
 }
 
-int vmii_get_stack_height(void)
+int vmie_get_stack_height(void)
 {
-	struct vmii* vm = &tlg.vmii;
+	struct vmie* vm = &tlg.vmie;
 	return arrlen(vm->stack_arr);
 }
 
-struct val vmii_val(int i)
+struct val vmie_val(int i)
 {
-	struct vmii* vm = &tlg.vmii;
+	struct vmie* vm = &tlg.vmie;
 	struct val v = arrchkget(vm->stack_arr, arrlen(vm->stack_arr)-1-i);
 	return v;
 }
 
 static void selftest_fail(const char* context, const char* src)
 {
-	fprintf(stderr, "selftest %s error [%s] for:\n %s\n", context, mii_error(), src);
+	fprintf(stderr, "selftest %s error [%s] for:\n %s\n", context, mie_error(), src);
 	abort();
 }
 
@@ -1317,13 +1317,13 @@ static void selftest_dump_val(struct val v)
 
 static void selftest_dump_stack(void)
 {
-	const int d = vmii_get_stack_height();
+	const int d = vmie_get_stack_height();
 	if (d == 0) {
 		fprintf(stderr, "=== NO STACK ===\n");
 	} else {
 		fprintf(stderr, "=== STACK (n=%d) ===\n", d);
 		for (int i=0; i<d; ++i) {
-			struct val v = vmii_val(i);
+			struct val v = vmie_val(i);
 			fprintf(stderr, " stack[%d] = ", (-1-i));
 			selftest_dump_val(v);
 			fprintf(stderr, "\n");
@@ -1331,9 +1331,9 @@ static void selftest_dump_stack(void)
 	}
 }
 
-void mii_selftest(void)
+void mie_selftest(void)
 {
-	mii_thread_init();
+	mie_thread_init();
 
 	// TODO maybe these tests should also assert the correct /cause/ of
 	// failure? it's pretty easy to "break" these tests without noticing. e.g.
@@ -1370,7 +1370,7 @@ void mii_selftest(void)
 
 	for (int i=0; i<ARRAY_LENGTH(programs_that_fail_to_compile); ++i) {
 		const char* src = programs_that_fail_to_compile[i];
-		const int prg = mii_compile_graycode(src, strlen(src));
+		const int prg = mie_compile_graycode(src, strlen(src));
 		if (prg != -1) {
 			fprintf(stderr, "selftest expected compile error, but didn't get it for:\n %s\n", src);
 			abort();
@@ -1388,10 +1388,10 @@ void mii_selftest(void)
 
 	for (int i=0; i<ARRAY_LENGTH(programs_that_fail_at_runtime); ++i) {
 		const char* src = programs_that_fail_at_runtime[i];
-		const int prg = mii_compile_graycode(src, strlen(src));
+		const int prg = mie_compile_graycode(src, strlen(src));
 		if (prg == -1) selftest_fail("compile", src);
-		vmii_reset(prg);
-		const int r = vmii_run();
+		vmie_reset(prg);
+		const int r = vmie_run();
 		if (r != -1) {
 			fprintf(stderr, "selftest expected runtime error, but didn't get it for:\n %s\n", src);
 			abort();
@@ -1450,17 +1450,17 @@ void mii_selftest(void)
 	for (int i=0; i<ARRAY_LENGTH(programs_that_eval_to_1i); ++i) {
 		const char* src = programs_that_eval_to_1i[i];
 		//printf("======== [%s] =======\n", src);
-		const int prg = mii_compile_graycode(src, strlen(src));
+		const int prg = mie_compile_graycode(src, strlen(src));
 		if (prg == -1) selftest_fail("compile", src);
-		vmii_reset(prg);
-		const int r = vmii_run();
+		vmie_reset(prg);
+		const int r = vmie_run();
 		if (r == -1) selftest_fail("run", src);
 		if (r != 1) {
 			fprintf(stderr, "selftest assert fail, expected stack height of 1\n");
 			selftest_dump_stack();
 			abort();
 		}
-		struct val v = vmii_val(0);
+		struct val v = vmie_val(0);
 		if (v.type != VAL_INT || v.i32 != 1) {
 			fprintf(stderr, "selftest expected one stack element, 1i, got: ");
 			selftest_dump_val(v);

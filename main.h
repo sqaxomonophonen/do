@@ -7,7 +7,7 @@
 #include "gig.h"
 #include "fonts.h"
 #include "util.h"
-#include "mii.h"
+#include "mie.h"
 #include "selftest.h"
 
 // returns number of nanoseconds since program started
@@ -34,7 +34,7 @@ void update_texture(int texture, int y0, int width, int height, void* data);
 static inline void common_main_init(void)
 {
 	run_selftest();
-	mii_thread_init();
+	mie_thread_init();
 	gig_init();
 	fonts_init();
 	gui_init();
