@@ -1,0 +1,29 @@
+
+comptime : if
+  there            (-- p0)
+  -1i sew_jmp0     (forward JMP0 placeholder, targets else/then)
+  IF box        (p0 -- p0:IF)
+;
+
+comptime : else
+  IF unbox          (p0:IF -- p0)
+  there                (p0 -- p0 p1)
+  -1i sew_jmp    (forward JMP placeholder, targets then)
+  swap there        (p0 p1 -- p1 p0 t0)
+  swap there     (p1 p0 t0 -- p1 t0 p0 t0)
+  swap        (p1 t0 p0 t0 -- p1 t0 t0 p0)
+  scrub       (p1 t0 p0 t0 -- p1 t0 t0)
+  sew_jmp0    (p1 t0 p0 t0 -- p1 t0)
+  scrub       (p1 t0 p0 t0 -- p1)
+  IF box               (p1 -- p1:IF)
+;
+
+comptime : then
+  IF unbox     (p1:IF -- p1)
+  there there rot (p1 -- t1 t1 p1)
+  scrub     (t1 t1 p1 -- t1 t1)
+  sew_jmp      (t1 t1 -- t1)
+  scrub           (t1 -- )
+;
+
+
