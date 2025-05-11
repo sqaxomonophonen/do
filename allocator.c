@@ -44,7 +44,7 @@ static void* scratch_malloc(void* allocator_context, size_t sz)
 	if (required > h->capacity) {
 		// handle allocation failure
 		if (h->has_abort_jmp_buf) {
-			longjmp(h->abort_jmp_buf, 0);
+			longjmp(h->abort_jmp_buf, 1);
 		} else {
 			assert(!"scratch_malloc(): allocation request exceeds capacity! (maybe increase capacity, or use abort_jmp_buf");
 		}
@@ -59,6 +59,7 @@ static void* scratch_malloc(void* allocator_context, size_t sz)
 
 static void* scratch_realloc(void* allocator_context, void* ptr, size_t sz)
 {
+	if (sz == 0) return NULL;
 	if (ptr == NULL) {
 		return scratch_malloc(allocator_context, sz);
 	} else {
@@ -67,8 +68,7 @@ static void* scratch_realloc(void* allocator_context, void* ptr, size_t sz)
 			return ptr;
 		} else {
 			void* ptr2 = scratch_malloc(allocator_context, sz);
-			const size_t ex = sizeof(struct scratch_allocation_header);
-			memcpy(ptr2-ex, ptr-ex, cap+ex);
+			memcpy(ptr2, ptr, cap);
 			return ptr2;
 		}
 	}
