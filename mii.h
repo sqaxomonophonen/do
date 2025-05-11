@@ -5,8 +5,14 @@
 #include "gig.h"
 
 enum val_type {
-	VAL_INT,
+	VAL_INT=1,
 	VAL_FLOAT,
+	VAL_GRAY_STRING,
+	VAL_COLOR_STRING,
+	VAL_ARR,
+	VAL_MAP,
+	VAL_I32ARR,
+	VAL_F32ARR,
 	_VAL_FIRST_DERIVED_TYPE_,
 };
 
@@ -14,7 +20,6 @@ struct val {
 	int type;
 	union {
 		int32_t  i32;
-		uint32_t u32;
 		float    f32;
 	};
 };

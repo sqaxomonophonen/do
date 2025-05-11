@@ -42,71 +42,94 @@
 
 #define LIST_OF_SYNTAX_WORDS \
 	/*<ENUM>      <STR>     <DOC> */ \
-	/* ==========,========,============================================== */ \
-	X( CTM       , NULL   , "Enter compile-time code (leave run-time code)") \
-	X( TTT       , NULL   , "Drop value from compile-time into run-time (x --) ") \
-	X( MTC       , NULL   , "Leave compile-time code (return to run-time code)") \
-	X( COLON     , ":"    , "Word definiton, followed by word (name), e.g. `: foo`") \
-	X( SEMICOLON , ";"    , "End of word definition") \
-	/* ==========,========,============================================== */
+	/* ====================================================================== */ \
+	X( COLON     , ":"        , "Word definiton, followed by word (name), e.g. `: foo`") \
+	X( SEMICOLON , ";"        , "End of word definition") \
+	X( COMPTIME  , "comptime" , "Compile-time prefix for next word") \
+	X( ENTER_SEW , "<#"       , "Start writing instructions outside of comptime (\"sewing\")") \
+	X( LEAVE_SEW , "#>"       , "Stop writing instructions outside of comptime") \
+	/* ====================================================================== */ \
 
 
-// these have direct mappings to vmii VM ops
+// these words have direct 1:1 mappings to vmii VM ops.
+// `foo:i32` means `foo` is bitwise ("reinterpret") cast to i32, i.e. without
+// any type checking. by convention, words that do bitwise casting should not
+// be lowercased since that "namespace" is reserved for typesafe words (so
+// "pick" can work with both i32 and f32 indices, but "PICK" assumes i32
+// without checking)
 #define LIST_OF_OP_WORDS \
-	/*<ENUM>      <STR>     <DOC> */ \
-	/* ==========,==========,============================================== */ \
-	X( NOP       , NULL     , "No operation ( -- )") \
-	X( RETURN    , "return" , "Return from subroutine [returnaddr -- ]") \
-	X( DROP      , "drop"   , "Remove top element from stack (x --)") \
-	X( PICK      , "pick"   , "Duplicate stack value (n -- stack[-1-n])") \
-	X( ROLL      , "roll"   , "Pop n, rotate left n+1 items on stack (example : a b c 2 -- b c a)") \
-	X( LLOR      , "llor"   , "Pop n, rotate right n+1 items on stack (example: a b c 2 -- c a b)") \
-	X( EQ        , "="      , "Equals (x y -- x=y)") \
-	X( TYPEOF    , NULL     , "Get type (x -- typeof(x))") \
-	X( CAST      , NULL     , "Set type (x T -- T(x))") \
-	X( HERE      , "here"   , "Push current instruction pointer to rstack [-- ip]") \
-	X( I2R       , "I>R"    , "Moves integer value to rstack (i --) [-- i]") \
-	X( R2I       , "R>I"    , "Moves integer value back from rstack [i --] (-- i)") \
-	X( JMPI      , NULL     , "Pop address from rstack => indirect jump [addr -- ]" ) \
-	X( JSRI      , NULL     , "Pop address from rstack => indirect jump-to-subroutine [addr --]" ) \
-	/* ==========,==========,============================================== */ \
-	X( FADD      , "F+"     , "Floating-point add (x y -- x+y)") \
-	X( FNEG      , "F~"     , "Floating-point negate (x -- -x)") \
-	X( FMUL      , "F*"     , "Floating-point multiply (x y -- x*y)") \
-	/* X( FMA       , "F*+  "  , "Floating-point multiply-add (x y z -- x*y+z)") */ \
-	X( FMOD      , "F%"     , "Floating-point remainder/modulus (x y -- x%y)") \
-	X( FINV      , "F1/"    , "Floating-point reciprocal (x -- 1/x)") \
-	X( FDIV      , "F/"     , "Floating-point division (x y -- x/y)") \
-	X( FLT       , "F<"     , "Floating-point less than (x y -- x<y)") \
-	X( FLE       , "F<="    , "Floating-point less than or equal (x y -- x<=y)") \
-	X( FNE       , "F!="    , "Floating-point not equal (x y -- x!=y)") \
-	X( FEQ       , "F="     , "Floating-point equal (x y -- x=y)") \
-	X( FGE       , "F>="    , "Floating-point greater than or equal (x y -- x>=y)") \
-	X( FGT       , "F>"     , "Floating-point greater than (x y -- x>y)") \
-	/* ==========,==========,============================================== */ \
-	X( IADD      , "I+"     , "Integer add (x y -- x+y)") \
-	X( INEG      , "I~"     , "Integer negate (x -- -x)") \
-	X( IMUL      , "I*"     , "Integer multiply (x y -- x*y)") \
-	X( IDIV      , "I/"     , "Integer euclidean division (x y -- x//y)") \
-	X( IMOD      , "I%"     , "Integer euclidean remainder/modulus (x y -- x%y)") \
-	X( IAND      , "I&"     , "Integer bitwise AND (x y -- x&y)") \
-	X( IOR       , "I|"     , "Integer bitwise OR (x y -- x|y)") \
-	X( IXOR      , "I^"     , "Integer bitwise XOR (x y -- x^y)") \
-	X( INOT      , "I!"     , "Integer bitwise NOT (x -- !y)") \
-	X( ILSHIFT   , "I<<"    , "Integer shift left (x y -- x<<y)") \
-	X( IRSHIFT   , "I>>"    , "Integer shift right (x y -- x>>y)") \
-	X( ILT       , "I<"     , "Integer less than (x y -- x<y)") \
-	X( ILE       , "I<="    , "Integer less than or equal (x y -- x<=y)") \
-	X( IEQ       , "I="     , "Integer equal (x y -- x=y)") \
-	X( INE       , "I!="    , "Integer equal (x y -- x!=y)") \
-	X( IGE       , "I>="    , "Integer greater than or equal (x y -- x>=y)") \
-	X( IGT       , "I>"     , "Integer greater than (x y -- x>y)") \
-	/* ==========,==========,============================================== */ \
-	X( ARRNEW    , NULL     , "Create array (-- xs)") \
-	X( ARRLEN    , NULL     , "Length of array (xs -- len(xs))") \
-	X( ARRPUT    , NULL     , "Append item to array ([..] x -- [..x])") \
+	/*<ENUM>      <STR>       <DOC> */ \
+	/* ====================================================================== */ \
+	X( NOP       , NULL       , "No operation ( -- )") \
+	X( RETURN    , "return"   , "Return from subroutine [returnaddr -- ]") \
+	X( DROP      , "drop"     , "Remove top element from stack (x --)") \
+	X( PICK      , NULL       , "Pop n:i32, duplicate stack value (n -- stack[-1-n])") \
+	X( ROTATE    , NULL       , "Pop d:i32, then n:i32, then rotate n elements d places") \
+	X( EQ        , "="        , "Equals (x y -- x=y)") \
+	X( TYPEOF    , NULL       , "Get type (x -- typeof(x))") \
+	X( CAST      , NULL       , "Set type (x T -- T(x))") \
+	X( HERE      , "here"     , "Push current instruction pointer to rstack [-- ip]") \
+	X( I2R       , "I>R"      , "Pops i:i32 from stack, pushes it onto rstack (i --) [-- i]") \
+	X( R2I       , "R>I"      , "Moves integer value back from rstack [i --] (-- i)") \
+	X( JMPI      , NULL       , "Pop address from rstack => indirect jump [address -- ]" ) \
+	X( JSRI      , NULL       , "Pop address from rstack => indirect jump-to-subroutine [address --]" ) \
+	/* ====================================================================== */ \
+	/* All inputs are x:f32/y:f32 (bitwise cast to f32) */ \
+	X( FADD      , "F+"       , "Floating-point add (x y -- x+y)") \
+	X( FNEG      , "F~"       , "Floating-point negate (x -- -x)") \
+	X( FMUL      , "F*"       , "Floating-point multiply (x y -- x*y)") \
+	X( FMOD      , "F%"       , "Floating-point remainder/modulus (x y -- x%y)") \
+	X( FINV      , "F1/"      , "Floating-point reciprocal (x -- 1/x)") \
+	X( FDIV      , "F/"       , "Floating-point division (x y -- x/y)") \
+	X( FLT       , "F<"       , "Floating-point less than (x y -- x<y)") \
+	X( FLE       , "F<="      , "Floating-point less than or equal (x y -- x<=y)") \
+	X( FNE       , "F!="      , "Floating-point not equal (x y -- x!=y)") \
+	X( FEQ       , "F="       , "Floating-point equal (x y -- x=y)") \
+	X( FGE       , "F>="      , "Floating-point greater than or equal (x y -- x>=y)") \
+	X( FGT       , "F>"       , "Floating-point greater than (x y -- x>y)") \
+	/* ====================================================================== */ \
+	/* All inputs are x:i32/y:i32 (bitwise cast to i32) */ \
+	X( IADD      , "I+"       , "Integer add (x y -- x+y)") \
+	X( INEG      , "I~"       , "Integer negate (x -- -x)") \
+	X( IMUL      , "I*"       , "Integer multiply (x y -- x*y)") \
+	X( IDIV      , "I/"       , "Integer euclidean division (x y -- x//y)") \
+	X( IMOD      , "I%"       , "Integer euclidean remainder/modulus (x y -- x%y)") \
+	X( IBAND     , "I&"       , "Integer bitwise AND (x y -- x&y)") \
+	X( IBOR      , "I|"       , "Integer bitwise OR (x y -- x|y)") \
+	X( IBXOR     , "I^"       , "Integer bitwise XOR (x y -- x^y)") \
+	X( IBNOT     , "I!"       , "Integer bitwise NOT (x -- !y)") \
+	X( ILAND     , "I&&"      , "Integer logical AND (x y -- x&&y)") \
+	X( ILOR      , "I||"      , "Integer logical OR (x y -- x||y)") \
+	X( ILXOR     , "I^^"      , "Integer logical XOR (x y -- x^^y)") \
+	X( ILNOT     , "I!!"      , "Integer logical NOT (x -- !!y)") \
+	X( ILSHIFT   , "I<<"      , "Integer shift left (x y -- x<<y)") \
+	X( IRSHIFT   , "I>>"      , "Integer shift right (x y -- x>>y)") \
+	X( ILT       , "I<"       , "Integer less than (x y -- x<y)") \
+	X( ILE       , "I<="      , "Integer less than or equal (x y -- x<=y)") \
+	X( IEQ       , "I="       , "Integer equal (x y -- x=y)") \
+	X( INE       , "I!="      , "Integer equal (x y -- x!=y)") \
+	X( IGE       , "I>="      , "Integer greater than or equal (x y -- x>=y)") \
+	X( IGT       , "I>"       , "Integer greater than (x y -- x>y)") \
+	/* ====================================================================== */ \
+	X( ARRNEW    , NULL       , "Create array (-- arr)") \
+	X( ARRLEN    , NULL       , "Length of array (arr -- len(arr))") \
+	X( ARRPUT    , NULL       , "Append item to array ([x] y -- [x,y])") \
 	/* TODO more array words */ \
-	/* ==========,==========,============================================== */
+	/* ====================================================================== */ \
+	X( MAPNEW    , NULL       , "Create map (-- map)") \
+	/* TODO more map words? */ \
+	/* ====================================================================== */ \
+	X( THERE         , "there"    , "Get PC outside of comptime (-- addr)") \
+	X( NAVIGATE      , "navigate" , "Set PC outside of comptime (addr --)") \
+	X( SEW           , NULL       , "Write raw i32 or f32 outside of comptime (val --)") \
+	/* XXX should the following be stdlib stuff? */ \
+	X( SEW_LIT       , "sew-lit"  , "Write literal outside of comptime (lit --)") \
+	X( SEW_JMP       , "sew-jmp"  , "Write JMP outside of comptime (addr --)") \
+	X( SEW_JMP0      , "sew-jmp0" , "Writ; JMP0 outside of comptime (addr --)") \
+	X( SEW_JSR       , "sew-jsr"  , "Write JSR outside of comptime (addr --)") \
+	X( SEW_COLON     , "sew-:"    , "Begin word def outside of comptime (name --)") \
+	X( SEW_SEMICOLON , "sew-;"    , "End word def outside of comptime") \
+	/* ====================================================================== */
 
 
 #define LIST_OF_WORDS \
@@ -151,8 +174,8 @@ static const char* get_opcode_str(enum opcode opcode)
 	LIST_OF_OP_WORDS
 	#undef X
 
-	case OP_INT_LITERAL: return "INT_LITERAL";
-	case OP_FLOAT_LITERAL: return "FLOAT_LITERAL";
+	case OP_INT_LITERAL   : return "INT_LITERAL";
+	case OP_FLOAT_LITERAL : return "FLOAT_LITERAL";
 	case OP_JMP     : return "JMP";
 	case OP_JMP0    : return "JMP0";
 	case OP_JSR     : return "JSR";
@@ -182,7 +205,7 @@ static enum builtin_word match_builtin_word(const char* word)
 	return _NO_WORD_;
 }
 
-enum compiler_state { // XXX tokenizer state?
+enum tokenizer_state {
 	WORD=1,
 	STRING,
 	COMMENT,
@@ -190,6 +213,7 @@ enum compiler_state { // XXX tokenizer state?
 
 #define MAX_ERROR_MESSAGE_SIZE (1<<14)
 #define WORD_BUF_CAP (1<<8)
+#define MAX_SEW_DEPTH (8) // storage req scales 3^X-ish - be careful!
 
 struct word_info {
 	unsigned is_comptime :1;
@@ -204,19 +228,23 @@ union pword {
 };
 static_assert(sizeof(union pword)==sizeof(uint32_t),"");
 
+#define PWORD_INT(v)   ((union pword){.i32=(v)})
+#define PWORD_FLOAT(v) ((union pword){.f32=(v)})
+
 struct program {
+	int write_cursor;
 	union pword* op_arr;
 	int entrypoint_address;
 	// TODO: compile error?
 };
 
+
 struct compiler {
 	struct location location, error_location;
-	enum compiler_state state;
+	enum tokenizer_state tokenizer_state;
 	int comment_depth;
 	char word_buf[WORD_BUF_CAP];
 	int word_size;
-	unsigned has_error :1;
 	struct {
 		char* key;
 		struct word_info value;
@@ -224,11 +252,13 @@ struct compiler {
 	int* word_index_arr;
 	int* wordscope0_arr;
 	int* wordskip_addraddr_arr;
-	int prefix_word, remaining_suffix_words;
-	int next_user_word_id;
-	int is_comptime;
-	struct program comptime_program;
-	struct program* runtime_program;
+	//int next_user_word_id;
+	struct program* program;
+	int sew_depth;
+
+	unsigned has_error :1;
+	unsigned prefix_colon :1;
+	unsigned prefix_comptime :1;
 
 	// fields below this line are kept (not cleared) between compilations. new
 	// fields must be explicitly added to and handled in compiler_begin().
@@ -269,6 +299,7 @@ struct vmii {
 	struct program* program;
 	int has_error;
 	char* error_message;
+	struct program* sew_target;
 };
 
 static struct {
@@ -286,6 +317,63 @@ THREAD_LOCAL static struct {
 	const char* error_message;
 	unsigned thread_locals_were_initialized  :1;
 } tlg; // thread-local globals
+
+static void reset_our_scratch(void)
+{
+	reset_scratch(tlg.scratch_header);
+}
+
+static void program_push(struct program* p, union pword pword)
+{
+	const int n = arrlen(p->op_arr);
+	assert((0 <= p->write_cursor) && (p->write_cursor <= n));
+	if (p->write_cursor == n) {
+		arrput(p->op_arr, pword);
+	} else {
+		p->op_arr[p->write_cursor] = pword;
+	}
+	++p->write_cursor;
+}
+
+static inline int program_addr(struct program* p)
+{
+	return arrlen(p->op_arr);
+}
+
+static union pword program_read_at(struct program* p, int addr)
+{
+	return arrchkget(p->op_arr, addr);
+}
+
+static void program_patch(struct program* p, int addr, union pword pword)
+{
+	arrchk(p->op_arr, addr);
+	p->op_arr[addr] = pword;
+}
+
+static void program_sew(struct program* p, int sew_depth, int type, union pword pword)
+{
+	assert(sew_depth >= 0);
+	if (sew_depth == 0) {
+		program_push(p, pword);
+	} else {
+		const int d2 = sew_depth-1;
+		assert(d2 >= 0);
+		switch (type) {
+		case VAL_INT: {
+			program_sew(p, d2, VAL_INT, PWORD_INT(OP_INT_LITERAL));
+			program_sew(p, d2, VAL_INT, pword);
+			program_sew(p, d2, VAL_INT, PWORD_INT(OP_SEW));
+		}	break;
+		case VAL_FLOAT: {
+			program_sew(p, d2, VAL_INT,   PWORD_INT(OP_FLOAT_LITERAL));
+			program_sew(p, d2, VAL_FLOAT, pword);
+			program_sew(p, d2, VAL_INT,   PWORD_INT(OP_SEW));
+		}	break;
+		default: assert(!"bad/unhandled type");
+		}
+	}
+}
 
 FORMATPRINTF2
 static void compiler_errorf(struct compiler* cm, const char* fmt, ...)
@@ -305,9 +393,308 @@ static void compiler_errorf(struct compiler* cm, const char* fmt, ...)
 	tlg.error_message = cm->error_message;
 }
 
-static void reset_our_scratch(void)
+FORMATPRINTF2
+void vmii_error(struct vmii* vm, const char* fmt, ...)
 {
-	reset_scratch(tlg.scratch_header);
+	char* p = vm->error_message;
+	int r = MAX_ERROR_MESSAGE_SIZE;
+	int n;
+	va_list va;
+	va_start(va, fmt);
+	n = stbsp_vsnprintf(p, r, fmt, va);
+	va_end(va);
+	p+=n; r-=n;
+	vm->error_pc = vm->pc;
+	vm->has_error = 1;
+	tlg.error_message = vm->error_message;
+}
+
+void vmii_reset2(struct vmii* vm, struct program* program)
+{
+	arrreset(vm->stack_arr);
+	arrreset(vm->rstack_arr);
+	vm->program = program;
+	vm->pc = program->entrypoint_address;
+	vm->error_pc = 0;
+	vm->has_error = 0;
+	vm->error_message[0] = 0;
+	vm->sew_target = NULL;
+}
+
+#define VMII_OP_STACK_GUARD(OPSTR,N) \
+	if (STACK_HEIGHT() < (N)) { \
+		vmii_error(vm, "%s expected a minimum stack height of %d, but it was only %d", OPSTR, (N), STACK_HEIGHT()); \
+		return -1; \
+	}
+
+int vmii_run2(struct vmii* vm)
+{
+	const int TRACE = 0;
+
+	struct program const* prg = vm->program;
+	assert((prg != NULL) && "no program; forgot vmii_reset()?");
+	const int prg_len = arrlen(prg->op_arr);
+	int pc = vm->pc;
+	int num_defer = 0;
+	uint32_t deferred_op = 0;
+	// TODO cycle limiting in while() condition?
+	while ((0 <= pc) && (pc < prg_len)) {
+		if (vm->has_error) return -1;
+
+		union pword* pw = &prg->op_arr[pc];
+		int next_pc = pc+1;
+		int set_num_defer = 0;
+
+		#define STACK_HEIGHT()  ((int)arrlen(vm->stack_arr))
+		#define RSTACK_HEIGHT() ((int)arrlen(vm->rstack_arr))
+
+		if (num_defer > 0) {
+			--num_defer;
+			switch (deferred_op) {
+
+			case OP_JMP:
+				if (TRACE) printf(" JMP pc %d->%d\n", pc, pw->u32);
+				next_pc = pw->u32;
+				break;
+
+			case OP_JSR:
+				if (TRACE) printf(" JSR pc %d->%d %d=>R\n", pc, pw->u32, pc+2);
+				arrput(vm->rstack_arr, (pc+1));
+				next_pc = pw->u32;
+				break;
+
+			case OP_INT_LITERAL:
+				if (TRACE) printf(" INT_LITERAL %d\n", pw->i32);
+				arrput(vm->stack_arr, ((struct val){
+					.type = VAL_INT,
+					.i32 = pw->i32,
+				}));
+				break;
+
+			case OP_FLOAT_LITERAL:
+				if (TRACE) printf(" FLITERAL %f\n", pw->f32);
+				arrput(vm->stack_arr, ((struct val){
+					.type = VAL_FLOAT,
+					.f32 = pw->f32,
+				}));
+				break;
+
+			default:
+				fprintf(stderr, "vmii: unhandled deferred op %s (%u)\n", get_opcode_str(deferred_op), deferred_op);
+				abort();
+				break;
+			}
+
+			assert(set_num_defer == 0);
+		} else {
+			const uint32_t op = prg->op_arr[pc].u32;
+
+			if (TRACE) printf("[%.4x] %.2x %s\n", pc, op, get_opcode_str(op));
+
+			switch (op) {
+
+			case OP_NOP: {
+				if (TRACE) printf(" NOP\n");
+			}	break;
+
+			case OP_SEW: {
+				VMII_OP_STACK_GUARD("OP_SEW",1)
+				const struct val v = arrpop(vm->stack_arr);
+				if (vm->sew_target == NULL) {
+					vmii_error(vm, "SEW has no target (was it called outside of comptime?)");
+					return -1;
+				}
+				switch (v.type) {
+				case VAL_INT:   program_push(vm->sew_target, PWORD_INT(v.i32)); break;
+				case VAL_FLOAT: program_push(vm->sew_target, PWORD_FLOAT(v.f32)); break;
+				default:
+					vmii_error(vm, "SEW with unhandled value type (%d)", v.type);
+					return -1;
+				}
+			}	break;
+
+			// these ops take another argument
+			case OP_JMP:
+			case OP_JMP0:
+			case OP_JSR:
+			case OP_INT_LITERAL:
+			case OP_FLOAT_LITERAL:
+				set_num_defer = 1;
+				break;
+
+			case OP_RETURN: {
+				if (RSTACK_HEIGHT() == 0) {
+					vmii_error(vm, "rstack underflow due to RETURN at pc=%d\n", pc);
+					return -1;
+				}
+				next_pc = arrpop(vm->rstack_arr);
+				if (TRACE) printf(" RETURN pc -> %d\n", next_pc);
+			}	break;
+
+
+			case OP_DROP: {
+				VMII_OP_STACK_GUARD("OP_DROP",1)
+				(void)arrpop(vm->stack_arr);
+			}	break;
+
+			case OP_PICK: {
+				VMII_OP_STACK_GUARD("OP_PICK",1)
+				struct val vi = arrpop(vm->stack_arr);
+				const int i = vi.i32;
+				if (i<0) {
+					vmii_error(vm, "`%d PICK` - negative pick is invalid", i);
+					return -1;
+				}
+				const int min_height = 1+i;
+				if (STACK_HEIGHT() < min_height) {
+					vmii_error(vm, "%d pick out-of-bounds; stack height is only %d", i, STACK_HEIGHT());
+					return -1;
+				}
+				struct val vd = arrchkget(vm->stack_arr, STACK_HEIGHT()-1-i);
+				arrput(vm->stack_arr, vd);
+			}	break;
+
+			case OP_ROTATE: {
+				VMII_OP_STACK_GUARD("OP_ROTATE",2)
+				const struct val vd = arrpop(vm->stack_arr); \
+				const struct val vn = arrpop(vm->stack_arr); \
+				const int d=vd.i32; \
+				const int n=vn.i32; \
+				if (STACK_HEIGHT() < n) {
+					vmii_error(vm, "ROTATE of n=%d elements, but stack height is only %d", n, STACK_HEIGHT());
+					return -1;
+				}
+				if (n>=2) { // n<2 is a no-op
+					const int i0 = STACK_HEIGHT()-n;
+					const int n0 = arrlen(vm->stack_arr);
+					struct val* p1 = arraddnptr(vm->stack_arr, n);
+					struct val* p0 = arrchkptr(vm->stack_arr, i0);
+					memcpy(p1, p0, n*sizeof(*p1));
+					for (int i=0; i<n; ++i) p0[i] = p1[stb_mod_eucl(i+d,n)];
+					arrsetlen(vm->stack_arr, n0);
+				}
+			}	break;
+
+			// == floating-point binary ops ==
+
+			#define DEF_FBINOP(ENUM, TYPE, ASSIGN) \
+			case ENUM: { \
+				VMII_OP_STACK_GUARD(#ENUM,2) \
+				const struct val vb = arrpop(vm->stack_arr); \
+				const struct val va = arrpop(vm->stack_arr); \
+				const float a=va.f32; \
+				const float b=vb.f32; \
+				arrput(vm->stack_arr, ((struct val){ \
+					.type=TYPE, \
+					ASSIGN, \
+				})); \
+			}	break;
+			DEF_FBINOP( OP_FADD , VAL_FLOAT , .f32=(a+b)        )
+			DEF_FBINOP( OP_FMUL , VAL_FLOAT , .f32=(a*b)        )
+			DEF_FBINOP( OP_FDIV , VAL_FLOAT , .f32=(a/b)        )
+			DEF_FBINOP( OP_FMOD , VAL_FLOAT , .f32=(fmodf(a,b)) )
+			DEF_FBINOP( OP_FLT  , VAL_INT   , .i32=(a<b)        )
+			DEF_FBINOP( OP_FLE  , VAL_INT   , .i32=(a<=b)       )
+			DEF_FBINOP( OP_FEQ  , VAL_INT   , .i32=(a==b)       )
+			DEF_FBINOP( OP_FNE  , VAL_INT   , .i32=(a!=b)       )
+			DEF_FBINOP( OP_FGE  , VAL_INT   , .i32=(a>=b)       )
+			DEF_FBINOP( OP_FGT  , VAL_INT   , .i32=(a>b)        )
+			#undef DEF_FBINOP
+
+			// == floating-point unary ops ==
+
+			#define DEF_FUNOP(ENUM, TYPE, ASSIGN) \
+			case ENUM: { \
+				VMII_OP_STACK_GUARD(#ENUM,1) \
+				const struct val va = arrpop(vm->stack_arr); \
+				const float a=va.f32; \
+				arrput(vm->stack_arr, ((struct val){ \
+					.type=TYPE, \
+					ASSIGN, \
+				})); \
+			}	break;
+			DEF_FUNOP( OP_FNEG , VAL_FLOAT , .f32=(-a)     )
+			DEF_FUNOP( OP_FINV , VAL_FLOAT , .f32=(1.0f/a) )
+			#undef DEF_FUNOP
+
+			// == integer binary ops ==
+
+			#define DEF_IBINOP(ENUM, EXPR) \
+			case ENUM: { \
+				VMII_OP_STACK_GUARD(#ENUM,2) \
+				const struct val vb = arrpop(vm->stack_arr); \
+				const struct val va = arrpop(vm->stack_arr); \
+				const int32_t a=va.i32; \
+				const int32_t b=vb.i32; \
+				arrput(vm->stack_arr, ((struct val){ \
+					.type=VAL_INT, \
+					.i32=(EXPR), \
+				})); \
+			}	break;
+			DEF_IBINOP( OP_IADD    , (a+b)  )
+			DEF_IBINOP( OP_IMUL    , (a*b)  )
+			DEF_IBINOP( OP_IDIV    , (stb_div_eucl(a,b)) )
+			DEF_IBINOP( OP_IMOD    , (stb_mod_eucl(a,b)) )
+			DEF_IBINOP( OP_IBAND   , (a&b)  )
+			DEF_IBINOP( OP_IBOR    , (a|b)  )
+			DEF_IBINOP( OP_IBXOR   , (a^b)  )
+			DEF_IBINOP( OP_ILAND   , (a&&b) )
+			DEF_IBINOP( OP_ILOR    , (a||b) )
+			DEF_IBINOP( OP_ILXOR   , ((!!a)!=(!!b)) )
+			// FIXME TODO shifts have implementation defined behavior; consider
+			// only supporting b values in [0:32], or maybe [-32:32]?
+			DEF_IBINOP( OP_ILSHIFT , (a<<b) )
+			DEF_IBINOP( OP_IRSHIFT , (a>>b) )
+			DEF_IBINOP( OP_ILT     , (a<b)  )
+			DEF_IBINOP( OP_ILE     , (a<=b) )
+			DEF_IBINOP( OP_IEQ     , (a==b) )
+			DEF_IBINOP( OP_INE     , (a!=b) )
+			DEF_IBINOP( OP_IGE     , (a>=b) )
+			DEF_IBINOP( OP_IGT     , (a>b)  )
+			#undef DEF_IBINOP
+
+			// == integer unary ops ==
+
+			#define DEF_IUNOP(ENUM, EXPR) \
+			case ENUM: { \
+				VMII_OP_STACK_GUARD(#ENUM,1) \
+				const struct val va = arrpop(vm->stack_arr); \
+				const int32_t a=va.i32; \
+				arrput(vm->stack_arr, ((struct val){ \
+					.type=VAL_INT, \
+					.i32=(EXPR), \
+				})); \
+			}	break;
+			DEF_IUNOP( OP_INEG  , (-a) )
+			DEF_IUNOP( OP_IBNOT , (~a) )
+			DEF_IUNOP( OP_ILNOT , (!a) )
+			#undef DEF_IUNOP
+
+			// ==============================
+
+			default:
+				fprintf(stderr, "vmii: unhandled op %s (%u) at pc=%d\n", get_opcode_str(op), op, pc);
+				abort();
+				break;
+			}
+
+			if (set_num_defer > 0) {
+				num_defer = set_num_defer;
+				deferred_op = op;
+			}
+		}
+
+		pc = next_pc;
+	}
+	vm->pc = pc;
+	return STACK_HEIGHT();
+}
+
+static void vmii_call(struct vmii* vm, int addr)
+{
+	vm->pc = addr;
+	arrput(vm->rstack_arr, -1); // exit on RETURN
+	vmii_run2(vm);
 }
 
 static void compiler_begin(struct compiler* cm, struct program* program)
@@ -331,19 +718,17 @@ static void compiler_begin(struct compiler* cm, struct program* program)
 	arrinit(cm->wordscope0_arr, &tlg.scratch_allocator);
 	assert(cm->wordskip_addraddr_arr == NULL);
 	arrinit(cm->wordskip_addraddr_arr, &tlg.scratch_allocator);
-	assert(cm->comptime_program.op_arr == NULL);
-	arrinit(cm->comptime_program.op_arr, &tlg.scratch_allocator);
 
-	cm->runtime_program = program;
-	if (cm->runtime_program->op_arr == NULL) {
-		arrinit(cm->runtime_program->op_arr, &system_allocator); // << system allocator
-		arrreset(cm->runtime_program->op_arr);
+	cm->program = program;
+	if (cm->program->op_arr == NULL) {
+		arrinit(cm->program->op_arr, &system_allocator); // << system allocator
+		arrreset(cm->program->op_arr);
 	}
 
 	cm->location.line = 1;
 	cm->location.column = 0;
-	cm->next_user_word_id = _FIRST_USER_WORD_;
-	cm->state = WORD;
+	//cm->next_user_word_id = _FIRST_USER_WORD_;
+	cm->tokenizer_state = WORD;
 }
 
 struct number {
@@ -441,88 +826,62 @@ static int parse_number(const char* word, struct number* out_number)
 	}	break;
 
 	default: assert(!"bad state");
-
 	}
 
 	if (out_number/*but not out_gun*/) *out_number = number;
-
 	return 1;
 }
 
-static inline struct program* compiler_program(struct compiler* cm)
-{
-	return cm->is_comptime ? &cm->comptime_program : cm->runtime_program;
-}
 
-static int compiler_addr(struct compiler* cm)
+static int compiler_push_int(struct compiler* cm, int32_t v)
 {
-	return arrlen(compiler_program(cm)->op_arr);
-}
-
-static union pword compiler_read(struct compiler* cm, int addr)
-{
-	return arrchkget(compiler_program(cm)->op_arr, addr);
-}
-
-static int compiler_write(struct compiler* cm, union pword pword)
-{
-	const int addr = compiler_addr(cm);
-	arrput(compiler_program(cm)->op_arr, pword);
+	const int addr = program_addr(cm->program);
+	program_sew(cm->program, cm->sew_depth, VAL_INT, PWORD_INT(v));
 	return addr;
 }
 
-static void compiler_patch(struct compiler* cm, int addr, union pword pword)
+static int compiler_push_float(struct compiler* cm, float v)
 {
-	struct program* os = compiler_program(cm);
-	arrchk(os->op_arr, addr);
-	os->op_arr[addr] = pword;
+	const int addr = program_addr(cm->program);
+	program_sew(cm->program, cm->sew_depth, VAL_FLOAT, PWORD_FLOAT(v));
+	return addr;
 }
 
-static int compiler_write_opcode(struct compiler* cm, enum opcode op)
+static int compiler_push_opcode(struct compiler* cm, enum opcode op)
 {
 	assert((0<=op) && (op<_NUM_OPS_));
-	return compiler_write(cm, ((union pword){ .i32=op }));
+	return compiler_push_int(cm, op);
 }
 
 static void compiler_push_word(struct compiler* cm, const char* word)
 {
 	if (cm->has_error) return;
 
-	// handle suffix words for prefix words
-	if (cm->remaining_suffix_words > 0) {
-		switch (cm->prefix_word) {
+	if (cm->prefix_colon) { // handle word after colon
 
-		case COLON: {
-			if (match_builtin_word(word) != _NO_WORD_) {
-				compiler_errorf(cm, "cannot redefine built-in word (%s)", word);
-				return;
-			}
-			if (parse_number(word, NULL)) {
-				compiler_errorf(cm, "cannot define a number (%s)", word);
-				return;
-			}
-			if (shgeti(cm->word_lut, word) >= 0) {
-				compiler_errorf(cm, "cannot redefine previously defined word (%s)", word);
-				return;
-			}
-
-			const int word_index = shputi(cm->word_lut, word, ((struct word_info){
-				.is_comptime = cm->is_comptime,
-				.addr = compiler_addr(cm),
-				.is_sealed = 0,
-			}));
-			arrput(cm->word_index_arr, word_index);
-			arrput(cm->wordscope0_arr, arrlen(cm->word_index_arr));
-
-		}	break;
-
-		default: assert(!"internal error: unexpected prefix word");
-
+		if (match_builtin_word(word) != _NO_WORD_) {
+			compiler_errorf(cm, "cannot redefine built-in word (%s)", word);
+			return;
+		}
+		if (parse_number(word, NULL)) {
+			compiler_errorf(cm, "cannot define a number (%s)", word);
+			return;
+		}
+		if (shgeti(cm->word_lut, word) >= 0) {
+			compiler_errorf(cm, "cannot redefine previously defined word (%s)", word);
+			return;
 		}
 
-		--cm->remaining_suffix_words;
-		assert(cm->remaining_suffix_words >= 0);
-		if (cm->remaining_suffix_words == 0) cm->prefix_word = 0;
+		const int word_index = shputi(cm->word_lut, word, ((struct word_info){
+			.is_comptime = cm->prefix_comptime,
+			.addr = program_addr(cm->program),
+			.is_sealed = 0,
+		}));
+		arrput(cm->word_index_arr, word_index);
+		arrput(cm->wordscope0_arr, arrlen(cm->word_index_arr));
+
+		cm->prefix_colon = 0;
+		cm->prefix_comptime = 0;
 
 		return;
 	}
@@ -537,51 +896,42 @@ static void compiler_push_word(struct compiler* cm, const char* word)
 
 		switch (bw) {
 
-		case CTM: {
-			if (cm->is_comptime) {
-				compiler_errorf(cm, "cannot enter comptime; already in comptime");
-				return;
-			}
-			cm->is_comptime = 1;
-		}	break;
-
-		case MTC: {
-			if (!cm->is_comptime) {
-				compiler_errorf(cm, "cannot enter runtime; already in runtime");
-				return;
-			}
-			cm->is_comptime = 0;
-		}	break;
-
-		// TODO case TTT:
-
 		case COLON: {
-			cm->prefix_word = bw;
-			cm->remaining_suffix_words = 1;
+			if (cm->sew_depth > 0) {
+				compiler_errorf(cm, "colon not allowed in <#...#>");
+				return;
+			}
+
+			assert(cm->prefix_colon == 0);
+			cm->prefix_colon = 1;
 
 			// insert skip jump (TODO skip-jump optimization?)
-			compiler_write_opcode(cm, OP_JMP);
+			compiler_push_opcode(cm, OP_JMP);
 			// insert invalid placeholder address (we don't know it yet)
-			const int placeholder_addraddr = compiler_write(cm, ((union pword){.u32=0xffffffffL}));
+			const int placeholder_addraddr = compiler_push_int(cm, -1);
 			// remember address of the placeholder address, so we can patch it
 			// when we see a semicolon:
 			arrput(cm->wordskip_addraddr_arr, placeholder_addraddr);
 		}	break;
 
 		case SEMICOLON: {
-			if (arrlen(cm->wordscope0_arr) == 0) {
-				compiler_errorf(cm, "too many semi-colons");
+			if (cm->sew_depth > 0) {
+				compiler_errorf(cm, "semicolon not allowed in <#...#>");
 				return;
 			}
-			compiler_write_opcode(cm, OP_RETURN);
 
-			// finalize word skip jump by overwriting the placeholder address
-			// now that we know where the word ends
-			assert((arrlen(cm->wordskip_addraddr_arr) > 0) && "broken compiler?");
-			const int skip_addraddr = arrpop(cm->wordskip_addraddr_arr);
-			const int write_addr = compiler_addr(cm);
-			assert((compiler_read(cm, skip_addraddr).u32 == 0xffffffffL) && "expected placeholder value");
-			compiler_patch(cm, skip_addraddr, ((union pword){.u32=write_addr}));
+			if (cm->prefix_comptime) {
+				compiler_errorf(cm, "nonsensical comptime'd semicolon");
+				return;
+			}
+
+			if (arrlen(cm->wordscope0_arr) == 0) {
+				compiler_errorf(cm, "too many semicolons");
+				return;
+			}
+
+			struct program* prg = cm->program;
+			compiler_push_opcode(cm, OP_RETURN);
 
 			const int c = arrpop(cm->wordscope0_arr);
 			assert(c >= 0);
@@ -592,6 +942,14 @@ static void compiler_push_word(struct compiler* cm, const char* word)
 			struct word_info* info = &cm->word_lut[closing_word_index].value;
 			info->is_sealed = 1;
 
+			// finalize word skip jump by overwriting the placeholder address
+			// now that we know where the word ends
+			assert((arrlen(cm->wordskip_addraddr_arr) > 0) && "broken compiler?");
+			const int skip_addraddr = arrpop(cm->wordskip_addraddr_arr);
+			const int write_addr = program_addr(prg);
+			assert((program_read_at(prg, skip_addraddr).u32 == 0xffffffffL) && "expected placeholder value");
+			program_patch(prg, skip_addraddr, ((union pword){.u32=write_addr}));
+
 			if (n > c) {
 				// remove inner words from scope
 				for (int i=(n-1); i>=c; --i) {
@@ -601,6 +959,31 @@ static void compiler_push_word(struct compiler* cm, const char* word)
 				}
 				arrsetlen(cm->word_index_arr, c);
 			}
+
+		}	break;
+
+		case COMPTIME: {
+			if (cm->sew_depth > 0) {
+				compiler_errorf(cm, "comptime not allowed in <#...#>");
+				return;
+			}
+			cm->prefix_comptime = 1;
+		}	break;
+
+		case ENTER_SEW: {
+			++cm->sew_depth;
+			if (cm->sew_depth > MAX_SEW_DEPTH) {
+				compiler_errorf(cm, "sew depth exceeded maximum of %d -- sewception averted!", MAX_SEW_DEPTH);
+				return;
+			}
+		}	break;
+
+		case LEAVE_SEW: {
+			if (cm->sew_depth == 0) {
+				compiler_errorf(cm, "too many `#>`s");
+				return;
+			}
+			--cm->sew_depth;
 		}	break;
 
 		#define X(E,_S,_D) case E: do_encode_opcode = OP_##E; break;
@@ -610,23 +993,56 @@ static void compiler_push_word(struct compiler* cm, const char* word)
 		default: assert(!"TODO add missing built-in word handler"); break;
 		}
 
-		if (do_encode_opcode != _OP_NONE_) compiler_write_opcode(cm, do_encode_opcode);
+		if (do_encode_opcode != _OP_NONE_) {
+			if (cm->sew_depth > 0) {
+				assert(!"TODO sew built-in op!");
+			} else if (!cm->prefix_comptime) {
+				compiler_push_opcode(cm, do_encode_opcode);
+			} else {
+				assert(!"TODO execute comptime'd opcode");
+				cm->prefix_comptime = 0;
+			}
+		}
 
 	} else if (parse_number(word, &number)) {
-		compiler_write_opcode(cm, number.type);
-		switch (number.type) {
-		case OP_INT_LITERAL: compiler_write(cm, ((union pword){.i32=number.i32})); break;
-		case OP_FLOAT_LITERAL: compiler_write(cm, ((union pword){.f32=number.f32})); break;
-		default: assert(!"unhandled case");
+		if (!cm->prefix_comptime) {
+			compiler_push_opcode(cm, number.type);
+			switch (number.type) {
+			case OP_INT_LITERAL:     compiler_push_int(cm, number.i32); break;
+			case OP_FLOAT_LITERAL: compiler_push_float(cm, number.f32); break;
+			default: assert(!"unhandled case");
+			}
+		} else {
+			assert(cm->sew_depth == 0);
+			assert(!"TODO execute comptime'd literal");
+			cm->prefix_comptime = 0;
 		}
 	} else if ((wi = shgeti(cm->word_lut, word)) >= 0) {
 		struct word_info* info = &cm->word_lut[wi].value;
-		if (!info->is_comptime) {
-			compiler_write_opcode(cm, OP_JSR);
-			compiler_write(cm, ((union pword){.u32=info->addr}));
+		if (cm->sew_depth > 0) {
+			assert(!"TODO sew user word!");
+		} else if (info->is_comptime) {
+			struct vmii* vm = &tlg.vmii;
+			vmii_reset2(vm, cm->program);
+			assert(!vm->has_error);
+			assert(vm->sew_target == NULL);
+			vm->sew_target = vm->program;
+			vmii_call(vm, info->addr);
+			if (vm->has_error) {
+				compiler_errorf(cm, "[comptime run error] %s", vm->error_message);
+				return;
+			}
+			cm->prefix_comptime = 0;
+		} else if (!cm->prefix_comptime) {
+			compiler_push_opcode(cm, OP_JSR);
+			compiler_push_int(cm, info->addr);
+		} else if (cm->prefix_comptime) {
+			assert(!"TODO execute comptime'd user word");
+			cm->prefix_comptime = 0;
 		} else {
-			assert(!"TODO call comptime word");
+			assert(!"unreachable");
 		}
+		assert(cm->prefix_comptime == 0);
 	} else {
 		compiler_errorf(cm, "undefined word [%s]", word);
 		return;
@@ -645,16 +1061,16 @@ static void compiler_push_char(struct compiler* cm, struct thicchar ch)
 		++cm->location.column;
 	}
 
-	switch (cm->state) {
+	switch (cm->tokenizer_state) {
 
 	case WORD: {
 		int is_break=0;
 		if (c=='(') {
-			cm->state = COMMENT;
+			cm->tokenizer_state = COMMENT;
 			cm->comment_depth = 1;
 			is_break = 1;
 		} else if ((c=='"') || (c=='\\')) {
-			cm->state = STRING;
+			cm->tokenizer_state = STRING;
 			is_break = 1;
 		} else if (c <= ' ') {
 			is_break = 1;
@@ -707,28 +1123,33 @@ static void compiler_push_char(struct compiler* cm, struct thicchar ch)
 			--cm->comment_depth;
 			assert(cm->comment_depth >= 0);
 			if (cm->comment_depth == 0) {
-				cm->state = WORD;
+				cm->tokenizer_state = WORD;
 			}
 		}
 	}	break;
 
-	default: assert(!"unhandled compiler state");
+	default: assert(!"unhandled tokenizer state");
 	}
 }
 
 static void compiler_end(struct compiler* cm)
 {
 	compiler_push_char(cm, ((struct thicchar){.codepoint = 0}));
-	switch (cm->state) {
+	switch (cm->tokenizer_state) {
 	case WORD: /* OK */ break;
 	case STRING:  compiler_errorf(cm, "EOF in unterminated string"); break;
 	case COMMENT: compiler_errorf(cm, "EOF in unterminated comment"); break;
-	default:      compiler_errorf(cm, "EOF in unexpected compiler state (%d)", cm->state); break;
+	default:      compiler_errorf(cm, "EOF in unexpected tokenizer state (%d)", cm->tokenizer_state); break;
 	}
 	if (cm->has_error) return;
 
-	if (cm->remaining_suffix_words > 0) {
-		compiler_errorf(cm, "EOF while expecting %d more suffix word(s)", cm->remaining_suffix_words);
+	if (cm->prefix_colon) {
+		compiler_errorf(cm, "EOF while expecting colon suffix");
+		return;
+	}
+
+	if (cm->prefix_comptime) {
+		compiler_errorf(cm, "EOF while expecting comptime suffix");
 		return;
 	}
 
@@ -850,274 +1271,9 @@ void mii_thread_init(void)
 	vm->error_message = calloc(MAX_ERROR_MESSAGE_SIZE, sizeof *vm->error_message);
 }
 
-void vmii_reset2(struct vmii* vm, struct program* program)
-{
-	arrreset(vm->stack_arr);
-	arrreset(vm->rstack_arr);
-	vm->program = program;
-	vm->pc = program->entrypoint_address;
-}
-
 void vmii_reset(int program_index)
 {
 	vmii_reset2(&tlg.vmii, get_program(program_index));
-}
-
-FORMATPRINTF2
-void vmii_error(struct vmii* vm, const char* fmt, ...)
-{
-	char* p = vm->error_message;
-	int r = MAX_ERROR_MESSAGE_SIZE;
-	int n;
-	va_list va;
-	va_start(va, fmt);
-	n = stbsp_vsnprintf(p, r, fmt, va);
-	va_end(va);
-	p+=n; r-=n;
-	vm->error_pc = vm->pc;
-	vm->has_error = 1;
-	tlg.error_message = vm->error_message;
-}
-
-int vmii_run2(struct vmii* vm)
-{
-	const int TRACE = 0;
-
-	struct program const* prg = vm->program;
-	assert((prg != NULL) && "no program; forgot vmii_reset()?");
-	const int prg_len = arrlen(prg->op_arr);
-	int pc = vm->pc;
-	int num_defer = 0;
-	uint32_t deferred_op = 0;
-	// TODO cycle limiting in while() condition?
-	while ((0 <= pc) && (pc < prg_len)) {
-		if (vm->has_error) return -1;
-
-		union pword* pw = &prg->op_arr[pc];
-		int next_pc = pc+1;
-		int set_num_defer = 0;
-
-		#define STACK_HEIGHT()  ((int)arrlen(vm->stack_arr))
-		#define RSTACK_HEIGHT() ((int)arrlen(vm->rstack_arr))
-
-		if (num_defer > 0) {
-			--num_defer;
-			switch (deferred_op) {
-
-			case OP_JMP:
-				if (TRACE) printf(" JMP pc %d->%d\n", pc, pw->u32);
-				next_pc = pw->u32;
-				break;
-
-			case OP_JSR:
-				if (TRACE) printf(" JSR pc %d->%d %d=>R\n", pc, pw->u32, pc+2);
-				arrput(vm->rstack_arr, (pc+1));
-				next_pc = pw->u32;
-				break;
-
-			case OP_INT_LITERAL:
-				if (TRACE) printf(" INT_LITERAL %d\n", pw->i32);
-				arrput(vm->stack_arr, ((struct val){
-					.type = VAL_INT,
-					.i32 = pw->i32,
-				}));
-				break;
-
-			case OP_FLOAT_LITERAL:
-				if (TRACE) printf(" FLITERAL %f\n", pw->f32);
-				arrput(vm->stack_arr, ((struct val){
-					.type = VAL_FLOAT,
-					.f32 = pw->f32,
-				}));
-				break;
-
-			default:
-				fprintf(stderr, "vmii: unhandled deferred op %s (%u)\n", get_opcode_str(deferred_op), deferred_op);
-				abort();
-				break;
-			}
-
-			assert(set_num_defer == 0);
-		} else {
-			const uint32_t op = prg->op_arr[pc].u32;
-
-			if (TRACE) printf("[%.4x] %.2x %s\n", pc, op, get_opcode_str(op));
-
-			switch (op) {
-
-			case OP_NOP:
-				if (TRACE) printf(" NOP\n");
-				break;
-
-			// these ops take another argument
-			case OP_JMP:
-			case OP_JMP0:
-			case OP_JSR:
-			case OP_INT_LITERAL:
-			case OP_FLOAT_LITERAL:
-				set_num_defer = 1;
-				break;
-
-			case OP_RETURN: {
-				if (RSTACK_HEIGHT() == 0) {
-					vmii_error(vm, "rstack underflow due to RETURN at pc=%d\n", pc);
-					return -1;
-				}
-				next_pc = arrpop(vm->rstack_arr);
-				if (TRACE) printf(" RETURN pc -> %d\n", next_pc);
-			}	break;
-
-			case OP_DROP: {
-				if (STACK_HEIGHT() == 0) {
-					vmii_error(vm, "DROP called on empty stack");
-					return -1;
-				}
-				(void)arrpop(vm->stack_arr);
-			}	break;
-
-			case OP_PICK: {
-				if (STACK_HEIGHT() == 0) {
-					vmii_error(vm, "PICK called on empty stack");
-					return -1;
-				}
-				struct val vi = arrpop(vm->stack_arr);
-				int i=0;
-				if (!val2int(vi, &i)) {
-					vmii_error(vm, "could not convert %x:%x to int", vi.type, vi.i32);
-					return -1;
-				}
-				if (i<0) {
-					vmii_error(vm, "`%d pick` - negative pick is invalid", i);
-					return -1;
-				}
-				const int min_height = 1+i;
-				if (STACK_HEIGHT() < min_height) {
-					vmii_error(vm, "%d pick out-of-bounds; stack height is only %d", i, STACK_HEIGHT());
-					return -1;
-				}
-				struct val vd = arrchkget(vm->stack_arr, STACK_HEIGHT()-1-i);
-				arrput(vm->stack_arr, vd);
-			}	break;
-
-
-			// == floating-point binary ops ==
-
-			#define DEF_FBINOP(ENUM, TYPE, ASSIGN) \
-			case ENUM: { \
-				if (STACK_HEIGHT() < 2) { \
-					vmii_error(vm, "`%s` requires 2 arguments, stack height was %d", #ENUM, STACK_HEIGHT()); \
-					return -1; \
-				} \
-				const struct val vb = arrpop(vm->stack_arr); \
-				const struct val va = arrpop(vm->stack_arr); \
-				const float a=va.f32; \
-				const float b=vb.f32; \
-				arrput(vm->stack_arr, ((struct val){ \
-					.type=TYPE, \
-					ASSIGN, \
-				})); \
-			}	break;
-			DEF_FBINOP( OP_FADD , VAL_FLOAT , .f32=(a+b)        )
-			DEF_FBINOP( OP_FMUL , VAL_FLOAT , .f32=(a*b)        )
-			DEF_FBINOP( OP_FDIV , VAL_FLOAT , .f32=(a/b)        )
-			DEF_FBINOP( OP_FMOD , VAL_FLOAT , .f32=(fmodf(a,b)) )
-			DEF_FBINOP( OP_FLT  , VAL_INT   , .i32=(a<b)        )
-			DEF_FBINOP( OP_FLE  , VAL_INT   , .i32=(a<=b)       )
-			DEF_FBINOP( OP_FEQ  , VAL_INT   , .i32=(a==b)       )
-			DEF_FBINOP( OP_FNE  , VAL_INT   , .i32=(a!=b)       )
-			DEF_FBINOP( OP_FGE  , VAL_INT   , .i32=(a>=b)       )
-			DEF_FBINOP( OP_FGT  , VAL_INT   , .i32=(a>b)        )
-			#undef DEF_FBINOP
-
-			// == floating-point unary ops ==
-
-			#define DEF_FUNOP(ENUM, TYPE, ASSIGN) \
-			case ENUM: { \
-				if (STACK_HEIGHT() < 1) { \
-					vmii_error(vm, "`%s` requires 1 argument, stack height was %d", #ENUM, STACK_HEIGHT()); \
-					return -1; \
-				} \
-				const struct val va = arrpop(vm->stack_arr); \
-				const float a=va.f32; \
-				arrput(vm->stack_arr, ((struct val){ \
-					.type=TYPE, \
-					ASSIGN, \
-				})); \
-			}	break;
-			DEF_FUNOP( OP_FNEG , VAL_FLOAT , .f32=(-a)     )
-			DEF_FUNOP( OP_FINV , VAL_FLOAT , .f32=(1.0f/a) )
-			#undef DEF_FUNOP
-
-			// == integer binary ops ==
-
-			#define DEF_IBINOP(ENUM, EXPR) \
-			case ENUM: { \
-				if (STACK_HEIGHT() < 2) { \
-					vmii_error(vm, "`%s` requires 2 arguments, stack height was %d", #ENUM, STACK_HEIGHT()); \
-					return -1; \
-				} \
-				const struct val vb = arrpop(vm->stack_arr); \
-				const struct val va = arrpop(vm->stack_arr); \
-				const int32_t a=va.i32; \
-				const int32_t b=vb.i32; \
-				arrput(vm->stack_arr, ((struct val){ \
-					.type=VAL_INT, \
-					.i32=(EXPR), \
-				})); \
-			}	break;
-			DEF_IBINOP( OP_IADD    , (a+b)  )
-			DEF_IBINOP( OP_IMUL    , (a*b)  )
-			DEF_IBINOP( OP_IDIV    , (stb_div_eucl(a,b)) )
-			DEF_IBINOP( OP_IMOD    , (stb_mod_eucl(a,b)) )
-			DEF_IBINOP( OP_IAND    , (a&b)  )
-			DEF_IBINOP( OP_IOR     , (a|b)  )
-			DEF_IBINOP( OP_IXOR    , (a^b)  )
-			DEF_IBINOP( OP_ILSHIFT , (a<<b) )
-			DEF_IBINOP( OP_IRSHIFT , (a>>b) )
-			DEF_IBINOP( OP_ILT     , (a<b)  )
-			DEF_IBINOP( OP_ILE     , (a<=b) )
-			DEF_IBINOP( OP_IEQ     , (a==b) )
-			DEF_IBINOP( OP_INE     , (a!=b) )
-			DEF_IBINOP( OP_IGE     , (a>=b) )
-			DEF_IBINOP( OP_IGT     , (a>b)  )
-			#undef DEF_IBINOP
-
-			// == integer unary ops ==
-
-			#define DEF_IUNOP(ENUM, EXPR) \
-			case ENUM: { \
-				if (STACK_HEIGHT() < 1) { \
-					vmii_error(vm, "`%s` requires 1 argument, stack height was %d", #ENUM, STACK_HEIGHT()); \
-					return -1; \
-				} \
-				const struct val va = arrpop(vm->stack_arr); \
-				const int32_t a=va.i32; \
-				arrput(vm->stack_arr, ((struct val){ \
-					.type=VAL_INT, \
-					.i32=(EXPR), \
-				})); \
-			}	break;
-			DEF_IUNOP( OP_INEG , (-a) )
-			DEF_IUNOP( OP_INOT , (~a) )
-			#undef DEF_IUNOP
-
-			// ==============================
-
-			default:
-				fprintf(stderr, "vmii: unhandled op %s (%u) at pc=%d\n", get_opcode_str(op), op, pc);
-				abort();
-				break;
-			}
-
-			if (set_num_defer > 0) {
-				num_defer = set_num_defer;
-				deferred_op = op;
-			}
-		}
-
-		pc = next_pc;
-	}
-	return STACK_HEIGHT();
 }
 
 int vmii_run(void)
@@ -1150,19 +1306,23 @@ static void selftest_dump_val(struct val v)
 	switch (v.type) {
 	case VAL_INT:    fprintf(out, "%di", v.i32); break;
 	case VAL_FLOAT:  fprintf(out, "%f", v.f32); break;
-	default:         fprintf(out, "%uT:%u(?)", v.type, v.u32); break;
+	default:         fprintf(out, "%uT:%u(?)", v.type, (uint32_t)v.i32); break;
 	}
 }
 
 static void selftest_dump_stack(void)
 {
 	const int d = vmii_get_stack_height();
-	fprintf(stderr, "=== STACK ===\n");
-	for (int i=0; i<d; ++i) {
-		struct val v = vmii_val(i);
-		fprintf(stderr, " stack[%d] = ", (-1-i));
-		selftest_dump_val(v);
-		fprintf(stderr, "\n");
+	if (d == 0) {
+		fprintf(stderr, "=== NO STACK ===\n");
+	} else {
+		fprintf(stderr, "=== STACK (n=%d) ===\n", d);
+		for (int i=0; i<d; ++i) {
+			struct val v = vmii_val(i);
+			fprintf(stderr, " stack[%d] = ", (-1-i));
+			selftest_dump_val(v);
+			fprintf(stderr, "\n");
+		}
 	}
 }
 
@@ -1170,18 +1330,37 @@ void mii_selftest(void)
 {
 	mii_thread_init();
 
+	// TODO maybe these tests should also assert the correct /cause/ of
+	// failure? it's pretty easy to "break" these tests without noticing. e.g.
+	// consider if "comptime" was renamed to "compile_time", then all the
+	// "improper comptime position" tests would not notice that the error had
+	// changed to "'comptime' not found". it might not be the worst idea to
+	// just match a substring from the error message...
+
 	const char* programs_that_fail_to_compile[] = {
-		"xxxxxxxxxxxx", // word not defined
-		// word not closed:
+		// word not defined:
+		"xxxxxxxxxxxx",
+
+		// bad EOF states:
 		":",
 		": foo ",
 		": foo 42",
-		// various unbalanced comments:
-		"42 (",
-		"42 ((",
-		"42 (()",
-		"42 ())",
-		"42 (()))",
+		": foo 42 : ",
+		": foo 42 : bar ",
+		": foo 42 : bar 420 ",
+		": foo 42 : bar 420 ; ",
+		"comptime",
+		"comptime :",
+
+		// nonsensical comptime
+		": foo comptime ;",
+
+		// unbalanced comments:
+		"(",
+		"((",
+		"(()",
+		"())",
+		"(()))",
 	};
 
 	for (int i=0; i<ARRAY_LENGTH(programs_that_fail_to_compile); ++i) {
@@ -1198,30 +1377,54 @@ void mii_selftest(void)
 	// these must all leave 1i (and only 1i) on the stack after execution
 	const char* programs_that_eval_to_1i[] = {
 		"1i",
-		"NOP 1i (blah (blah)) NOP",
+		"NOP 1i (blah (blah (blah))) NOP",
 		"1i 1i I=",
 		"1i 0i I!=",
 		"-1i I~",
-		"1i 0i pick drop",
 		"1i I~ I~",
+		"1i 0i PICK drop",
+		// TODO PICK for values larger than 0?
+
+		"0  1i        2i  1i ROTATE (0 1 -- 1 0)   drop (1 0 -- 1)",
+		"0  1i        2i -1i ROTATE (0 1 -- 1 0)   drop (1 0 -- 1)",
+		"0  1i        2i -3i ROTATE (0 1 -- 1 0)   drop (1 0 -- 1)",
+		"0  0  1i     3i  2i ROTATE (0 0 1 -- 1 0 0)   drop drop (1 0 0 -- 1)",
+		"0  1i 0      3i -2i ROTATE (0 1 0 -- 1 0 0)   drop drop (1 0 0 -- 1)",
+		"0  0  1i     3i  1i ROTATE (0 0 1 -- 0 1 0)   3i  1i ROTATE (0 1 0 -- 1 0 0)   drop drop (1 0 0 -- 1)",
+		"0  1i 0      3i -1i ROTATE (0 1 0 -- 0 0 1)   3i -1i ROTATE (0 0 1 -- 1 0 0)   drop drop (1 0 0 -- 1)",
+		"0  0  1i     3i -2i ROTATE (0 0 1 -- 0 1 0)   3i -2i ROTATE (0 1 0 -- 1 0 0)   drop drop (1 0 0 -- 1)",
+		"0  1i 0      3i  2i ROTATE (0 1 0 -- 0 0 1)   3i  2i ROTATE (0 0 1 -- 1 0 0)   drop drop (1 0 0 -- 1)",
+		"0 0 0 1i 0   5i  3i ROTATE (0 0 0 1 0 -- 1 0 0 0 0) drop drop drop drop",
+		"0 0 0 1i 0   5i -2i ROTATE (0 0 0 1 0 -- 1 0 0 0 0) drop drop drop drop",
+
 		"-1i 2i I+",
+		"256i 8i I>>",
+		"16i 4i I<< 8i I>>",
 		"1 1 F=",
 		"1 -1 F~ F=",
 		"-1 F~ 1 F=",
-		// NOTE euclidean integer division tests (e.g. -3/4=-1); some would
+
+		// NOTE euclidean integer division tests (e.g. -3/4=-1); some of these
 		// fail with "truncating integer division" (-3/4=0) (you can try this
 		// for yourself by changing `stb_div_eucl(a,b)` to `a/b` somewhere
 		// above, assuming your CPU/compiler uses truncating division)
 		"7i 4i I/",
 		"-3i 4 I/ I~",
 		"-5i -7i I/",
-		": fsqr 0 pick F* ; 42 fsqr 1764 F=",
-		": fsqr 0 : foo 101 ; pick F* ; -42 fsqr 1764 F=",
+
+		": fsqr 0i PICK F* ; 42 fsqr 1764 F=",
+		": fsqr 0i : foo 101 ; PICK F* ; -42 fsqr 1764 F=",
 		"-1i : foo 101 drop ; foo foo I~ foo foo",
+
+		" comptime : foo ;   1i ",
+		" 1i comptime : foo ;   foo ",
+		" comptime : foo <# 1i #> ;  foo",
+
 	};
 
 	for (int i=0; i<ARRAY_LENGTH(programs_that_eval_to_1i); ++i) {
 		const char* src = programs_that_eval_to_1i[i];
+		//printf("======== [%s] =======\n", src);
 		const int prg = mii_compile_graycode(src, strlen(src));
 		if (prg == -1) selftest_fail("compile", src);
 		vmii_reset(prg);
@@ -1252,3 +1455,29 @@ void mii_selftest(void)
 // like "7 _linedebug" where 7 is the line number, and _linedebug is a word
 // that measures the stack height and stores it at "line 7 for the current
 // file" (what if multiple files..?)
+
+
+// TODO optimizations?
+
+// - entrypoint and skip-jump optimizations? words are wrapped in a "skip jump"
+//   to prevent inadvertently entering a word without a JSR/call, but: skips
+//   can be joined if several words are defined in a row without top-level code
+//   in between, i.e. the first skip can jump to the last jump target. also,
+//   word/top-level entrypoints can be "forwarded" to the first instruction.
+
+// - "savepoints"? parsing a large stdlib before 10 lines of livecode seems
+//   like a waste; can we snapshot it after parsing stdlib and restore from
+//   that point repeatedly? (needs to be somewhat cheaper and not too difficult
+//   to be worth it?)
+
+// - "dead word elimination"?
+
+// - constant folding? i.e. replacing `3 4 *` with `12`? maybe it's possible to
+//   do in an "optimizer pass" that works directly on bytecode? is it a
+//   "comptime thing" somehow?
+
+// - optimize built-in word lookup? (currently a long series of strcmp()s)
+
+// Not sure about these:
+// - program size optimizations, like encoding "short jumps" and "short
+//   literals" as 1 program word instead of 2.
