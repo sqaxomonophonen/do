@@ -32,3 +32,25 @@ comptime : then
 ;
 
 : assert if else halt then ;
+
+( XXX ... XXX )
+
+comptime : SERIAL0
+  0i
+;
+
+comptime : SERIALX
+  1i I+ dup SEW_LIT
+;
+
+comptime : SERIAL1
+  drop
+;
+
+SERIAL0
+: ID0 SERIALX ;
+: ID1 SERIALX ;
+: ID2 SERIALX ;
+SERIAL1
+
+ID0 ID1 ID2 ID1 ID0

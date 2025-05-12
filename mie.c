@@ -622,6 +622,25 @@ int vmie_run2(struct vmie* vm)
 				program_push(vm->sew_target, PWORD_INT(addr.i32));
 			}	break;
 
+			case OP_SEW_LIT: {
+				VMIE_OP_STACK_GUARD(1)
+				const struct val lit = arrpop(vm->stack_arr);
+				VMIE_SEW_GUARD
+				switch (lit.type) {
+				case VAL_INT:
+					program_push(vm->sew_target, PWORD_INT(OP_INT_LITERAL));
+					program_push(vm->sew_target, PWORD_INT(lit.i32));
+					break;
+				case VAL_FLOAT:
+					program_push(vm->sew_target, PWORD_INT(OP_FLOAT_LITERAL));
+					program_push(vm->sew_target, PWORD_FLOAT(lit.f32));
+					break;
+				default:
+					vmie_error(vm, "SEW_LIT on unhandled type (%d)", lit.type);
+					return -1;
+				}
+			}	break;
+
 			// these ops take another argument
 			case OP_JMP:
 			case OP_JMP0:
