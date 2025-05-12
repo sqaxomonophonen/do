@@ -124,12 +124,12 @@
 	X( NAVIGATE      , "navigate" , "Set PC outside of comptime (addr --)") \
 	X( SEW           , NULL       , "Write raw i32 or f32 outside of comptime (val --)") \
 	/* XXX should the following be stdlib stuff? */ \
-	X( SEW_LIT       , "sew-lit"  , "Write literal outside of comptime (lit --)") \
-	X( SEW_JMP       , "sew-jmp"  , "Write JMP outside of comptime (addr --)") \
-	X( SEW_JMP0      , "sew-jmp0" , "Writ; JMP0 outside of comptime (addr --)") \
-	X( SEW_JSR       , "sew-jsr"  , "Write JSR outside of comptime (addr --)") \
-	X( SEW_COLON     , "sew-:"    , "Begin word def outside of comptime (name --)") \
-	X( SEW_SEMICOLON , "sew-;"    , "End word def outside of comptime") \
+	X( SEW_JMP       , NULL       , "Write JMP outside of comptime (addr --)") \
+	X( SEW_JMP0      , NULL       , "Writ; JMP0 outside of comptime (addr --)") \
+	X( SEW_JSR       , NULL       , "Write JSR outside of comptime (addr --)") \
+	X( SEW_LIT       , NULL       , "Write literal outside of comptime (lit --)") \
+	X( SEW_COLON     , NULL       , "Begin word def outside of comptime (name --)") \
+	X( SEW_SEMICOLON , NULL       , "End word def outside of comptime") \
 	/* ====================================================================== */
 
 
@@ -312,16 +312,31 @@ static struct {
 
 THREAD_LOCAL static struct {
 	struct compiler compiler;
+	#ifndef MIE_ONLY_SYSALLOC
 	struct allocator scratch_allocator;
 	struct scratch_context_header* scratch_header;
+	#endif
 	struct vmie vmie;
 	const char* error_message;
 	unsigned thread_locals_were_initialized  :1;
+	unsigned currently_compiling             :1;
 } tlg; // thread-local globals
+
+
+static inline struct allocator* get_scratch_allocator(void)
+{
+	#ifdef MIE_ONLY_SYSALLOC
+	return &system_allocator; // only for test
+	#else
+	return &tlg.scratch_allocator;
+	#endif
+}
 
 static void reset_our_scratch(void)
 {
+	#ifndef MIE_ONLY_SYSALLOC
 	reset_scratch(tlg.scratch_header);
+	#endif
 }
 
 static void program_push(struct program* p, union pword pword)
@@ -410,21 +425,34 @@ void vmie_error(struct vmie* vm, const char* fmt, ...)
 	tlg.error_message = vm->error_message;
 }
 
-void vmie_reset2(struct vmie* vm, struct program* program)
+static void* scratch_alloc(size_t sz)
 {
-	arrreset(vm->stack_arr);
-	arrreset(vm->rstack_arr);
-	vm->program = program;
-	vm->pc = program->entrypoint_address;
-	vm->error_pc = 0;
-	vm->has_error = 0;
-	vm->error_message[0] = 0;
-	vm->sew_target = NULL;
+	struct allocator* a = get_scratch_allocator();
+	return a->fn_realloc(a->allocator_context, NULL, sz);
 }
 
-#define VMIE_OP_STACK_GUARD(OPSTR,N) \
+static void vmie_init(struct vmie* vm, struct program* program)
+{
+	memset(vm, 0, sizeof *vm);
+	arrinit(vm->stack_arr, get_scratch_allocator());
+	arrinit(vm->rstack_arr, get_scratch_allocator());
+	vm->program = program;
+	vm->pc = program->entrypoint_address;
+	vm->error_message = scratch_alloc(MAX_ERROR_MESSAGE_SIZE);
+	vm->error_message[0] = 0;
+}
+
+#define VMIE_STACK_GUARD(OP,N) \
 	if (STACK_HEIGHT() < (N)) { \
-		vmie_error(vm, "%s expected a minimum stack height of %d, but it was only %d", OPSTR, (N), STACK_HEIGHT()); \
+		vmie_error(vm, "%s expected a minimum stack height of %d, but it was only %d", get_opcode_str(OP), (N), STACK_HEIGHT()); \
+		return -1; \
+	}
+
+#define VMIE_OP_STACK_GUARD(N) VMIE_STACK_GUARD(op,N)
+
+#define VMIE_SEW_GUARD \
+	if (vm->sew_target == NULL) { \
+		vmie_error(vm, "no sew target (called outside of comptime vm?)"); \
 		return -1; \
 	}
 
@@ -453,32 +481,41 @@ int vmie_run2(struct vmie* vm)
 			--num_defer;
 			switch (deferred_op) {
 
-			case OP_JMP:
+			case OP_JMP: {
 				if (TRACE) printf(" JMP pc %d->%d\n", pc, pw->u32);
 				next_pc = pw->u32;
-				break;
+			}	break;
 
-			case OP_JSR:
+			case OP_JMP0: {
+				if (TRACE) printf(" JMP pc %d->%d\n", pc, pw->u32);
+				VMIE_STACK_GUARD(deferred_op,1)
+				const struct val v = arrpop(vm->stack_arr);
+				if ((v.type==VAL_INT && v.i32==0) || (v.type==VAL_FLOAT && v.f32==0.0f)) {
+					next_pc = pw->u32;
+				}
+			}	break;
+
+			case OP_JSR: {
 				if (TRACE) printf(" JSR pc %d->%d %d=>R\n", pc, pw->u32, pc+2);
 				arrput(vm->rstack_arr, (pc+1));
 				next_pc = pw->u32;
-				break;
+			}	break;
 
-			case OP_INT_LITERAL:
+			case OP_INT_LITERAL: {
 				if (TRACE) printf(" INT_LITERAL %d\n", pw->i32);
 				arrput(vm->stack_arr, ((struct val){
 					.type = VAL_INT,
 					.i32 = pw->i32,
 				}));
-				break;
+			}	break;
 
-			case OP_FLOAT_LITERAL:
+			case OP_FLOAT_LITERAL: {
 				if (TRACE) printf(" FLITERAL %f\n", pw->f32);
 				arrput(vm->stack_arr, ((struct val){
 					.type = VAL_FLOAT,
 					.f32 = pw->f32,
 				}));
-				break;
+			}	break;
 
 			default:
 				fprintf(stderr, "vmie: unhandled deferred op %s (%u)\n", get_opcode_str(deferred_op), deferred_op);
@@ -504,13 +541,30 @@ int vmie_run2(struct vmie* vm)
 				return -1;
 			}	break;
 
-			case OP_SEW: {
-				VMIE_OP_STACK_GUARD("OP_SEW",1)
+			case OP_THERE: {
+				VMIE_SEW_GUARD
+				const int c = vm->sew_target->write_cursor;
+				arrput(vm->stack_arr, ((struct val){.type=VAL_INT,.i32=c}));
+				if (TRACE) printf("THERE => %d\n", c);
+			}	break;
+
+			case OP_NAVIGATE: {
+				VMIE_OP_STACK_GUARD(1)
+				VMIE_SEW_GUARD
 				const struct val v = arrpop(vm->stack_arr);
-				if (vm->sew_target == NULL) {
-					vmie_error(vm, "SEW has no target (was it called outside of comptime?)");
+				if (v.type != VAL_INT) {
+					vmie_error(vm, "navigate called with non-integer arg (type %d)", v.type);
 					return -1;
 				}
+				const int c = v.i32;
+				if (TRACE) printf("%d => NAVIGATE\n", c);
+				vm->sew_target->write_cursor = c;
+			}	break;
+
+			case OP_SEW: {
+				VMIE_OP_STACK_GUARD(1)
+				const struct val v = arrpop(vm->stack_arr);
+				VMIE_SEW_GUARD
 				switch (v.type) {
 				case VAL_INT:   program_push(vm->sew_target, PWORD_INT(v.i32)); break;
 				case VAL_FLOAT: program_push(vm->sew_target, PWORD_FLOAT(v.f32)); break;
@@ -518,6 +572,23 @@ int vmie_run2(struct vmie* vm)
 					vmie_error(vm, "SEW with unhandled value type (%d)", v.type);
 					return -1;
 				}
+			}	break;
+
+			case OP_SEW_JMP0:
+			case OP_SEW_JMP:
+			case OP_SEW_JSR: {
+				VMIE_OP_STACK_GUARD(1)
+				const struct val addr = arrpop(vm->stack_arr);
+				VMIE_SEW_GUARD
+				int op2;
+				switch (op) {
+				case OP_SEW_JMP0 : op2 = OP_JMP0; break;
+				case OP_SEW_JMP  : op2 = OP_JMP;  break;
+				case OP_SEW_JSR  : op2 = OP_JSR;  break;
+				default: assert(!"unhandled op");
+				}
+				program_push(vm->sew_target, PWORD_INT(op2));
+				program_push(vm->sew_target, PWORD_INT(addr.i32));
 			}	break;
 
 			// these ops take another argument
@@ -540,12 +611,12 @@ int vmie_run2(struct vmie* vm)
 
 
 			case OP_DROP: {
-				VMIE_OP_STACK_GUARD("OP_DROP",1)
+				VMIE_OP_STACK_GUARD(1)
 				(void)arrpop(vm->stack_arr);
 			}	break;
 
 			case OP_PICK: {
-				VMIE_OP_STACK_GUARD("OP_PICK",1)
+				VMIE_OP_STACK_GUARD(1)
 				struct val vi = arrpop(vm->stack_arr);
 				const int i = vi.i32;
 				if (i<0) {
@@ -562,7 +633,7 @@ int vmie_run2(struct vmie* vm)
 			}	break;
 
 			case OP_ROTATE: {
-				VMIE_OP_STACK_GUARD("OP_ROTATE",2)
+				VMIE_OP_STACK_GUARD(2)
 				const struct val vd = arrpop(vm->stack_arr); \
 				const struct val vn = arrpop(vm->stack_arr); \
 				const int d=vd.i32; \
@@ -586,7 +657,7 @@ int vmie_run2(struct vmie* vm)
 
 			#define DEF_FBINOP(ENUM, TYPE, ASSIGN) \
 			case ENUM: { \
-				VMIE_OP_STACK_GUARD(#ENUM,2) \
+				VMIE_OP_STACK_GUARD(2) \
 				const struct val vb = arrpop(vm->stack_arr); \
 				const struct val va = arrpop(vm->stack_arr); \
 				const float a=va.f32; \
@@ -612,7 +683,7 @@ int vmie_run2(struct vmie* vm)
 
 			#define DEF_FUNOP(ENUM, TYPE, ASSIGN) \
 			case ENUM: { \
-				VMIE_OP_STACK_GUARD(#ENUM,1) \
+				VMIE_OP_STACK_GUARD(1) \
 				const struct val va = arrpop(vm->stack_arr); \
 				const float a=va.f32; \
 				arrput(vm->stack_arr, ((struct val){ \
@@ -628,7 +699,7 @@ int vmie_run2(struct vmie* vm)
 
 			#define DEF_IBINOP(ENUM, EXPR) \
 			case ENUM: { \
-				VMIE_OP_STACK_GUARD(#ENUM,2) \
+				VMIE_OP_STACK_GUARD(2) \
 				const struct val vb = arrpop(vm->stack_arr); \
 				const struct val va = arrpop(vm->stack_arr); \
 				const int32_t a=va.i32; \
@@ -664,7 +735,7 @@ int vmie_run2(struct vmie* vm)
 
 			#define DEF_IUNOP(ENUM, EXPR) \
 			case ENUM: { \
-				VMIE_OP_STACK_GUARD(#ENUM,1) \
+				VMIE_OP_STACK_GUARD(1) \
 				const struct val va = arrpop(vm->stack_arr); \
 				const int32_t a=va.i32; \
 				arrput(vm->stack_arr, ((struct val){ \
@@ -706,25 +777,24 @@ static void vmie_call(struct vmie* vm, int addr)
 
 static void compiler_begin(struct compiler* cm, struct program* program)
 {
-	// clear cm, but keep some field(s)
-	char* keep0 = cm->error_message;
-	memset(cm, 0, sizeof *cm);
-	cm->error_message = keep0;
-
-	if (cm->error_message == NULL) {
-		cm->error_message = calloc(MAX_ERROR_MESSAGE_SIZE, sizeof *cm->error_message);
-	}
+	assert(tlg.currently_compiling == 0);
+	tlg.currently_compiling = 1;
 
 	reset_our_scratch();
 
+	// clear cm, but keep some field(s)
+	memset(cm, 0, sizeof *cm);
+	cm->error_message = scratch_alloc(MAX_ERROR_MESSAGE_SIZE);
+	cm->error_message[0] = 0;
+
 	assert(cm->word_lut == NULL);
-	sh_new_strdup_with_context(cm->word_lut, &tlg.scratch_allocator);
+	sh_new_strdup_with_context(cm->word_lut, get_scratch_allocator());
 	assert(cm->word_index_arr == NULL);
-	arrinit(cm->word_index_arr, &tlg.scratch_allocator);
+	arrinit(cm->word_index_arr, get_scratch_allocator());
 	assert(cm->wordscope0_arr == NULL);
-	arrinit(cm->wordscope0_arr, &tlg.scratch_allocator);
+	arrinit(cm->wordscope0_arr, get_scratch_allocator());
 	assert(cm->wordskip_addraddr_arr == NULL);
-	arrinit(cm->wordskip_addraddr_arr, &tlg.scratch_allocator);
+	arrinit(cm->wordskip_addraddr_arr, get_scratch_allocator());
 
 	cm->program = program;
 	if (cm->program->op_arr == NULL) {
@@ -736,6 +806,11 @@ static void compiler_begin(struct compiler* cm, struct program* program)
 	cm->location.column = 0;
 	//cm->next_user_word_id = _FIRST_USER_WORD_;
 	cm->tokenizer_state = WORD;
+
+	// setup thread local VM as comptime VM
+	struct vmie* vm = &tlg.vmie;
+	vmie_init(vm, program);
+	vm->sew_target = program;
 }
 
 struct number {
@@ -884,6 +959,7 @@ static void compiler_push_word(struct compiler* cm, const char* word)
 			.addr = program_addr(cm->program),
 			.is_sealed = 0,
 		}));
+		assert(word_index>=0);
 		arrput(cm->word_index_arr, word_index);
 		arrput(cm->wordscope0_arr, arrlen(cm->word_index_arr));
 
@@ -1024,14 +1100,10 @@ static void compiler_push_word(struct compiler* cm, const char* word)
 		}
 	} else if ((wi = shgeti(cm->word_lut, word)) >= 0) {
 		struct word_info* info = &cm->word_lut[wi].value;
-		if (cm->sew_depth > 0) {
-			assert(!"TODO sew user word!");
-		} else if (info->is_comptime) {
+		if (info->is_comptime) {
 			struct vmie* vm = &tlg.vmie;
-			vmie_reset2(vm, cm->program);
 			assert(!vm->has_error);
-			assert(vm->sew_target == NULL);
-			vm->sew_target = vm->program;
+			assert(vm->sew_target != NULL);
 			vmie_call(vm, info->addr);
 			if (vm->has_error) {
 				compiler_errorf(cm, "[comptime run error] %s", vm->error_message);
@@ -1140,6 +1212,10 @@ static void compiler_push_char(struct compiler* cm, struct thicchar ch)
 static void compiler_end(struct compiler* cm)
 {
 	compiler_push_char(cm, ((struct thicchar){.codepoint = 0}));
+
+	assert(tlg.currently_compiling == 1);
+	tlg.currently_compiling = 0;
+
 	switch (cm->tokenizer_state) {
 	case WORD: /* OK */ break;
 	case STRING:  compiler_errorf(cm, "EOF in unterminated string"); break;
@@ -1175,12 +1251,13 @@ static void compiler_end(struct compiler* cm)
 	#endif
 
 	assert(cm->word_lut != NULL);
-	hmfree(cm->word_lut);
+	shfree(cm->word_lut);
 	assert(cm->word_lut == NULL);
 }
 
 static int alloc_program_index(void)
 {
+	assert((tlg.currently_compiling == 0) && "the compiler has a program reference, making it dangerous to mutate program_arr");
 	//assert(thrd_success == mtx_lock(&g.program_alloc_mutex));
 	int r;
 	struct program* program;
@@ -1254,7 +1331,7 @@ const char* mie_error(void)
 	return tlg.error_message;
 }
 
-static void global_init(void)
+static void init_globals(void)
 {
 	if (g.globals_were_initialized) return;
 	g.globals_were_initialized = 1;
@@ -1265,20 +1342,24 @@ static void global_init(void)
 
 void mie_thread_init(void)
 {
-	global_init();
+	#ifdef MIE_ONLY_SYSALLOC
+	printf("(Built with MIE_ONLY_SYSALLOC; not for production!)\n");
+	// memory checkers like valgrind have a harder time finding memory bugs
+	// when you're managing memory yourself; MIE_ONLY_SYSALLOC prevents the use
+	// of our own scratch allocator, and only uses the system_allocator. this
+	// causes leaks, but valgrind can find some memory bugs this way.
+	#endif
+	init_globals();
 	if (tlg.thread_locals_were_initialized) return;
 	tlg.thread_locals_were_initialized = 1;
-	tlg.scratch_header = init_scratch_allocator(&tlg.scratch_allocator, 1L<<24);
-	struct vmie* vm = &tlg.vmie;
-	memset(vm, 0, sizeof *vm);
-	arrinit(vm->stack_arr, &tlg.scratch_allocator);
-	arrinit(vm->rstack_arr, &tlg.scratch_allocator);
-	vm->error_message = calloc(MAX_ERROR_MESSAGE_SIZE, sizeof *vm->error_message);
+	#ifndef MIE_ONLY_SYSALLOC
+	tlg.scratch_header = init_scratch_allocator(get_scratch_allocator(), 1L<<24);
+	#endif
 }
 
 void vmie_reset(int program_index)
 {
-	vmie_reset2(&tlg.vmie, get_program(program_index));
+	vmie_init(&tlg.vmie, get_program(program_index));
 }
 
 int vmie_run(void)
@@ -1305,7 +1386,7 @@ static void selftest_fail(const char* context, const char* src)
 	abort();
 }
 
-static void selftest_dump_val(struct val v)
+void vmie_dump_val(struct val v)
 {
 	FILE* out = stderr;
 	switch (v.type) {
@@ -1315,17 +1396,17 @@ static void selftest_dump_val(struct val v)
 	}
 }
 
-static void selftest_dump_stack(void)
+void vmie_dump_stack(void)
 {
 	const int d = vmie_get_stack_height();
 	if (d == 0) {
-		fprintf(stderr, "=== NO STACK ===\n");
+		fprintf(stderr, "=== EMPTY STACK ===\n");
 	} else {
 		fprintf(stderr, "=== STACK (n=%d) ===\n", d);
 		for (int i=0; i<d; ++i) {
 			struct val v = vmie_val(i);
 			fprintf(stderr, " stack[%d] = ", (-1-i));
-			selftest_dump_val(v);
+			vmie_dump_val(v);
 			fprintf(stderr, "\n");
 		}
 	}
@@ -1334,6 +1415,15 @@ static void selftest_dump_stack(void)
 void mie_selftest(void)
 {
 	mie_thread_init();
+
+	// simple mechanism for only running the tests you want to run: put TAG
+	// in-front of the source you want to whitelist (or make the first
+	// character \a if you prefer), and set ONLY_TAGGED=1. it depends on
+	// sections using our ACCEPT(src) macro, so keep that in mind (add it to
+	// new sections / check for missing ACCEPT())
+	#define TAG "\a"
+	const int ONLY_TAGGED=0;
+	#define ACCEPT(SRC) (ONLY_TAGGED ? (SRC)[0]=='\a' && !!(++(SRC)) : 1)
 
 	// TODO maybe these tests should also assert the correct /cause/ of
 	// failure? it's pretty easy to "break" these tests without noticing. e.g.
@@ -1370,6 +1460,7 @@ void mie_selftest(void)
 
 	for (int i=0; i<ARRAY_LENGTH(programs_that_fail_to_compile); ++i) {
 		const char* src = programs_that_fail_to_compile[i];
+		if (!ACCEPT(src)) continue;
 		const int prg = mie_compile_graycode(src, strlen(src));
 		if (prg != -1) {
 			fprintf(stderr, "selftest expected compile error, but didn't get it for:\n %s\n", src);
@@ -1388,6 +1479,7 @@ void mie_selftest(void)
 
 	for (int i=0; i<ARRAY_LENGTH(programs_that_fail_at_runtime); ++i) {
 		const char* src = programs_that_fail_at_runtime[i];
+		if (!ACCEPT(src)) continue;
 		const int prg = mie_compile_graycode(src, strlen(src));
 		if (prg == -1) selftest_fail("compile", src);
 		vmie_reset(prg);
@@ -1440,16 +1532,17 @@ void mie_selftest(void)
 		": fsqr 0i : foo 101 ; PICK F* ; -42 fsqr 1764 F=",
 		"-1i : foo 101 drop ; foo foo I~ foo foo",
 
+		" 1i : foooooooo ; ",
+		" : foo ;   1i ",
 		" comptime : foo ;   1i ",
 		" 1i comptime : foo ;   foo ",
 		" comptime : foo <# 1i #> ;  foo",
 		" comptime : div-7 <# -7i I/ #> ;  -5i div-7 ",
-
 	};
 
 	for (int i=0; i<ARRAY_LENGTH(programs_that_eval_to_1i); ++i) {
 		const char* src = programs_that_eval_to_1i[i];
-		//printf("======== [%s] =======\n", src);
+		if (!ACCEPT(src)) continue;
 		const int prg = mie_compile_graycode(src, strlen(src));
 		if (prg == -1) selftest_fail("compile", src);
 		vmie_reset(prg);
@@ -1457,17 +1550,20 @@ void mie_selftest(void)
 		if (r == -1) selftest_fail("run", src);
 		if (r != 1) {
 			fprintf(stderr, "selftest assert fail, expected stack height of 1\n");
-			selftest_dump_stack();
+			vmie_dump_stack();
 			abort();
 		}
 		struct val v = vmie_val(0);
 		if (v.type != VAL_INT || v.i32 != 1) {
 			fprintf(stderr, "selftest expected one stack element, 1i, got: ");
-			selftest_dump_val(v);
+			vmie_dump_val(v);
 			fprintf(stderr, " for:\n %s\n", src);
 			abort();
 		}
 	}
+
+	#undef ACCEPT
+	#undef TAG
 }
 
 // TODO I think I'd like a debugging feature where I can see the stack height

@@ -40,6 +40,8 @@ void vmie_reset(int program_index);
 int vmie_run(void);
 int vmie_get_stack_height(void);
 struct val vmie_val(int i);
+void vmie_dump_stack(void);
+void vmie_dump_val(struct val);
 
 const char* mie_error(void);
 

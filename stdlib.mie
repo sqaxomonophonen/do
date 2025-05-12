@@ -1,29 +1,33 @@
 
+: dup      0i PICK       (a -- a a)   ;
+: over     1i PICK     (a x -- a x a) ;
+: swap  2i 1i ROTATE   (a b -- b a)   ;
+: rot   3i 1i ROTATE (a b c -- b c a) ;
+: roll     1i ROTATE ;
+: lorr    -1i ROTATE ;
+
 comptime : if
-  there            (-- p0)
-  -1i sew_jmp0     (forward JMP0 placeholder, targets else/then)
-  IF box        (p0 -- p0:IF)
+  there           ( -- p0)
+  -1i SEW_JMP0    (forward JMP0 placeholder, targets else/then)
+  (IF box        (p0 -- p0:IF))
 ;
 
 comptime : else
-  IF unbox          (p0:IF -- p0)
+  (IF unbox          (p0:IF -- p0))
   there                (p0 -- p0 p1)
-  -1i sew_jmp    (forward JMP placeholder, targets then)
-  swap there        (p0 p1 -- p1 p0 t0)
-  swap there     (p1 p0 t0 -- p1 t0 p0 t0)
-  swap        (p1 t0 p0 t0 -- p1 t0 t0 p0)
-  scrub       (p1 t0 p0 t0 -- p1 t0 t0)
-  sew_jmp0    (p1 t0 p0 t0 -- p1 t0)
-  scrub       (p1 t0 p0 t0 -- p1)
-  IF box               (p1 -- p1:IF)
+  -1i SEW_JMP    (forward JMP placeholder, targets then)
+  there             (p0 p1 -- p0 p1 p2)
+  rot navigate dup   ( ... -- p1 p2 p2)
+  SEW_JMP0           ( ... -- p1 p2)
+  navigate           ( ... -- p1 )
+  (IF box               (p1 -- p1:IF))
 ;
 
 comptime : then
-  IF unbox     (p1:IF -- p1)
+  (IF unbox     (p1:IF -- p1))
   there there rot (p1 -- t1 t1 p1)
-  scrub     (t1 t1 p1 -- t1 t1)
-  sew_jmp      (t1 t1 -- t1)
-  scrub           (t1 -- )
+  navigate  (t1 t1 p1 -- t1 t1)
+  SEW_JMP      (t1 t1 -- t1)
+  navigate        (t1 -- )
 ;
-
 

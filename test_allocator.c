@@ -1,4 +1,5 @@
 // cc -O0 -g -Wall allocator.c stb_ds.c test_allocator.c -o _test_allocator -lm && ./_test_allocator
+// cc -O2 -g -Wall allocator.c stb_ds.c test_allocator.c -o _test_allocator -lm && ./_test_allocator
 
 #include <stdlib.h>
 #include <string.h>
@@ -178,6 +179,40 @@ static void test_scratch_allocator(void)
 	}
 
 	{
+		// test of stb_ds.dynamic array hashmap with custom scratch allocator
+		// (perhaps roll back into stbds_unit_tests() in stb_ds.h?)
+
+		struct allocator a={0};
+		struct scratch_context_header* h = init_scratch_allocator(&a, 1<<20);
+		(void)h;
+
+		int* xs = NULL;
+		int* ys = NULL;
+		int* zs = NULL;
+		arrinit(xs, &a);
+		arrinit(ys, &a);
+		arrinit(zs, &a);
+		for (int i=0; i<1000; ++i) {
+			arrput(xs, i);
+			arrput(ys, 2*i);
+			arrput(ys, 2*i+1);
+			arrput(zs, 3*i);
+			arrput(zs, 3*i-1);
+			arrput(zs, 3*i-2);
+		}
+		for (int i=0; i<1000; ++i) {
+			assert(xs[i] == i);
+			assert(ys[2*i] == 2*i);
+			assert(ys[2*i+1] == 2*i+1);
+			assert(zs[3*i] == 3*i);
+			assert(zs[3*i+1] == 3*i-1);
+			assert(zs[3*i+2] == 3*i-2);
+		}
+
+		if (VERBOSE) printf("stb_ds.h array + scratch allocator test: OK\n");
+	}
+
+	{
 		// test of stb_ds.h hashmap with custom scratch allocator
 		// (perhaps roll back into stbds_unit_tests() in stb_ds.h?)
 
@@ -212,7 +247,6 @@ static void test_scratch_allocator(void)
 						uint32_t r0 = rng_uint32(&rng);
 						uint32_t r1 = rng_uint32(&rng);
 						snprintf(keybuf, sizeof keybuf, "key%u", r0);
-						//assert(i == shputi(lut, keybuf, (double)r1 * 0.0135));
 						assert(i == shputi(lut, keybuf, ((struct value){
 							.f = (double)r1 * 0.0135,
 							.b1=1,
