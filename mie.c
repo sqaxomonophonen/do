@@ -127,6 +127,7 @@
 	X( SEW_JMP       , NULL       , "Write JMP outside of comptime (addr --)") \
 	X( SEW_JMP0      , NULL       , "Writ; JMP0 outside of comptime (addr --)") \
 	X( SEW_JSR       , NULL       , "Write JSR outside of comptime (addr --)") \
+	X( SEW_ADDR      , NULL       , "Write jump address outside of comptime (addr --)") \
 	X( SEW_LIT       , NULL       , "Write literal outside of comptime (lit --)") \
 	X( SEW_COLON     , NULL       , "Begin word def outside of comptime (name --)") \
 	X( SEW_SEMICOLON , NULL       , "End word def outside of comptime") \
@@ -235,6 +236,11 @@ static_assert(sizeof(union pword)==sizeof(uint32_t),"");
 struct program {
 	int write_cursor;
 	union pword* op_arr;
+	// be careful about grabbing references to op_arr; arrput may change the
+	// pointer (realloc), and both the compiler and comptime VM may write new
+	// instructions (in fact, comptime VM executes part of the program while
+	// writing another part? feels "a bit fucked" but it should work as long as
+	// you don't grab references?)
 	int entrypoint_address;
 	// TODO: compile error?
 };
@@ -588,6 +594,24 @@ int vmie_run2(struct vmie* vm)
 				default: assert(!"unhandled op");
 				}
 				program_push(vm->sew_target, PWORD_INT(op2));
+				program_push(vm->sew_target, PWORD_INT(addr.i32));
+			}	break;
+
+			case OP_SEW_ADDR: {
+				VMIE_OP_STACK_GUARD(1)
+				const struct val addr = arrpop(vm->stack_arr);
+				VMIE_SEW_GUARD
+				const int op2 = program_read_at(vm->sew_target, vm->sew_target->write_cursor++).i32;
+				switch (op2) {
+				case OP_JMP0:
+				case OP_JMP:
+				case OP_JSR:
+					// OK
+					break;
+				default:
+					vmie_error(vm, "SEW_ADDR expected to patch a jump op, but found %s", get_opcode_str(op2));
+					return -1;
+				}
 				program_push(vm->sew_target, PWORD_INT(addr.i32));
 			}	break;
 
@@ -1237,6 +1261,22 @@ static void compiler_end(struct compiler* cm)
 	const int depth = arrlen(cm->wordscope0_arr);
 	if (depth > 0) {
 		compiler_errorf(cm, "EOF inside word definition (depth=%d)", depth);
+		return;
+	}
+
+	// check comptime VM for post-EOF errors
+	// XXX rather crude now; it assumes that a non-empty stack mean some kind
+	// of syntax error (which is probably right), but ideally the comptime VM
+	// itself should explain what the problem is (since the VM doesn't even
+	// know what if/else/then looks like it can't say "looks like invalid
+	// if/else/then syntax")
+	struct vmie* vm = &tlg.vmie;
+	const size_t comptime_stack_height = arrlen(vm->stack_arr);
+	const size_t comptime_rstack_height = arrlen(vm->rstack_arr);
+	if ((comptime_stack_height != 0) || (comptime_rstack_height != 0)) {
+		compiler_errorf(cm, "EOF while comptime VM had non-empty stack/rstack (%zd/%zd); implies syntax error?",
+			comptime_stack_height,
+			comptime_rstack_height);
 		return;
 	}
 
