@@ -12,8 +12,8 @@ struct allocator {
 
 extern struct allocator system_allocator;
 
-// scratch allocator: it doesn't support freeing individual allocations
-// (fn_free is a no-op); you can only free everything at once
+// scratch (aka arena) allocator: it doesn't support freeing individual
+// allocations (fn_free is a no-op); you can only free everything at once
 // (reset_scratch()). this makes it really simple and fast, and useful in cases
 // where you need to do a lot of "work" and throw it away again (like a
 // compiler). it has a fixed capacity that you choose on init, and you can

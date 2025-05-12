@@ -59,19 +59,22 @@ static void* scratch_malloc(void* allocator_context, size_t sz)
 
 static void* scratch_realloc(void* allocator_context, void* ptr, size_t sz)
 {
+	const int TRACE = 0;
+	if (TRACE) printf("SCRATCH REALLOC p=%p sz=%zd", ptr, sz);
 	if (sz == 0) return NULL;
 	if (ptr == NULL) {
-		return scratch_malloc(allocator_context, sz);
+		ptr = scratch_malloc(allocator_context, sz);
 	} else {
 		const size_t cap = ptr_to_scratch_header(ptr)->capacity;
-		if (sz <= cap) {
-			return ptr;
-		} else {
+		if (TRACE) printf(" oldcap=%zd", cap);
+		if (sz > cap) {
 			void* ptr2 = scratch_malloc(allocator_context, sz);
 			memcpy(ptr2, ptr, cap);
-			return ptr2;
+			ptr = ptr2;
 		}
 	}
+	if (TRACE) printf(" => p=%p\n", ptr);
+	return ptr;
 }
 
 static void scratch_free(void* allocator_context, void* ptr)

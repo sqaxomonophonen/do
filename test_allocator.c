@@ -1,4 +1,4 @@
-// cc -O0 -g -Wall allocator.c test_allocator.c -o _test_allocator -lm && ./_test_allocator
+// cc -O0 -g -Wall allocator.c stb_ds.c test_allocator.c -o _test_allocator -lm && ./_test_allocator
 
 #include <stdlib.h>
 #include <string.h>
@@ -7,6 +7,7 @@
 #include <assert.h>
 
 #include "allocator.h"
+#include "stb_ds.h"
 
 struct rng {
 	uint32_t z;
@@ -165,6 +166,7 @@ static void test_scratch_allocator(void)
 			pointers[i] = m;
 			fill_pattern(m,s,i);
 		}
+		// double size of every 3rd allocation
 		for (int i=0; i<N; i+=3) {
 			void* newptr = REALLOC(pointers[i],sizes[i]*2);
 			assert((newptr != pointers[i]) && "expected moved ptr");
@@ -173,6 +175,180 @@ static void test_scratch_allocator(void)
 		for (int i=0; i<N; ++i)  validate_pattern(pointers[i],sizes[i],i);
 		#undef N
 		if (VERBOSE) printf("random test: OK\n");
+	}
+
+	{
+		// test of stb_ds.h hashmap with custom scratch allocator
+		// (perhaps roll back into stbds_unit_tests() in stb_ds.h?)
+
+		struct allocator a={0};
+		struct scratch_context_header* h = init_scratch_allocator(&a, 1<<24);
+		(void)h;
+
+		struct value {
+			int b1;
+			double f;
+			int b2;
+		};
+
+		struct {
+			char* key;
+			struct value value;
+		}* lut;
+
+		for (int pass1=0; pass1<3; ++pass1) {
+
+			sh_new_strdup_with_context(lut, &a);
+
+			for (int pass2=0; pass2<4; ++pass2) {
+
+				const int N=1000;
+				const int SEED=10101 + pass1*33 + pass2*555;
+				char keybuf[256];
+
+				{
+					struct rng rng = make_rng(SEED);
+					for (int i=0; i<N; ++i) {
+						uint32_t r0 = rng_uint32(&rng);
+						uint32_t r1 = rng_uint32(&rng);
+						snprintf(keybuf, sizeof keybuf, "key%u", r0);
+						//assert(i == shputi(lut, keybuf, (double)r1 * 0.0135));
+						assert(i == shputi(lut, keybuf, ((struct value){
+							.f = (double)r1 * 0.0135,
+							.b1=1,
+							.b2=2,
+						})));
+					}
+				}
+
+				{
+					struct rng rng = make_rng(SEED);
+					for (int i=0; i<N; ++i) {
+						uint32_t r0 = rng_uint32(&rng);
+						uint32_t r1 = rng_uint32(&rng);
+						snprintf(keybuf, sizeof keybuf, "key%u", r0);
+						size_t si = shgeti(lut, keybuf);
+						assert(si >= 0);
+						struct value value = lut[si].value;
+						assert(value.b1 == 1);
+						assert(value.b2 == 2);
+						assert(value.f == (double)r1 * 0.0135);
+					}
+				}
+
+				{
+					struct rng rng = make_rng(SEED);
+					for (int i=0; i<N; ++i) {
+						uint32_t r0 = rng_uint32(&rng);
+						uint32_t r1 = rng_uint32(&rng);
+						snprintf(keybuf, sizeof keybuf, "key%u", r0);
+						size_t si = shgeti(lut, keybuf);
+						assert(si >= 0);
+						struct value value = lut[si].value;
+						assert(value.b1 == 1);
+						assert(value.b2 == 2);
+						assert(value.f == (double)r1 * 0.0135);
+					}
+				}
+
+				{
+					struct rng rng = make_rng(SEED);
+					for (int i=0; i<N; ++i) {
+						uint32_t r0 = rng_uint32(&rng);
+						rng_uint32(&rng);
+						if ((i%3)!=1) continue;
+						snprintf(keybuf, sizeof keybuf, "key%u", r0);
+						assert(shdel(lut, keybuf) == 1);
+					}
+				}
+
+				{
+					struct rng rng = make_rng(SEED);
+					for (int i=0; i<N; ++i) {
+						uint32_t r0 = rng_uint32(&rng);
+						uint32_t r1 = rng_uint32(&rng);
+						snprintf(keybuf, sizeof keybuf, "key%u", r0);
+						size_t si = shgeti(lut, keybuf);
+						if ((i%3)==1) {
+							assert(si == -1);
+							continue;
+						} else {
+							assert(si >= 0);
+							struct value value = lut[si].value;
+							assert(value.b1 == 1);
+							assert(value.b2 == 2);
+							assert(value.f == (double)r1 * 0.0135);
+						}
+					}
+				}
+
+				const int N2=5555;
+				const int SEED2=16161+pass1*91919+pass2*1919191;
+				{
+					struct rng rng = make_rng(SEED2);
+					for (int i=0; i<N2; ++i) {
+						uint32_t r0 = rng_uint32(&rng);
+						uint32_t r1 = rng_uint32(&rng);
+						snprintf(keybuf, sizeof keybuf, "okey%u", r0);
+						(void)shputi(lut, keybuf, ((struct value){
+							.f = (double)r1 * 0.321,
+							.b1=11,
+							.b2=22,
+						}));
+					}
+				}
+
+				{
+					struct rng rng = make_rng(SEED);
+					for (int i=0; i<N; ++i) {
+						uint32_t r0 = rng_uint32(&rng);
+						uint32_t r1 = rng_uint32(&rng);
+						snprintf(keybuf, sizeof keybuf, "key%u", r0);
+						size_t si = shgeti(lut, keybuf);
+						if ((i%3)==1) {
+							assert(si == -1);
+							continue;
+						} else {
+							assert(si >= 0);
+							struct value value = lut[si].value;
+							assert(value.b1 == 1);
+							assert(value.b2 == 2);
+							assert(value.f == (double)r1 * 0.0135);
+						}
+					}
+				}
+
+				{
+					struct rng rng = make_rng(SEED2);
+					for (int i=0; i<N2; ++i) {
+						uint32_t r0 = rng_uint32(&rng);
+						uint32_t r1 = rng_uint32(&rng);
+						snprintf(keybuf, sizeof keybuf, "okey%u", r0);
+						size_t si = shgeti(lut, keybuf);
+						assert(si >= 0);
+						struct value value = lut[si].value;
+						assert(value.b1 == 11);
+						assert(value.b2 == 22);
+						assert(value.f == (double)r1 * 0.321);
+					}
+				}
+
+				{
+					// clear array
+					const int n = shlen(lut);
+					for (int i=0; i<n; ++i) {
+						char* key = lut[i].key;
+						assert(shdel(lut, key) == 1);
+					}
+					assert(shlen(lut) == 0);
+				}
+			}
+
+			shfree(lut);
+			assert(lut == NULL);
+		}
+
+		if (VERBOSE) printf("stb_ds.h hashmap + scratch allocator test: OK\n");
 	}
 }
 
