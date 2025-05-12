@@ -16,7 +16,7 @@ comptime : else
   ( IF unbox          ( p0:IF -- p0) )
   there                ( p0 -- p0 p1 )
   -1i SEW_JMP    ( forward JMP placeholder, targets then )
-  there             ( p0 p1 -- p0 p1 p2 )
+  there               ( ... -- p0 p1 p2 )
   rot navigate dup    ( ... -- p1 p2 p2)
   SEW_ADDR            ( ... -- p1 p2)
   navigate            ( ... -- p1 )
@@ -30,3 +30,5 @@ comptime : then
   SEW_ADDR     ( t1 t1 -- t1 )
   navigate        ( t1 -- )
 ;
+
+: assert if else halt then ;

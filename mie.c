@@ -70,10 +70,12 @@
 	X( TYPEOF    , NULL       , "Get type (x -- typeof(x))") \
 	X( CAST      , NULL       , "Set type (x T -- T(x))") \
 	X( HERE      , "here"     , "Push current instruction pointer to rstack [-- ip]") \
-	X( I2R       , "I>R"      , "Pops i:i32 from stack, pushes it onto rstack (i --) [-- i]") \
-	X( R2I       , "R>I"      , "Moves integer value back from rstack [i --] (-- i)") \
 	X( JMPI      , NULL       , "Pop address from rstack => indirect jump [address -- ]" ) \
 	X( JSRI      , NULL       , "Pop address from rstack => indirect jump-to-subroutine [address --]" ) \
+	X( I2R       , "I>R"      , "Pop i:i32 from stack, push it onto rstack (i --) [-- i]") \
+	X( R2I       , "R>I"      , "Moves integer value back from rstack [i --] (-- i)") \
+	X( F2I       , "F>I"      , "Pop a:f32, push after conversion to i32 (a:f32 -- i)") \
+	X( I2F       , "I>F"      , "Pop a:i32, push after conversion to f32 (a:i32 -- f)") \
 	/* ====================================================================== */ \
 	/* All inputs are x:f32/y:f32 (bitwise cast to f32) */ \
 	X( FADD      , "F+"       , "Floating-point add (x y -- x+y)") \
@@ -680,6 +682,24 @@ int vmie_run2(struct vmie* vm)
 					for (int i=0; i<n; ++i) p0[i] = p1[stb_mod_eucl(i+d,n)];
 					arrsetlen(vm->stack_arr, n0);
 				}
+			}	break;
+
+			case OP_I2F: {
+				VMIE_OP_STACK_GUARD(1)
+				const int v = arrpop(vm->stack_arr).i32;
+				arrput(vm->stack_arr, ((struct val){
+					.type=VAL_FLOAT,
+					.f32 = (float)v,
+				}));
+			}	break;
+
+			case OP_F2I: {
+				VMIE_OP_STACK_GUARD(1)
+				const float v = arrpop(vm->stack_arr).f32;
+				arrput(vm->stack_arr, ((struct val){
+					.type=VAL_INT,
+					.i32 = (int)v,
+				}));
 			}	break;
 
 			// == floating-point binary ops ==
