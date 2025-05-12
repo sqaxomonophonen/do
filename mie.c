@@ -563,6 +563,11 @@ int vmie_run2(struct vmie* vm)
 					return -1;
 				}
 				const int c = v.i32;
+				const int end = arrlen(vm->sew_target->op_arr);
+				if (!(0 <= c && c <= end)) {
+					vmie_error(vm, "navigate out of bounds to %d, valid range is [0;%d]", c, end);
+					return -1;
+				}
 				if (TRACE) printf("%d => NAVIGATE\n", c);
 				vm->sew_target->write_cursor = c;
 			}	break;
