@@ -43,12 +43,13 @@
 #define LIST_OF_SYNTAX_WORDS \
 	/*<ENUM>      <STR>     <DOC> */ \
 	/* ====================================================================== */ \
-	X( COLON     , ":"        , "Word definiton, followed by word (name), e.g. `: foo`") \
-	X( COLONADDR , ":&"       , "Word address definiton, followed by word (name), e.g. `: foo_addr`") \
-	X( SEMICOLON , ";"        , "End of word definition") \
-	X( COMPTIME  , "comptime" , "Compile-time prefix for next word") \
-	X( ENTER_SEW , "<#"       , "Start writing instructions outside of comptime (\"sewing\")") \
-	X( LEAVE_SEW , "#>"       , "Stop writing instructions outside of comptime") \
+	X( COLON       , ":"        , "Word definiton, followed by word (name), e.g. `: foo`") \
+	X( COLONADDR   , ":&"       , "Word address definiton, followed by word (name), e.g. `:& foo_addr`") \
+	X( COLONLAMBDA , ":->"      , "Inline word, resolves to address, e.g. `:-> F+`") \
+	X( SEMICOLON   , ";"        , "End of word definition") \
+	X( COMPTIME    , "comptime" , "Compile-time prefix for next word") \
+	X( ENTER_SEW   , "<#"       , "Start writing instructions outside of comptime (\"sewing\")") \
+	X( LEAVE_SEW   , "#>"       , "Stop writing instructions outside of comptime") \
 	/* ====================================================================== */
 
 
@@ -87,6 +88,21 @@
 	X( FMOD      , "F%"       , "Floating-point remainder/modulus (x y -- x%y)") \
 	X( FINV      , "F1/"      , "Floating-point reciprocal (x -- 1/x)") \
 	X( FDIV      , "F/"       , "Floating-point division (x y -- x/y)") \
+	X( FCOS      , NULL       , "(x -- cos(x))") \
+	X( FSIN      , NULL       , "(x -- sin(x))") \
+	X( FTAN      , NULL       , "(x -- tan(x))") \
+	X( FACOS     , NULL       , "(x -- acos(x))") \
+	X( FASIN     , NULL       , "(x -- asin(x))") \
+	X( FATAN     , NULL       , "(x -- atan(x))") \
+	X( FATAN2    , NULL       , "(x y -- atan2(x,y))") \
+	X( FEXP      , NULL       , "(x -- exp(x))") \
+	X( FLOG      , NULL       , "(x -- log(x))") \
+	X( FPOW      , NULL       , "(x y -- pow(x,y))") \
+	X( FSQRT     , NULL       , "(x -- sqrt(x))") \
+	X( FFLOOR    , NULL       , "(x -- floor(x))") \
+	X( FCEIL     , NULL       , "(x -- ceil(x))") \
+	X( FROUND    , NULL       , "(x -- round(x))") \
+	X( FABS      , NULL       , "(x -- abs(x))") \
 	X( FLT       , "F<"       , "Floating-point less than (x y -- x<y)") \
 	X( FLE       , "F<="      , "Floating-point less than or equal (x y -- x<=y)") \
 	X( FNE       , "F!="      , "Floating-point not equal (x y -- x!=y)") \
@@ -100,6 +116,7 @@
 	X( IMUL      , "I*"       , "Integer multiply (x y -- x*y)") \
 	X( IDIV      , "I/"       , "Integer euclidean division (x y -- x//y)") \
 	X( IMOD      , "I%"       , "Integer euclidean remainder/modulus (x y -- x%y)") \
+	X( IABS      , NULL       , "(x -- abs(x))") \
 	X( IBAND     , "I&"       , "Integer bitwise AND (x y -- x&y)") \
 	X( IBOR      , "I|"       , "Integer bitwise OR (x y -- x|y)") \
 	X( IBXOR     , "I^"       , "Integer bitwise XOR (x y -- x^y)") \
@@ -772,6 +789,10 @@ int vmie_run2(struct vmie* vm)
 				arrput(vm->stack_arr, value);
 			}	break;
 
+			case OP_HERE: {
+				arrput(vm->stack_arr, intval(pc));
+			}	break;
+
 			case OP_I2F: {
 				VMIE_OP_STACK_GUARD(1)
 				const int v = arrpop(vm->stack_arr).i32;
@@ -830,32 +851,47 @@ int vmie_run2(struct vmie* vm)
 					ASSIGN, \
 				})); \
 			}	break;
-			DEF_FBINOP( OP_FADD , VAL_FLOAT , .f32=(a+b)        )
-			DEF_FBINOP( OP_FMUL , VAL_FLOAT , .f32=(a*b)        )
-			DEF_FBINOP( OP_FDIV , VAL_FLOAT , .f32=(a/b)        )
-			DEF_FBINOP( OP_FMOD , VAL_FLOAT , .f32=(fmodf(a,b)) )
-			DEF_FBINOP( OP_FLT  , VAL_INT   , .i32=(a<b)        )
-			DEF_FBINOP( OP_FLE  , VAL_INT   , .i32=(a<=b)       )
-			DEF_FBINOP( OP_FEQ  , VAL_INT   , .i32=(a==b)       )
-			DEF_FBINOP( OP_FNE  , VAL_INT   , .i32=(a!=b)       )
-			DEF_FBINOP( OP_FGE  , VAL_INT   , .i32=(a>=b)       )
-			DEF_FBINOP( OP_FGT  , VAL_INT   , .i32=(a>b)        )
+			DEF_FBINOP( OP_FADD   , VAL_FLOAT , .f32=(a+b)        )
+			DEF_FBINOP( OP_FMUL   , VAL_FLOAT , .f32=(a*b)        )
+			DEF_FBINOP( OP_FDIV   , VAL_FLOAT , .f32=(a/b)        )
+			DEF_FBINOP( OP_FMOD   , VAL_FLOAT , .f32=(fmodf(a,b)) )
+			DEF_FBINOP( OP_FATAN2 , VAL_FLOAT , .f32=(atan2f(a,b)) )
+			DEF_FBINOP( OP_FPOW   , VAL_FLOAT , .f32=(powf(a,b))  )
+			DEF_FBINOP( OP_FLT    , VAL_INT   , .i32=(a<b)        )
+			DEF_FBINOP( OP_FLE    , VAL_INT   , .i32=(a<=b)       )
+			DEF_FBINOP( OP_FEQ    , VAL_INT   , .i32=(a==b)       )
+			DEF_FBINOP( OP_FNE    , VAL_INT   , .i32=(a!=b)       )
+			DEF_FBINOP( OP_FGE    , VAL_INT   , .i32=(a>=b)       )
+			DEF_FBINOP( OP_FGT    , VAL_INT   , .i32=(a>b)        )
 			#undef DEF_FBINOP
 
 			// == floating-point unary ops ==
 
-			#define DEF_FUNOP(ENUM, TYPE, ASSIGN) \
+			#define DEF_FUNOP(ENUM, EXPR) \
 			case ENUM: { \
 				VMIE_OP_STACK_GUARD(1) \
 				const struct val va = arrpop(vm->stack_arr); \
 				const float a=va.f32; \
 				arrput(vm->stack_arr, ((struct val){ \
-					.type=TYPE, \
-					ASSIGN, \
+					.type=VAL_FLOAT, \
+					.f32=(EXPR), \
 				})); \
 			}	break;
-			DEF_FUNOP( OP_FNEG , VAL_FLOAT , .f32=(-a)     )
-			DEF_FUNOP( OP_FINV , VAL_FLOAT , .f32=(1.0f/a) )
+			DEF_FUNOP( OP_FNEG   , (-a)      )
+			DEF_FUNOP( OP_FINV   , (1.0f/a)  )
+			DEF_FUNOP( OP_FCOS   , cosf(a)   )
+			DEF_FUNOP( OP_FSIN   , sinf(a)   )
+			DEF_FUNOP( OP_FTAN   , tanf(a)   )
+			DEF_FUNOP( OP_FACOS  , acosf(a)  )
+			DEF_FUNOP( OP_FASIN  , asinf(a)  )
+			DEF_FUNOP( OP_FATAN  , atanf(a)  )
+			DEF_FUNOP( OP_FEXP   , expf(a)   )
+			DEF_FUNOP( OP_FLOG   , logf(a)   )
+			DEF_FUNOP( OP_FSQRT  , sqrtf(a)  )
+			DEF_FUNOP( OP_FFLOOR , floorf(a) )
+			DEF_FUNOP( OP_FCEIL  , ceilf(a)  )
+			DEF_FUNOP( OP_FROUND , roundf(a) )
+			DEF_FUNOP( OP_FABS   , fabsf(a)  )
 			#undef DEF_FUNOP
 
 			// == integer binary ops ==
@@ -900,9 +936,10 @@ int vmie_run2(struct vmie* vm)
 				const int32_t a=va.i32; \
 				arrput(vm->stack_arr, intval(EXPR)); \
 			}	break;
-			DEF_IUNOP( OP_INEG  , (-a) )
-			DEF_IUNOP( OP_IBNOT , (~a) )
-			DEF_IUNOP( OP_ILNOT , (!a) )
+			DEF_IUNOP( OP_INEG  , (-a)   )
+			DEF_IUNOP( OP_IBNOT , (~a)   )
+			DEF_IUNOP( OP_ILNOT , (!a)   )
+			DEF_IUNOP( OP_IABS  , abs(a) )
 			#undef DEF_IUNOP
 
 			// = arrays =====================
@@ -998,7 +1035,7 @@ int vmie_run2(struct vmie* vm)
 				}
 			}	break;
 
-			// ==============================
+			// = comptime/sewing ============
 
 			case OP_THERE: {
 				VMIE_SEW_GUARD
@@ -1092,11 +1129,12 @@ int vmie_run2(struct vmie* vm)
 				}
 			}	break;
 
+			// ==============================
 
 			default:
-				fprintf(stderr, "vmie: unhandled op %s (%u) at pc=%d\n", get_opcode_str(op), op, pc);
-				abort();
-				break;
+				vmie_errorf(vm, "%s (%u) invalid or not implemented at pc=%d", get_opcode_str(op), op, pc);
+				return -1;
+
 			}
 
 			if (set_num_defer > 0) {
@@ -1239,6 +1277,8 @@ static int compiler_push_float(struct compiler* cm, float v)
 	return addr;
 }
 
+#define LAMBDA0 (-(1<<20))
+
 static void compiler_push_word(struct compiler* cm, const char* word)
 {
 	if (cm->has_error) return;
@@ -1260,8 +1300,8 @@ static void compiler_push_word(struct compiler* cm, const char* word)
 
 		const int word_index = shputi(cm->word_lut, word, ((struct word_info){
 			.is_comptime = cm->prefix_comptime,
-			.is_direct = (cm->colon==1),
-			.is_addr = (cm->colon==2),
+			.is_direct = (cm->colon==COLON),
+			.is_addr = (cm->colon==COLONADDR),
 			.is_sealed = 0,
 			.addr = program_addr(cm->program),
 		}));
@@ -1286,15 +1326,18 @@ static void compiler_push_word(struct compiler* cm, const char* word)
 		switch (bw) {
 
 		case COLON:
-		case COLONADDR: {
+		case COLONADDR:
+		case COLONLAMBDA: {
 			if (cm->sew_depth > 0) {
 				compiler_errorf(cm, "colon not allowed in <#...#>");
 				return;
 			}
 
 			assert(cm->colon == 0);
-			cm->colon = bw==COLON?1:bw==COLONADDR?2:-1;
-			assert(cm->colon>0);
+			if ((bw==COLON) || (bw==COLONADDR)) {
+				cm->colon = bw;
+				assert(cm->colon>0);
+			}
 
 			// insert skip jump (TODO skip-jump optimization?)
 			compiler_push_opcode(cm, OP_JMP);
@@ -1303,6 +1346,17 @@ static void compiler_push_word(struct compiler* cm, const char* word)
 			// remember address of the placeholder address, so we can patch it
 			// when we see a semicolon:
 			arrput(cm->wordskip_addraddr_arr, placeholder_addraddr);
+
+			if (bw==COLONLAMBDA) {
+				if (cm->prefix_comptime) {
+					compiler_errorf(cm, "cannot do comptime lambda");
+					return;
+				}
+				const int wi = LAMBDA0 - program_addr(cm->program);
+				arrput(cm->word_index_arr, wi);
+				arrput(cm->wordscope0_arr, arrlen(cm->word_index_arr));
+			}
+
 		}	break;
 
 		case SEMICOLON: {
@@ -1329,9 +1383,11 @@ static void compiler_push_word(struct compiler* cm, const char* word)
 			const int n = arrlen(cm->word_index_arr);
 			assert(n>0);
 			const int closing_word_index = cm->word_index_arr[n-1];
-			assert(closing_word_index >= 0);
-			struct word_info* info = &cm->word_lut[closing_word_index].value;
-			info->is_sealed = 1;
+			assert((closing_word_index >= 0) || (closing_word_index <= LAMBDA0));
+			if (closing_word_index >= 0) {
+				struct word_info* info = &cm->word_lut[closing_word_index].value;
+				info->is_sealed = 1;
+			}
 
 			// finalize word skip jump by overwriting the placeholder address
 			// now that we know where the word ends
@@ -1341,12 +1397,21 @@ static void compiler_push_word(struct compiler* cm, const char* word)
 			assert((program_read_at(prg, skip_addraddr).u32 == 0xffffffffL) && "expected placeholder value");
 			program_patch(prg, skip_addraddr, ((union pword){.u32=write_addr}));
 
+			if (closing_word_index <= LAMBDA0) {
+				const int addr = -(closing_word_index - LAMBDA0);
+				compiler_push_opcode(cm, OP_INT_LITERAL);
+				compiler_push_int(cm, addr);
+			}
+
 			if (n > c) {
 				// remove inner words from scope
 				for (int i=(n-1); i>=c; --i) {
 					const int index = cm->word_index_arr[i];
-					const char* key = cm->word_lut[index].key;
-					assert(shdel(cm->word_lut, key) && "expected to delete word, but key was not found");
+					assert((index >= 0) || (index <= LAMBDA0));
+					if (index >= 0) {
+						const char* key = cm->word_lut[index].key;
+						assert(shdel(cm->word_lut, key) && "expected to delete word, but key was not found");
+					}
 				}
 				arrsetlen(cm->word_index_arr, c);
 			}
@@ -1980,7 +2045,6 @@ void mie_selftest(void)
 // TODO
 //  - stack traces (just knowing location at pc isn't enough)... does this mean
 //    rstack ought to be "sealed"?
-//  - "address of user word" syntax
 
 
 // TODO I think I'd like a debugging feature where I can see the stack height
