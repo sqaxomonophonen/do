@@ -3,22 +3,22 @@
 : over     1i PICK     ( a x -- a x a ) ;
 : swap  2i 1i ROTATE   ( a b -- b a )   ;
 : rot   3i 1i ROTATE ( a b c -- b c a ) ;
-: roll     1i ROTATE ;
-: lorr    -1i ROTATE ;
+: ROLL     1i ROTATE ;
+: LORR    -1i ROTATE ;
 
 comptime : if
   there           ( -- p0)
-  -1i SEW_JMP0    ( forward JMP0 placeholder; targets `else` or `then` )
+  -1i SEW-JMP0    ( forward JMP0 placeholder; targets `else` or `then` )
   (IF box        ( p0 -- p0:IF) )
 ;
 
 comptime : else
   ( IF unbox          ( p0:IF -- p0) )
   there                ( p0 -- p0 p1 )
-  -1i SEW_JMP    ( forward JMP placeholder, targets then )
+  -1i SEW-JMP    ( forward JMP placeholder, targets then )
   there               ( ... -- p0 p1 p2 )
   rot navigate dup    ( ... -- p1 p2 p2)
-  SEW_ADDR            ( ... -- p1 p2)
+  SEW-ADDR            ( ... -- p1 p2)
   navigate            ( ... -- p1 )
   ( IF box               ( p1 -- p1:IF) )
 ;
@@ -27,30 +27,80 @@ comptime : then
   ( IF unbox     (p1:IF -- p1) )
   there there rot ( p1 -- t1 t1 p1 )
   navigate  ( t1 t1 p1 -- t1 t1 )
-  SEW_ADDR     ( t1 t1 -- t1 )
+  SEW-ADDR     ( t1 t1 -- t1 )
   navigate        ( t1 -- )
 ;
 
+: f32
+	dup typeof VAL_FLOAT I= if     return then
+	dup typeof VAL_INT   I= if I>F return then
+	halt ( TODO error message )
+;
+
+: i32
+	dup typeof VAL_INT   I= if     return then
+	dup typeof VAL_FLOAT I= if F>I return then
+	halt ( TODO error message )
+;
+
+( implement number (i32/f32) input for various words; builtins assume i32 regardless of type)
+
+: pick   i32 PICK ;
+: roll   i32 ROLL ;
+: lorr   i32 LORR ;
+comptime : jmpi  <# i32 JMPI #> ;
+: jsri   i32 JSRI ;
+comptime : call  <# i32 JSRI #>  ;
+: arrget   i32 ARRGET ;
+: arrset   swap i32 swap ARRSET ;
+: arrsplit i32 ARRSPLIT ;
+
 : assert if else halt then ;
 
-( XXX ... XXX )
-
-comptime : SERIAL0
-  0i
+: assert-i32 ( i -- )
+	typeof VAL_INT I= assert
 ;
 
-comptime : SERIALX
-  1i I+ dup SEW_LIT
+: box-i32 (i:i32 T -- T(i))
+	swap dup assert-i32
+	swap CAST
 ;
 
-comptime : SERIAL1
-  drop
+: unbox-i32 (T(i) T -- i:i32)
+	swap dup typeof ( .. -- T T(i) typeof(T(i)) )
+	rot I= assert
+	VAL_INT CAST
 ;
 
-SERIAL0
-: ID0 SERIALX ;
-: ID1 SERIALX ;
-: ID2 SERIALX ;
-SERIAL1
+: $NEXT_GLOBAL 0i ;
 
-ID0 ID1 ID2 ID1 ID0
+( initialize comptime vm )
+comptime : _init_comptime0
+  0i  $NEXT_GLOBAL  SET-GLOBAL
+; _init_comptime0
+
+( comptime allocate next global index )
+comptime : ALLOC-STATIC-GLOBAL
+  $NEXT_GLOBAL  GET-GLOBAL (   -- I )
+  dup 1i I+   ( .. -- I (I+1) )
+  $NEXT_GLOBAL  SET-GLOBAL ( .. -- I )
+  SEW-LIT
+;
+
+: $NULL ALLOC-STATIC-GLOBAL ;
+: $ERROR_MESSAGE ALLOC-STATIC-GLOBAL ;
+
+( VAL_FLOAT ( comes from preamble ) )
+
+(
+24.42 66i CAST
+44i 66i box-i32
+66i unbox-i32
+)
+
+
+:& boo 366 ;
+
+boo call
+
+

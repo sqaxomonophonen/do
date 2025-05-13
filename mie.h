@@ -4,25 +4,54 @@
 
 #include "gig.h"
 
+#define LIST_OF_VAL_TYPES \
+	X(VAL_NIL) \
+	X(VAL_INT) \
+	X(VAL_FLOAT) \
+	X(VAL_GRAY_STRING) \
+	X(VAL_COLOR_STRING) \
+	X(VAL_ARR) \
+	X(VAL_MAP) \
+	X(VAL_I32ARR) \
+	X(VAL_F32ARR) \
+	X(VAL_MIE)
+
 enum val_type {
-	VAL_INT=1,
-	VAL_FLOAT,
-	VAL_GRAY_STRING,
-	VAL_COLOR_STRING,
-	VAL_ARR,
-	VAL_MAP,
-	VAL_I32ARR,
-	VAL_F32ARR,
-	_VAL_FIRST_DERIVED_TYPE_,
+	#define X(ENUM) ENUM,
+	LIST_OF_VAL_TYPES
+	#undef X
 };
 
 struct val {
-	int type;
+	int32_t type;
+	// don't change `int32_t type` into `enum val_type type` even though it may
+	// seem appropriate; compilers may choose any integer type that can
+	// represent all the enum values, but mie code depends on this being a
+	// normal "i32"
 	union {
 		int32_t  i32;
 		float    f32;
 	};
 };
+
+static inline struct val typeval(int32_t type, int32_t value) {
+	return ((struct val) {
+		.type = type,
+		.i32 = value,
+	});
+}
+
+static inline struct val intval(int32_t i) {
+	return typeval(VAL_INT, i);
+}
+
+static inline struct val floatval(float f) {
+	return ((struct val) {
+		.type = VAL_FLOAT,
+		.f32 = f,
+	});
+}
+
 
 void mie_thread_init(void);
 // must be called at least once from any thread wishing to use this API.
