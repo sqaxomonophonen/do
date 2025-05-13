@@ -791,6 +791,8 @@ static void fc_add_special(struct font_config* fc)
 
 void gui_init(void)
 {
+	fonts_init();
+
 	g.atlas_texture_id = -1;
 
 	// XXX a lot of this code is bad "getting started code" that shouldn't
@@ -1432,3 +1434,18 @@ void gui_drop_file(const char* name, size_t num_bytes, uint8_t* bytes)
 	//  - should probably always hash file
 	//  - NOTE: bytes might be freed after we return?
 }
+
+// TODO
+
+// - proper line spacing approach? fix "y stretch"?
+
+// - secondary atlas for dynamic software rendered graphics (e.g. inline curves
+//   in document); all entries have a resource id and dimensions (the same
+//   resource id can be rendered at different scales), plus blur variants for
+//   HDR. to render, do a "gather pass" to find the required resources and
+//   dimensions; then do a lookup in the atlas to see which are missing (hash
+//   table similar to primary atlas?); if any, pack and render them; if atlas
+//   overflows, clear it and try again; if atlas still overflows, make the
+//   atlas bigger and try again. consider blitting graphics from the old atlas
+//   when rebuilding it. also, resource are proably "immutable", so resource
+//   edits mean new resource ids?

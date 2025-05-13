@@ -1,0 +1,2 @@
+OBJS+=stb_truetype.o stb_rect_pack.o stb_image_resize2.o stb_image_write.o # stb deps
+OBJS+=font0.o fonts.o sep2dconv.o gui.o # gui deps

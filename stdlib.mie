@@ -8,9 +8,9 @@
 : LORR     -1i ROTATE ;
 
 : dup2 ( a b -- a b a b )
-	swap dup ( .. -- b a a )
-	rot dup  ( .. -- a a b b )
-	tro      ( .. -- a b a b )
+  swap dup ( .. -- b a a )
+  rot dup  ( .. -- a a b b )
+  tro      ( .. -- a b a b )
 ;
 
 comptime : if
@@ -39,15 +39,15 @@ comptime : then
 ;
 
 : f32
-	dup typeof VAL_FLOAT I= if     return then
-	dup typeof VAL_INT   I= if I>F return then
-	halt ( TODO error message )
+  dup typeof VAL_FLOAT I= if     return then
+  dup typeof VAL_INT   I= if I>F return then
+  halt ( TODO error message )
 ;
 
 : i32
-	dup typeof VAL_INT   I= if     return then
-	dup typeof VAL_FLOAT I= if F>I return then
-	halt ( TODO error message )
+  dup typeof VAL_INT   I= if     return then
+  dup typeof VAL_FLOAT I= if F>I return then
+  halt ( TODO error message )
 ;
 
 : set-global i32 SET-GLOBAL ;
@@ -56,7 +56,7 @@ comptime : then
 : assert if else halt then ;
 
 : assert-i32 ( i -- )
-	typeof VAL_INT I= assert
+  typeof VAL_INT I= assert
 ;
 
 : pick   i32 PICK ;
@@ -72,14 +72,14 @@ comptime : call  <# i32 JSRI #>  ;
 
 
 : box-i32 (i:i32 T -- T(i))
-	swap dup assert-i32
-	swap CAST
+  swap dup assert-i32
+  swap CAST
 ;
 
 : unbox-i32 (T(i) T -- i:i32)
-	swap dup typeof ( .. -- T T(i) typeof(T(i)) )
-	rot I= assert
-	VAL_INT CAST
+  swap dup typeof ( .. -- T T(i) typeof(T(i)) )
+  rot I= assert
+  VAL_INT CAST
 ;
 
 : $NEXT_GLOBAL 0i ;
@@ -99,37 +99,48 @@ comptime : ALLOC-STATIC-GLOBAL
 
 : $NULL ALLOC-STATIC-GLOBAL ;
 : $ERROR-MESSAGE ALLOC-STATIC-GLOBAL ;
-: $+OVERLOAD ALLOC-STATIC-GLOBAL ;
+
 
 : overload-binop  (fn T0 T1 table-gid -- )
-	get-global 4i -1i ROTATE (.. -- table fn T0 T1 )
-	dup2 assert-i32 assert-i32
-	swap CAST (.. -- table fn key)
-	swap
-	mapset (table key value -- table)
-	drop
+  get-global 4i -1i ROTATE (.. -- table fn T0 T1 )
+  dup2 assert-i32 assert-i32
+  swap CAST (.. -- table fn key)
+  swap
+  mapset (table key value -- table)
+  drop
 ;
 
 : dispatch-binop (a b table-gid -- op(a,b))
-	get-global (a b table-gid -- a b table)
-	tro (-- table a b)
-	dup2 typeof swap typeof CAST (-- table a b TK(a,b))
-	4i 1i ROTATE ( -- a b TK(a,b) table)
-	swap mapget call
+  ( TODO faster version? )
+  get-global (a b table-gid -- a b table)
+  tro (-- table a b)
+  dup2 typeof swap typeof CAST (-- table a b TK(a,b))
+  4i 1i ROTATE ( -- a b TK(a,b) table)
+  swap mapget call
 ;
 
+: $+OVERLOAD ALLOC-STATIC-GLOBAL ;
 mapnew $+OVERLOAD set-global
-
 : overload+   (fn T0 T1 -- ) $+OVERLOAD overload-binop ;
-:-> I+               ;  VAL_INT    VAL_INT    overload+
-:-> F+               ;  VAL_FLOAT  VAL_FLOAT  overload+
-:-> f32 F+           ;  VAL_FLOAT  VAL_INT    overload+
-:-> swap f32 swap F+ ;  VAL_INT    VAL_FLOAT  overload+
-
+:-> I+          ;  VAL_INT    VAL_INT    overload+
+:-> F+          ;  VAL_FLOAT  VAL_FLOAT  overload+
+:-> f32 F+      ;  VAL_FLOAT  VAL_INT    overload+
+:-> swap f32 F+ ;  VAL_INT    VAL_FLOAT  overload+
 : + $+OVERLOAD dispatch-binop ;
 
+: $*OVERLOAD ALLOC-STATIC-GLOBAL ;
+mapnew $*OVERLOAD set-global
+: overload*   (fn T0 T1 -- ) $*OVERLOAD overload-binop ;
+:-> I*          ;  VAL_INT    VAL_INT    overload*
+:-> F*          ;  VAL_FLOAT  VAL_FLOAT  overload*
+:-> f32 F*      ;  VAL_FLOAT  VAL_INT    overload*
+:-> swap f32 F* ;  VAL_INT    VAL_FLOAT  overload*
+: * $*OVERLOAD dispatch-binop ;
+
+(
 1.1 2.2 +
 1i 2i +
 3.1415 10i +
-20i 3.1415 +
+100i 3.1415 *
+)
 

@@ -7,6 +7,7 @@
 #include "stb_ds_sysalloc.h"
 
 #include "main.h"
+#include "args.h"
 
 #include "impl_sdl3.h"
 #define GL_GLEXT_PROTOTYPES
@@ -69,6 +70,8 @@ static int gig_thread_run(void* usr)
 
 int main(int argc, char** argv)
 {
+	parse_args(argc, argv);
+
 	if (!SDL_Init(SDL_INIT_VIDEO)) {
 		fprintf(stderr, "SDL_Init() failed\n");
 		exit(EXIT_FAILURE);
@@ -111,6 +114,7 @@ int main(int argc, char** argv)
 
 	gl_init();
 	common_main_init();
+	gui_init();
 	SDL_DetachThread(SDL_CreateThread(gig_thread_run, "gig", NULL));
 
 	while (!g0.exiting && get_num_windows() > 0) {

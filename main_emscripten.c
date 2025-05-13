@@ -14,15 +14,16 @@
 #include <EGL/egl.h>
 
 #include "stb_ds_sysalloc.h"
-
+#include "main.h"
+#include "args.h"
 #include "utf8.h"
 #include "impl_gl.h"
 
 static struct {
 	int num_cores;
 	double start_time;
-	DA(char, text_buffer);
-	DA(int,  key_buffer);
+	char* text_buffer_arr;
+	int*  key_buffer_arr;
 } g;
 
 EM_JS(int, canvas_get_width, (void), {
@@ -130,7 +131,7 @@ static bool handle_key_event(int type, const EmscriptenKeyboardEvent* ev, void* 
 		//printf("TODO down=%d keycode=%d mod=%d\n", is_down, keycode, mod);
 		// FIXME gui_on_key() must be called before gui_begin_frame() and after gui_draw()
 		const int key = ((is_down ? KEY_IS_DOWN : 0) | keycode | mod);
-		daPut(g.key_buffer, key);
+		arrput(g.key_buffer_arr, key);
 	}
 
 	return false;
@@ -146,7 +147,7 @@ void* heap_malloc(size_t s)
 void handle_text_input(const char* s)
 {
 	const size_t n = strlen(s);
-	char* p = daAddNPtr(g.text_buffer, n);
+	char* p = arraddnptr(g.text_buffer_arr, n);
 	memcpy(p, s, n);
 }
 
@@ -167,15 +168,15 @@ static void main_loop(void)
 {
 	gui_begin_frame();
 
-	if (daLen(g.text_buffer) > 0) {
-		daPut(g.text_buffer, 0);
-		gui_on_text(daPtr0(g.text_buffer));
-		daReset(g.text_buffer);
+	if (arrlen(g.text_buffer_arr) > 0) {
+		arrput(g.text_buffer_arr, 0);
+		gui_on_text(g.text_buffer_arr);
+		arrreset(g.text_buffer_arr);
 	}
 
-	const int num_keys = daLen(g.key_buffer);
-	for (int i=0; i<num_keys; ++i) gui_on_key(daGet(g.key_buffer, i));
-	daReset(g.key_buffer);
+	const int num_keys = arrlen(g.key_buffer_arr);
+	for (int i=0; i<num_keys; ++i) gui_on_key(arrchkget(g.key_buffer_arr, i));
+	arrreset(g.key_buffer_arr);
 
 	const int canvas_width = canvas_get_width();
 	const int canvas_height = canvas_get_height();
@@ -221,6 +222,7 @@ int main(int argc, char** argv)
 
 	gl_init();
 	common_main_init();
+	gui_init();
 	emscripten_wasm_worker_post_function_v(emscripten_malloc_wasm_worker(1L<<20), gig_thread_run);
 	emscripten_set_main_loop(main_loop, 0, false);
 

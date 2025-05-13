@@ -20,4 +20,5 @@ LDFLAGS+=-sWASM_WORKERS=1
 ARTIFACT="do.js"
 OBJS+=main_emscripten.o
 
-include Makefile.common
+include Makefile.inc.gui
+include Makefile.inc.common

@@ -11,11 +11,8 @@ CFLAGS+=-Wall
 
 all: $(ARTIFACT)
 
-OBJS+=stb_truetype.o stb_rect_pack.o stb_image_resize2.o stb_image_write.o stb_divide.o # stb deps
-OBJS+=stb_ds.o stb_sprintf.o # more stb deps
-OBJS+=font0.o fonts.o sep2dconv.o gui.o # gui deps
-OBJS+=utf8.o allocator.o # common deps
-OBJS+=gig.o mie.o selftest.o # more common deps
+OBJS+=stb_divide.o stb_ds.o stb_sprintf.o # stb deps
+OBJS+=utf8.o allocator.o args.o gig.o mie.o selftest.o # common deps
 
 LDFLAGS+=-lm
 

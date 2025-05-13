@@ -2070,16 +2070,19 @@ void mie_selftest(void)
 // - "savepoints"? parsing a large stdlib before 10 lines of livecode seems
 //   like a waste; can we snapshot it after parsing stdlib and restore from
 //   that point repeatedly? (needs to be somewhat cheaper and not too difficult
-//   to be worth it?)
+//   to be worth it?). shouldn't it be "just a memcpy"? assuming that the
+//   scratch base pointer doesn't move? (and it might, due to user prefs, but
+//   then we "just" have to start over and parse stdlib again)
 
 // - "dead word elimination"?
 
 // - constant folding? i.e. replacing `3 4 *` with `12`? maybe it's possible to
 //   do in an "optimizer pass" that works directly on bytecode? is it a
-//   "comptime thing" somehow?
+//   "comptime thing" somehow? operator overloading makes this harder..
 
 // - optimize built-in word lookup? (currently a long series of strcmp()s)
 
 // Not sure about these:
-// - program size optimizations, like encoding "short jumps" and "short
-//   literals" as 1 program word instead of 2.
+// - short jumps and short literals? during comptime, JMP/JMP0 has to be fixed
+//   length for if/else/then to work, but it might be possible to optimize the
+//   opcode stream afterwards?

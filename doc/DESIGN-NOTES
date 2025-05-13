@@ -5,40 +5,7 @@ language(dolang)/runtime:
 
  - "close to forth", but without much attempt to be "standards compliant"
 
- - (not completely settled?) words are float64, maybe float32 on small systems?
-   - float64 can work as a 52-bit integer (float32 can work as a 23-bit
-     integer)
-   - IF I want something where the same word can contain both int32 and
-     float32, then I think integers MUST be explicitly suffixed, like 10i:
-       1.0 room
-       1   room (same as 1.0 room)
-       1i  room (uh oh, probably won't do what you expect; room expects float)
-     I'm still not convinced it's a good idea because now we have a problem in
-     the other end: if you have functions that want integer inputs, passing
-     "1.0" is now a runtime error (and not even necessarily a crashing one)
-   - I considered something like "fat values" that contains type info, maybe
-     like a [type,value] pair (both simple values), but:
-     - it's weird if the heap is NOT like that, and also weird if it is? a fat
-       value heap doesn't really support float32 arrays for instance.
-     - it "solves" the float-vs-int problem, but also introduces the problem
-       with "what happens if I add 'banana' and `OSC input #42`?"
-     - it probably performs significantly worse?
-   - I also considered "magic markers", values "safely outside of normal range"
-     that modify the next value. the usecase would be something like allowing
-     an OSC input for `room` even though the input is a kind of object instead
-     of a simple value, but:
-     - the problem arises when you're not satisfied with the OSC input value
-       as-is, you may want to do a little math on it? so now "+" needs to
-       support OSC inputs as well? oops, I've just re-invented fat values, and
-       now they're more complicated than ever
-     - it goes against efforts to automatically verify pre/post conditions...
-       e.g. `room` may be (x--y), but with magic markers it can also be
-       (x M--y), so it's hard to verify
-   - I think audio programs should be more or less "idempotent"; they're run
-     often to keep event buffers full, or to respond to changes. it feels a
-     little wrong to run the program 60 times a second in response to OSC
-     messages, but it might honestly be the best approach? so design choices
-     that make dolang fast are good? :)
+ - dynamically typed
 
  - the program is repeatedly executed to keep event buffers full (so your
    program gets asked to fill buffers within a time interval), but also to
@@ -74,17 +41,6 @@ language(dolang)/runtime:
      (later), which again built on the assumption that a sampler has to be
      stateful?)
 
- - there's a heap
-   - I think it should be allocate-only (no free). this is inspired by Forth
-     (allot) and Ada (new). also by the fact that your program is never
-     long-running (it runs in short event-buffer-filling bursts?). so freeing
-     is overrated? and, in any case, dangerous?
-   - by convention I think heap values should contain some kind of "cheap RTTI"
-     (like: first word at address is a type enum?). this includes strings
-     because they can often be used interchangably with patterns? so a word
-     that accepts a pattern should also accept a string. this is requires RTTI
-     (run-time type information).
-
  - "garbage collection": values left on the stack when your program stops
    (without errors) are "collected and promoted" if possible:
      "bd*4"
@@ -96,8 +52,8 @@ language(dolang)/runtime:
    the case, then promoting `"bd*4"` to `"bd*4" sound` is problematic.
    (Q: what if a value cannot be promoted? like a number? throw a warning?)
 
- - rich strings; strings contain invisible escape sequences that contain
-   additional data/metadata:
+ - "color strings"; strings contain invisible escape sequences (or just fat
+   chars?) that contain additional data/metadata:
    - original source location (used for rhythmic highlighting)
    - characters can have different colors? (in general, you can choose/change
      your text color, but it can only be used semantically inside strings; e.g.
@@ -388,3 +344,27 @@ guideline, or an ideal:
    undo/redo is less useful when you already have a "pending commits" system
    like what I'm planning, because you can change your mind before committing.
 
+
+idea: no undo/redo, but instead time travel copy-paste?
+ - allows you to scrub through time and see the document at any point in time,
+   and possibly copy-paste stuff from the past into the present. this ought to
+   replace one of the two common undo/redo usecases I can think of, and
+   actually the least common of the two. it's also a usecase that requires a
+   "steady hand" in traditional undo/redo because a single edit truncates the
+   redo-history. time travel would not have that problem.
+ - the other, more common, undo/redo usecase is to undo small mistakes, but I
+   think the green/red commit feature covers this? (and time travel can also
+   work for smaller distances)
+
+
+I'm considering a design where the Do executable, whether it's acting as server
+or peer, and whether it's headless or has GUI, it always only knows about one
+"journal", one "room" at a time.
+ - Do should have an HTTP server, but for a public facing multi-room server I
+   think it might be better to build a golang httpd that spawns Do-executables
+   on demand and proxies them. process isolation is one good reason for this?
+ - in the web frontend, the URL decides what room you're in.
+ - in desktop frontend you can switch to other rooms (client mode), or serve a
+   directory in server mode, but with this idea it's an application-wide switch
+   (not how Apple guidelines work, but who asked them?).
+are there any good execuses for having multi-room support in the Do-executable?
