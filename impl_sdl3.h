@@ -11,6 +11,11 @@ int64_t get_nanoseconds(void)
 	return SDL_GetTicksNS();
 }
 
+void sleep_nanoseconds(int64_t ns)
+{
+	SDL_DelayNS(ns);
+}
+
 struct window_extra {
 	SDL_Window* sdl_window;
 };

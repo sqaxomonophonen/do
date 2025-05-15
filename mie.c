@@ -71,11 +71,9 @@
 	X( EQ         , "="          , "Equals (x y -- x=y)") \
 	X( TYPEOF     , "typeof"     , "Get type (x -- typeof(x))") \
 	X( CAST       , NULL         , "Set type (x T -- T(x))") \
-	X( HERE       , "here"       , "Push current instruction pointer to rstack [-- ip]") \
+	X( HERE       , "here"       , "Push current instruction pointer to stack (-- ip)") \
 	X( JMPI       , NULL         , "Pop address:i32 from stack => indirect jump (address -- )" ) \
 	X( JSRI       , NULL         , "Pop address:i32 from stack => indirect jump-to-subroutine (address --)" ) \
-	X( I2R        , "I>R"        , "Pop i:i32 from stack, push it onto rstack (i --) [-- i]") \
-	X( R2I        , "R>I"        , "Moves integer value back from rstack [i --] (-- i)") \
 	X( F2I        , "F>I"        , "Pop a:f32, push after conversion to i32 (a:f32 -- i)") \
 	X( I2F        , "I>F"        , "Pop a:i32, push after conversion to f32 (a:i32 -- f)") \
 	X( SET_GLOBAL , "SET-GLOBAL" , "Pop index:i32, then value, set globals[index]=value (value index --)") \
@@ -1660,10 +1658,11 @@ static void compiler_begin(struct compiler* cm, struct program* program)
 
 static void compiler_end(struct compiler* cm)
 {
-	compiler_push_char(cm, ((struct thicchar){.codepoint = 0}));
-
 	assert(tlg.currently_compiling == 1);
 	tlg.currently_compiling = 0;
+	if (cm->has_error) return;
+
+	compiler_push_char(cm, ((struct thicchar){.codepoint = 0}));
 
 	switch (cm->tokenizer_state) {
 	case WORD: /* OK */ break;
@@ -1763,7 +1762,10 @@ int mie_compile_thicc(const struct thicchar* src, int num_chars)
 	compiler_begin(cm, get_program(program_index));
 	for (int i=0; i<num_chars; ++i) {
 		compiler_push_char(cm, src[i]);
-		if (cm->has_error) return -1;
+		if (cm->has_error) {
+			compiler_end(cm);
+			return -1;
+		}
 	}
 	compiler_end(cm);
 	if (cm->has_error) return -1;
@@ -1777,6 +1779,7 @@ int mie_compile_graycode(const char* utf8src, int num_bytes)
 	struct compiler* cm = &tlg.compiler;
 	compiler_begin(cm, get_program(program_index));
 	if (-1 == compiler_process_utf8src(cm, utf8src, num_bytes)) {
+		compiler_end(cm);
 		return -1;
 	}
 	compiler_end(cm);

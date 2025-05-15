@@ -43,7 +43,7 @@ struct pane {
 	float u0,v0,u1,v1;
 	union {
 		struct {
-			int personal_mim_state_id;
+			int session_id;
 			int focus_id;
 			// TODO presentation shader id? (can be built-in, or user-defined?)
 		} code;
@@ -202,10 +202,12 @@ static void focus(int focus_id)
 	g.current_focus_id = focus_id;
 }
 
+#if 0
 static void unfocus(void)
 {
 	g.current_focus_id = 0;
 }
+#endif
 
 static struct font_spec* get_current_font_spec(void)
 {
@@ -805,7 +807,7 @@ void gui_init(void)
 		.u1=1, .v1=1,
 		.code = {
 			.focus_id = focus_id,
-			.personal_mim_state_id = 1,
+			.session_id = 1,
 		},
 	}));
 	focus(focus_id);
@@ -873,10 +875,12 @@ static void set_scissor_rect(struct rect* r)
 	g.render_mode.scissor_h = r->h;
 }
 
+#if 0
 static void set_no_scissor(void)
 {
 	g.render_mode.do_scissor = 0;
 }
+#endif
 
 static void set_texture(int id)
 {
@@ -1136,7 +1140,7 @@ void gui_begin_frame(void)
 static void handle_editor_input(struct pane* pane)
 {
 	assert(pane->type == CODE);
-	begin_mim(pane->code.personal_mim_state_id);
+	begin_mim(pane->code.session_id);
 	for (int i=0; i<arrlen(g.key_buffer_arr); ++i) {
 		const int key = arrchkget(g.key_buffer_arr, i);
 		const int down = get_key_down(key);
@@ -1221,7 +1225,7 @@ static void draw_code_pane(struct pane* pane)
 
 	struct mim_state* ms;
 	struct document* doc;
-	get_state_and_doc(pane->code.personal_mim_state_id, &ms, &doc);
+	get_state_and_doc(pane->code.session_id, &ms, &doc);
 
 	const int num_carets = arrlen(ms->caret_arr);
 

@@ -33,6 +33,15 @@ static inline void location_sort2(struct location** a, struct location** b)
 	}
 }
 
+// TODO considering "c5t" format ("5-component text")
+// maybe a 64bit header containing ascii "C5T1" and "Do01"
+// struct like this:
+struct c5char {
+	uint32_t codepoint:24;
+	uint32_t y:8, r:8, g:8, b:8, x:8;
+};
+static_assert(sizeof(struct c5char)==(2*sizeof(uint32_t)),"");
+
 struct thicchar {
 	int32_t codepoint;
 	uint8_t color[4];
@@ -67,12 +76,11 @@ struct caret {
 };
 
 struct mim_state {
-	int artist_id;
-	int personal_id;
-	// [artist_id,personal_id] is the "unique key"
+	int artist_id, session_id;
+	// [artist_id,session_id] is the "unique mim state key"
 	int document_id;
 	struct caret* caret_arr;
-	// (update mim_state_copy() when adding da-fields here)
+	// (update mim_state_copy() when adding arr-fields here)
 };
 
 enum document_type {
@@ -112,7 +120,7 @@ struct document {
 	//int version;
 	enum document_type type;
 	struct fat_char* fat_char_arr;
-	// (update document_copy() when adding da-fields here)
+	// (update document_copy() when adding arr-fields here)
 };
 
 struct doc_iterator {
@@ -175,16 +183,19 @@ void mim_set_latency(double mu, double sigma);
 //    intent markers have their own "tag space" so they don't cause these
 //    problems)
 
-void begin_mim(int personal_mim_state_id);
+void begin_mim(int session_mim_state_id);
 void end_mim(void);
 
 FORMATPRINTF1
 void mimf(const char* fmt, ...);
 void mim8(uint8_t v);
 
-void get_state_and_doc(int personal_id, struct mim_state** out_mim_state, struct document** out_doc);
+void get_state_and_doc(int session_id, struct mim_state** out_mim_state, struct document** out_doc);
 
 int get_my_artist_id(void);
+
+void gig_serve_dir(const char* dir);
+void gig_record_dir(const char* dir);
 
 #define GIG_H
 #endif

@@ -355,6 +355,16 @@ idea: no undo/redo, but instead time travel copy-paste?
  - the other, more common, undo/redo usecase is to undo small mistakes, but I
    think the green/red commit feature covers this? (and time travel can also
    work for smaller distances)
+more time travel ideas:
+ - I could also store the .wav output and "flash tracks"? the journal is the
+   source of truth and everything else is derived, but being able to hear the
+   past too with scrubbing seems like a good idea...
+so the source of truth is:
+ - DO_JOURNAL
+and derived files could be:
+ - snapshots
+ - wav
+ - flash tracks
 
 
 I'm considering a design where the Do executable, whether it's acting as server
@@ -368,3 +378,8 @@ or peer, and whether it's headless or has GUI, it always only knows about one
    directory in server mode, but with this idea it's an application-wide switch
    (not how Apple guidelines work, but who asked them?).
 are there any good execuses for having multi-room support in the Do-executable?
+
+
+
+idea: curated views.. follow somebody's caret (curator caret)? you can maybe
+designate a view as either broadcasting a curator caret, or following one.

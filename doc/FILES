@@ -7,13 +7,15 @@ Overview of source files
 is omitted)
 
 main logic code
-  gig.c - collaboratively edited state
-  gui.c - main GUI code (cross-platform)
-  mie.c - mie-compiler, and vmie virtual machine
+  gig.c  - collaboratively edited state
+  gui.c  - main GUI code (cross-platform)
+  mie.c  - mie-compiler, and vmie virtual machine
+  args.c - command-line args
 
-main_*.c - entrypoint (main) for GUI frontends
+main_*.c - program entrypoints
   main_emscripten.c - web app, using emscripten/webgl
   main_sdl3gl.c     - desktop app, using SDL3 + OpenGL ES 3
+  main_headless.c   - headless/server
   main.h            - shared code / interface for main_*.c
 
 impl_*.h - backend implementations
@@ -30,6 +32,8 @@ utility code
   allocator.c - allocator interface and allocators
   leb128.h    - LEB128 variable-length integer codec
   utf8.c      - UTF-8 code
+  io.c        - Async I/O for files (TODO: UDP/tcp)
+  path.c      - File path handling
   sep2dconv.c - separable 2D convolution (used for HDR blur)
   see also: stb_ds_sysalloc.h
 

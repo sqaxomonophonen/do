@@ -58,12 +58,19 @@ static void housekeep_our_windows(void)
 	}
 }
 
+static int io_thread_run(void* usr)
+{
+	(void)usr;
+	io_run();
+	return 0;
+}
+
 static int gig_thread_run(void* usr)
 {
 	(void)usr;
 	for (;;) {
 		gig_thread_tick();
-		SDL_DelayNS(3000000L); // 3ms
+		sleep_nanoseconds(3000000L); // 3ms
 	}
 	return 0;
 }
@@ -115,6 +122,7 @@ int main(int argc, char** argv)
 	gl_init();
 	common_main_init();
 	gui_init();
+	SDL_DetachThread(SDL_CreateThread(io_thread_run, "io", NULL));
 	SDL_DetachThread(SDL_CreateThread(gig_thread_run, "gig", NULL));
 
 	while (!g0.exiting && get_num_windows() > 0) {

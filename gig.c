@@ -9,10 +9,12 @@
 #include "stb_ds_sysalloc.h"
 #include "stb_sprintf.h"
 
+#include "io.h"
 #include "gig.h"
 #include "util.h"
 #include "leb128.h"
 #include "utf8.h"
+#include "path.h"
 #include "main.h"
 
 struct ringbuf {
@@ -34,16 +36,17 @@ static void ringbuf_init_with_pointer(struct ringbuf* rb, void* data, int size_l
 	rb->data = data;
 }
 
+#if 0
 static void ringbuf_init(struct ringbuf* rb, int size_log2)
 {
 	ringbuf_init_with_pointer(rb, calloc(1L<<size_log2, 1), size_log2);
 }
+#endif
 
 static void ringbuf_commit(struct ringbuf* rb)
 {
 	atomic_store(&rb->commit_cursor, rb->write_cursor);
 }
-
 
 static void ringbuf_writen(struct ringbuf* rb, const void* src_data, size_t num_bytes)
 {
@@ -91,7 +94,7 @@ static int document_locate(struct document* doc, struct location* loc)
 }
 
 struct snapshot {
-	size_t journal_cursor;
+	//size_t journal_cursor;
 	struct document* document_arr;
 	struct mim_state* mim_state_arr;
 };
@@ -123,52 +126,58 @@ struct document* snapshot_get_document_by_id(struct snapshot* ss, int id)
 	return doc;
 }
 
-static struct mim_state* snapshot_get_mim_state_by_ids(struct snapshot* ss, int artist_id, int personal_id)
+static struct mim_state* snapshot_get_mim_state_by_ids(struct snapshot* ss, int artist_id, int session_id)
 {
 	const int n = arrlen(ss->mim_state_arr);
 	for (int i=0; i<n; ++i) {
 		struct mim_state* s = arrchkptr(ss->mim_state_arr, i);
-		if ((s->artist_id == artist_id) &&  (s->personal_id == personal_id)) {
+		if ((s->artist_id == artist_id) &&  (s->session_id == session_id)) {
 			return s;
 		}
 	}
 	assert(!"not found");
 }
 
-static struct mim_state* snapshot_get_personal_mim_state_by_id(struct snapshot* ss, int personal_id)
+static struct mim_state* snapshot_get_personal_mim_state_by_id(struct snapshot* ss, int session_id)
 {
-	return snapshot_get_mim_state_by_ids(ss, get_my_artist_id(), personal_id);
+	return snapshot_get_mim_state_by_ids(ss, get_my_artist_id(), session_id);
 }
 
 static struct {
-	struct ringbuf command_ringbuf;
+	//struct ringbuf command_ringbuf;
 	int document_id_sequence;
 	struct snapshot cool_snapshot, hot_snapshot;
-	struct ringbuf journal_ringbuf;
+	//struct ringbuf journal_ringbuf;
 	int my_artist_id;
 	uint8_t* mim_buffer_arr;
-	int using_personal_mim_state_id;
+	int using_session_id;
 	int in_mim;
+	struct io* io;
 } g;
 
+#if 0
 static void snapshot_spool(struct snapshot* ss, struct ringbuf* journal)
 {
 	// TODO?
 }
+#endif
 
 void gig_spool(void)
 {
-	snapshot_spool(&g.hot_snapshot, &g.journal_ringbuf);
+	//snapshot_spool(&g.hot_snapshot, &g.journal_ringbuf);
 }
 
 void gig_thread_tick(void)
 {
-	// TODO?
+	struct io_event ev;
+	while (io_poll(g.io, &ev)) {
+		printf("TODO EV echo=%ld r=%ld!\n", ev.echo.i64, ev.result.i64);
+	}
 }
 
 void gig_init(void)
 {
-	ringbuf_init(&g.command_ringbuf, 16);
+	//ringbuf_init(&g.command_ringbuf, 16);
 
 	// XXX "getting started"-stuff here:
 	g.my_artist_id = 1;
@@ -179,7 +188,7 @@ void gig_init(void)
 	doc->id = doc_id;
 	struct mim_state ms1 = {
 		.artist_id = get_my_artist_id(),
-		.personal_id = 1,
+		.session_id = 1,
 		.document_id = doc_id,
 	};
 	struct caret cr = {
@@ -190,6 +199,18 @@ void gig_init(void)
 	arrput(ms1.caret_arr, cr);
 	arrput(ss->mim_state_arr, ms1);
 
+	g.io = io_new(10, 128);
+
+	#if 0
+	io_open(g.io, ((struct iosub_open){
+		.echo = { .ptr = &g },
+		.path = strdup("FOO000"),
+		.read = 1,
+		.write = 1,
+		.create = 1,
+		.free_path_after_use = 1,
+	}));
+	#endif
 
 	#if 0
 	gig_thread_tick();
@@ -202,14 +223,14 @@ int get_my_artist_id(void)
 	return g.my_artist_id;
 }
 
-void get_state_and_doc(int personal_id, struct mim_state** out_mim_state, struct document** out_doc)
+void get_state_and_doc(int session_id, struct mim_state** out_mim_state, struct document** out_doc)
 {
 	struct snapshot* ss = &g.cool_snapshot;
 	const int artist_id = get_my_artist_id();
 	const int num_states = arrlen(ss->mim_state_arr);
 	for (int i=0; i<num_states; ++i) {
 		struct mim_state* ms = arrchkptr(ss->mim_state_arr, i);
-		if ((ms->artist_id==artist_id) && (ms->personal_id==personal_id)) {
+		if ((ms->artist_id==artist_id) && (ms->session_id==session_id)) {
 			const int document_id = ms->document_id;
 			assert((document_id > 0) && "invalid document id in mim state");
 			struct document* doc = NULL;
@@ -331,6 +352,10 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 				}
 			} else {
 				switch (chr) {
+
+				case ':': {
+					assert(!"TODO mim ex command");
+				}	break;
 
 				case '!': // commit
 				case '/': // cancel
@@ -649,14 +674,15 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 	return 1;
 }
 
-void begin_mim(int personal_mim_state_id)
+void begin_mim(int session_id)
 {
 	assert(!g.in_mim);
 	g.in_mim = 1;
-	g.using_personal_mim_state_id = personal_mim_state_id;
+	g.using_session_id = session_id;
 	arrreset(g.mim_buffer_arr);
 }
 
+#if 0
 static void u8pp_write(uint8_t v, void* userdata)
 {
 	uint8_t** p = (uint8_t**)userdata;
@@ -669,6 +695,7 @@ static void write_varint64(uint8_t** pp, uint8_t* end, int64_t value)
 	assert(((end - *pp) >= LEB128_MAX_LENGTH) && "not enough space for largest-case leb128 encoding");
 	leb128_encode_int64(u8pp_write, pp, value);
 }
+#endif
 
 static void document_to_thicchar_da(struct thicchar** arr, struct document* doc)
 {
@@ -682,59 +709,57 @@ static void document_to_thicchar_da(struct thicchar** arr, struct document* doc)
 	}
 }
 
-//const int num_chars = daLen(scratch_doc.fat_chars);
-//for (int i=0; i<num_chars
-//static DA(struct thicchar, dodoc);
-
 void end_mim(void)
 {
 	assert(g.in_mim);
 	const int num_bytes = arrlen(g.mim_buffer_arr);
-	if (num_bytes>0) {
-		uint8_t* data = g.mim_buffer_arr;
-
-		struct snapshot* ss = &g.cool_snapshot;
-		struct mim_state* msr = snapshot_get_personal_mim_state_by_id(ss, g.using_personal_mim_state_id);
-		struct document* doc = snapshot_get_document_by_id(ss, msr->document_id);
-
-		// make "scratch copies" of state and doc and work on these; this
-		// protects the actual state in case of partially invalid input
-		static struct mim_state scratch_state = {0};
-		static struct document scratch_doc = {0};
-		mim_state_copy(&scratch_state, msr);
-		document_copy(&scratch_doc, doc);
-
-		struct mimop mo = { .ms=&scratch_state, .doc=&scratch_doc, };
-		if (!mim_spool(&mo, data, num_bytes)) {
-			assert(!"mim protocol error"); // XXX? should I have a "failable" flag? eg. for human input
-		}
-
-		static struct thicchar* dodoc_arr = NULL;
-		document_to_thicchar_da(&dodoc_arr, &scratch_doc);
-		const int prg = mie_compile_thicc(dodoc_arr, arrlen(dodoc_arr));
-		//printf("prg=%d\n", prg);
-		if (prg == -1) {
-			printf("TODO compile error [%s]\n", mie_error());
-		} else {
-			vmie_reset(prg);
-			vmie_run();
-			mie_program_free(prg);
-		}
-
-		mim_state_copy(msr, &scratch_state);
-		document_copy(doc, &scratch_doc);
-
-		uint8_t header[1<<8];
-		uint8_t* hp = header;
-		uint8_t* end = header + sizeof(header);
-		write_varint64(&hp, end, g.using_personal_mim_state_id);
-		write_varint64(&hp, end, num_bytes);
-		const size_t nh = hp - header;
-		ringbuf_writen(&g.command_ringbuf, header, nh);
-		ringbuf_writen(&g.command_ringbuf, data, num_bytes);
-		ringbuf_commit(&g.command_ringbuf);
-	}
 	g.in_mim = 0;
+	if (num_bytes == 0) return;
+
+	uint8_t* data = g.mim_buffer_arr;
+
+	struct snapshot* ss = &g.cool_snapshot;
+	struct mim_state* msr = snapshot_get_personal_mim_state_by_id(ss, g.using_session_id);
+	struct document* doc = snapshot_get_document_by_id(ss, msr->document_id);
+
+	// make "scratch copies" of state and doc and work on these; this
+	// protects the actual state in case of partially invalid input
+	static struct mim_state scratch_state = {0};
+	static struct document scratch_doc = {0};
+	mim_state_copy(&scratch_state, msr);
+	document_copy(&scratch_doc, doc);
+
+	struct mimop mo = { .ms=&scratch_state, .doc=&scratch_doc, };
+	if (!mim_spool(&mo, data, num_bytes)) {
+		assert(!"mim protocol error"); // XXX? should I have a "failable" flag? eg. for human input
+	}
+
+	static struct thicchar* dodoc_arr = NULL;
+	document_to_thicchar_da(&dodoc_arr, &scratch_doc);
+	const int prg = mie_compile_thicc(dodoc_arr, arrlen(dodoc_arr));
+	//printf("prg=%d\n", prg);
+	if (prg == -1) {
+		printf("TODO compile error [%s]\n", mie_error());
+	} else {
+		vmie_reset(prg);
+		vmie_run();
+		mie_program_free(prg);
+	}
+
+	mim_state_copy(msr, &scratch_state);
+	document_copy(doc, &scratch_doc);
+
+	#if 0
+	uint8_t header[1<<8];
+	uint8_t* hp = header;
+	uint8_t* end = header + sizeof(header);
+	write_varint64(&hp, end, g.using_session_id);
+	write_varint64(&hp, end, num_bytes);
+	const size_t nh = hp - header;
+	ringbuf_writen(&g.command_ringbuf, header, nh);
+	ringbuf_writen(&g.command_ringbuf, data, num_bytes);
+	ringbuf_commit(&g.command_ringbuf);
+	#endif
 }
 
 static char* get_mim_buffer_top(void)
@@ -887,4 +912,33 @@ int doc_iterator_next(struct doc_iterator* it)
 	}
 
 	return 1;
+}
+
+static void open_journal(const char* dir)
+{
+	char pathbuf[1<<14];
+	path_join(pathbuf, sizeof pathbuf, dir, "DO_JOURNAL", NULL);
+	#if 0
+	io_open(g.io, ((struct iosub_open){
+		.echo = { .i64 = 10101 }, // XXX FIXME
+		.path = strdup(pathbuf),
+		.free_path_after_use = 1,
+		.read = 1,
+		.write = 1,
+		.create = 1,
+	}));
+	#endif
+}
+
+void gig_serve_dir(const char* dir)
+{
+	open_journal(dir);
+}
+
+void gig_record_dir(const char* dir)
+{
+	assert(!"TODO");
+	// XXX a record dir must be empty, open_journal() should have O_EXCL or
+	// something?
+	open_journal(dir);
 }
