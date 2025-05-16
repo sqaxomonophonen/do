@@ -1,8 +1,13 @@
 #ifndef UTF8_H
 
 #include <stdint.h>
+#include <assert.h>
 
 #define UTF8_MAX_SIZE (4)
+#define UTF8_1BYTE_END (1<<7)
+#define UTF8_2BYTE_END (1<<11)
+#define UTF8_3BYTE_END (1<<16)
+#define UTF8_4BYTE_END (0x110000)
 
 static inline int utf8_num_bytes_for_first_byte(uint8_t v)
 {
@@ -11,6 +16,16 @@ static inline int utf8_num_bytes_for_first_byte(uint8_t v)
 	if ((v & 0xf0) == 0xe0) return 3; // U+0800   - U+FFFF   : 1110xxxx 10xxxxxx 10xxxxxx
 	if ((v & 0xf8) == 0xf0) return 4; // U+010000 - U+10FFFF : 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx
 	return -1;
+}
+
+static inline int utf8_num_bytes_for_codepoint(int codepoint)
+{
+	const int c = codepoint;
+	if ((0 <= c) && (c < UTF8_1BYTE_END)) return 1;
+	else if (c < UTF8_2BYTE_END) return 2;
+	else if (c < UTF8_3BYTE_END) return 3;
+	else if (c < UTF8_4BYTE_END) return 4;
+	return 1; // encodes as '?'
 }
 
 static inline int utf8_is_first(uint8_t v)
@@ -315,28 +330,31 @@ int utf8_decode(const char** inputpp, int* remaining)
 char* utf8_encode(char* p, int codepoint)
 {
 	const unsigned c = codepoint;
-	if (c < (1<<7)) {
+	if ((0 <= c) && (c < UTF8_1BYTE_END)) {
 		// 1-byte/7-bit ascii: 0b0xxxxxxx
 		p[0] = (char)c;
 		p += 1;
-	} else if (c < (1<<11)) {
+	} else if (c < UTF8_2BYTE_END) {
 		// 2-byte/11-bit utf8 c: 0b110xxxxx 0b10xxxxxx
 		p[0] = (char)(0xc0 | (char)((c >> 6) & 0x1f));
 		p[1] = (char)(0x80 | (char)(c & 0x3f));
 		p += 2;
-	} else if (c < (1<<16)) {
+	} else if (c < UTF8_3BYTE_END) {
 		// 3-byte/16-bit utf8 c: 0b1110xxxx 0b10xxxxxx 0b10xxxxxx
 		p[0] = (char)(0xe0 | (char)((c >> 12) & 0x0f));
 		p[1] = (char)(0x80 | (char)((c >> 6) & 0x3f));
 		p[2] = (char)(0x80 | (char)(c & 0x3f));
 		p += 3;
-	} else if (c < (1<<21)) {
+	} else if (c < UTF8_4BYTE_END) {
 		// 4-byte/21-bit utf8 c: 0b11110xxx 0b10xxxxxx 0b10xxxxxx 0b10xxxxxx
 		p[0] = (char)(0xf0 | (char)((c >> 18) & 0x07));
 		p[1] = (char)(0x80 | (char)((c >> 12) & 0x3f));
 		p[2] = (char)(0x80 | (char)((c >> 6) & 0x3f));
 		p[3] = (char)(0x80 | (char)(c & 0x3f));
 		p += 4;
+	} else {
+		p[0] = '?';
+		p += 1;
 	}
 	return p;
 }

@@ -214,8 +214,14 @@ mapnew $*OVERLOAD set-global
 
 
 
-"hello"
-"world??"
-"!!!"
+"oh no"
+"oooo"
 strjoin
-strjoin
+dup 0i STRCOMPS rot
+dup 1i STRCOMPS rot
+dup 2i STRCOMPS rot
+dup 3i STRCOMPS rot
+drop
+4i STRENC
+
+

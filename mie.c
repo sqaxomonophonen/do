@@ -160,10 +160,10 @@
 	X( IGE       , "I>="      , "Integer greater than or equal (x y -- x>=y)") \
 	X( IGT       , "I>"       , "Integer greater than (x y -- x>y)") \
 	/* ====================================================================== */ \
-	X( STRLEN    , "strlen"   , "") \
-	X( I2STR     , "I>str"    , "") \
-	X( F2STR     , "F>str"    , "") \
-	X( STRJOIN   , "strjoin"  , "") \
+	X( STRLEN    , "strlen"   , "Get length of string (s -- strlen(s))") \
+	X( STRCOMPS  , NULL       , "Get string components at index (s i:32 -- s[i].codepoint s[i].rgbx)") \
+	X( STRENC    , NULL       , "Encode string from [codepoint,rgbx] component pairs on stack ( ... n:i32 -- s )") \
+	X( STRJOIN   , "strjoin"  , "Join strings (a b -- strjoin(a,b))") \
 	/* ====================================================================== */ \
 	/* convention (not sure if it's a good one): if it only reads the array */ \
 	/* it consumes the array; if it mutates the array, the array is the */ \
@@ -633,16 +633,17 @@ static struct thicchar* resolve_string(struct vmie* vm, int id, int* out_length)
 	return tc;
 }
 
-static void vmie_pop_str(struct vmie* vm, struct thicchar** out_str, int* out_length)
+static int vmie_pop_str(struct vmie* vm, struct thicchar** out_str, int* out_length)
 {
 	const struct val v = arrpop(vm->stack_arr);
 	if (v.type != VAL_STR) {
 		vmie_errorf(vm, "expected VAL_STR (%d), got type %d", VAL_STR, v.type);
-		return;
+		return 0;
 	}
 	const int id = v.i32;
 	struct thicchar* s = resolve_string(vm, id, out_length);
 	if (out_str) *out_str = s;
+	return 1;
 }
 
 
@@ -718,6 +719,19 @@ static int32_t vmie_alloc_string(struct vmie* vm, size_t len, struct thicchar** 
 	}));
 
 	return id;
+}
+
+static inline int32_t thicchar_rgbx_to_i32(struct thicchar tc)
+{
+	uint32_t e = 0;
+	for (int i=0; i<4; ++i) e |= ((uint32_t)(tc.color[i]) << (i*8));
+	return (int32_t)e; // XXX unsafe in theory?
+}
+
+static inline void thicchar_set_rgbx(struct thicchar* tc, int32_t rgbx)
+{
+	uint32_t e = rgbx; // XXX unsafe in theory?
+	for (int i=0; i<4; ++i) tc->color[i] = ((e >> (i*8)) & 0xff);
 }
 
 int vmie_run2(struct vmie* vm)
@@ -804,7 +818,24 @@ int vmie_run2(struct vmie* vm)
 
 			case OP_HALT: {
 				if (TRACE) printf(" HALT\n");
-				vmie_errorf(vm, "HALT");
+				if (arrlen(vm->stack_arr) > 0) {
+					const struct val top = vmie_top(vm);
+					if (top.type == VAL_STR) {
+						int len=0;
+						struct thicchar* s = resolve_string(vm, top.i32, &len);
+						int num_bytes=0;
+						for (int i=0; i<len; ++i) num_bytes += utf8_num_bytes_for_codepoint(s[i].codepoint);
+						++num_bytes; // space for NUL-terminator
+						char* msg = scratch_alloc(num_bytes);
+						char* p = msg;
+						for (int i=0; i<len; ++i) p = utf8_encode(p, s[i].codepoint);
+						*(p++) = 0; // NUL-terminator
+						assert((p-msg) == num_bytes);
+						vmie_errorf(vm, "HALT (%s)", msg);
+						return -1;
+					}
+				}
+				vmie_errorf(vm, "HALT (no msg)");
 				return -1;
 			}	break;
 
@@ -1060,8 +1091,41 @@ int vmie_run2(struct vmie* vm)
 			case OP_STRLEN: {
 				VMIE_OP_STACK_GUARD(1)
 				int len=0;
-				vmie_pop_str(vm, NULL, &len);
+				if (!vmie_pop_str(vm, NULL, &len)) return -1;
 				arrput(vm->stack_arr, intval(len));
+			}	break;
+
+			case OP_STRCOMPS: {
+				VMIE_OP_STACK_GUARD(2)
+				const int index = arrpop(vm->stack_arr).i32;
+				struct thicchar* str=NULL;
+				int len=0;
+				if (!vmie_pop_str(vm, &str, &len)) return -1;
+				if (!((0 <= index) && (index < len))) {
+					vmie_errorf(vm, "STRCOMPS index %d outside valid range [0:%d]", index, len-1);
+					return -1;
+				}
+				struct thicchar tc = str[index];
+				arrput(vm->stack_arr, intval(tc.codepoint));
+				arrput(vm->stack_arr, intval(thicchar_rgbx_to_i32(tc)));
+			}	break;
+
+			case OP_STRENC: {
+				VMIE_OP_STACK_GUARD(1)
+				const int n = arrpop(vm->stack_arr).i32;
+				if (n < 0) {
+					vmie_errorf(vm, "STRENC got negative string length (%d)", n);
+					return -1;
+				}
+				VMIE_OP_STACK_GUARD(n*2) // XXX produces a slightly misleading error message on fail?
+				struct thicchar* str=NULL;
+				const int32_t id = vmie_alloc_string(vm, n, &str);
+				for (int i=(n-1); i>=0; --i) {
+					const int rgbx = arrpop(vm->stack_arr).i32;
+					str[i].codepoint = arrpop(vm->stack_arr).i32;
+					thicchar_set_rgbx(&str[i], rgbx);
+				}
+				arrput(vm->stack_arr, typeval(VAL_STR, id));
 			}	break;
 
 			case OP_STRJOIN: {
@@ -1069,8 +1133,8 @@ int vmie_run2(struct vmie* vm)
 				int len0=0,len1=0;
 				struct thicchar* str0=NULL;
 				struct thicchar* str1=NULL;
-				vmie_pop_str(vm, &str1, &len1);
-				vmie_pop_str(vm, &str0, &len0);
+				if (!vmie_pop_str(vm, &str1, &len1)) return -1;
+				if (!vmie_pop_str(vm, &str0, &len0)) return -1;
 				struct thicchar* str2=NULL;
 				const int32_t id = vmie_alloc_string(vm, len0+len1, &str2);
 				assert(id >= 0);
@@ -1755,7 +1819,10 @@ static int compiler_process_utf8src(struct compiler* cm, const char* utf8src, in
 	while (remaining > 0) {
 		unsigned codepoint = utf8_decode(&p, &remaining);
 		if (codepoint == -1) continue;
-		compiler_push_char(cm, ((struct thicchar){.codepoint = codepoint}));
+		compiler_push_char(cm, ((struct thicchar){
+			.codepoint = codepoint,
+			.color = {0x40,0x40,0x40,0},
+		}));
 		if (cm->has_error) return -1;
 	}
 	return 0;

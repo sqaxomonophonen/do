@@ -21,6 +21,20 @@ enum val_type {
 	#undef X
 };
 
+#define LIST_OF_STR_COMPONENTS \
+	X(CODEPOINT) \
+	X(R) \
+	X(G) \
+	X(B) \
+	X(X)
+// XXX "Y" in codepoint upper bits?
+
+enum str_component {
+	#define X(ENUM) STRCOMP_##ENUM,
+	LIST_OF_STR_COMPONENTS
+	#undef X
+};
+
 struct val {
 	int32_t type;
 	// don't change `int32_t type` into `enum val_type type` even though it may
