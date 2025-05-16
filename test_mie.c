@@ -1,7 +1,7 @@
-// cc -DMIE_ONLY_SYSALLOC -O0 -g -Wall utf8.c allocator.c stb_sprintf.c stb_ds.c stb_divide.c mie.c test_mie.c -o _test_mie -lm && ./_test_mie
 // cc -O0 -g -Wall utf8.c allocator.c stb_sprintf.c stb_ds.c stb_divide.c mie.c test_mie.c -o _test_mie -lm && ./_test_mie
 // cc -O0 -g -fsanitize=undefined -fsanitize=address -Wall utf8.c allocator.c stb_sprintf.c stb_ds.c stb_divide.c mie.c test_mie.c -o _test_mie -lm && ./_test_mie
 // cc -DMIE_ONLY_SYSALLOC -O3 -g -Wall utf8.c allocator.c stb_sprintf.c stb_ds.c stb_divide.c mie.c test_mie.c -o _test_mie -lm && ./_test_mie
+// cc -DMIE_ONLY_SYSALLOC -O0 -g -Wall utf8.c allocator.c stb_sprintf.c stb_ds.c stb_divide.c mie.c test_mie.c -o _test_mie -lm && ./_test_mie
 // cc -O3 -g -Wall utf8.c allocator.c stb_sprintf.c stb_ds.c stb_divide.c mie.c test_mie.c -o _test_mie -lm && ./_test_mie
 
 #include <stdlib.h>

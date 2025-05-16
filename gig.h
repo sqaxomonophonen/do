@@ -194,8 +194,5 @@ void get_state_and_doc(int session_id, struct mim_state** out_mim_state, struct 
 
 int get_my_artist_id(void);
 
-void gig_serve_dir(const char* dir);
-void gig_record_dir(const char* dir);
-
 #define GIG_H
 #endif

@@ -1,17 +1,96 @@
 
+( let's define some words ("functions") and use the stack-manipulation notation
+in comments, like ( a b -- c d ) )
+
 : dup       0i PICK       ( a -- a a )   ;
+
+( we just defined `dup` (!) which duplicates the top stack element, hence ( a
+-- a a ) which says that before `dup` you have "a" and after you have "a a". so
+`6 dup` would be like typing `6 6` ( 6 -- 6 6 ). the word's "body" itself
+contains `0i PICK`, which calls the PICK word with 0i as argument (integer
+literal 0). this "picks" (without removing anything) the 0th (top) element from
+top of the stack, and pushes it onto the stack. the "over" word in Mie is
+defined as: )
+
 : over      1i PICK     ( a x -- a x a ) ;
+
+( about `PICK` vs `pick`: the UPPERCASE words are typically "internal words",
+and/or words that are, uh, picky with their arguments. if PICK was called with
+1 (floating-point) instead of 1i (integer), it would be bitwise ("reinterpret")
+cast to an integer which would be like typing.. 1065353216i? the typesafe
+`pick` is defined later when we have bootstrapped enough to define `i32` )
+
+
+( `<n> <d> ROTATE` "rotates" the <n> topmost stack elements <d> steps to the
+left. negative <d> to the right )
+
 : swap  2i  1i ROTATE   ( a b -- b a )   ;
 : rot   3i  1i ROTATE ( a b c -- b c a ) ;
 : tro   3i -1i ROTATE ( a b c -- c a b ) ;
-: ROLL      1i ROTATE ;
+: ROLL      1i ROTATE ; ( defined as UPPERCASE because input "MUST" be integer )
 : LORR     -1i ROTATE ;
 
-: dup2 ( a b -- a b a b )
+: dup2    ( a b -- a b a b )
   swap dup ( .. -- b a a )
   rot dup  ( .. -- a a b b )
   tro      ( .. -- a b a b )
 ;
+
+
+( uh-oh comptime )
+
+comptime : IF
+  there           ( -- p0)
+  -1i SEW-JMP0    ( forward JMP0 placeholder; targets `THEN`)
+;
+
+( `IF` inserts a placeholder JMP0 instruction into the code at compile-time
+that is meant to jump to `THEN` when the value popped from the stack by `JMP0`
+is zero (either float or int). but since we don't have the address yet, we
+write -1i as placeholder address. inside the comptime (compile-time) VM the
+address before `JMP0` is pushed (p0). this tells `THEN` where to write the
+correct jump address. )
+
+comptime : THEN
+  there there rot ( p0 -- t0 t0 p0 )
+  navigate  ( t0 t0 p0 -- t0 t0 )  ( set write cursor to p0 )
+  SEW-ADDR     ( t0 t0 -- t0 )     ( write t0 as address in IF's JMP0 )
+  navigate        ( t0 -- )        ( restore write cursor )
+;
+( `THEN` patches the correct jump address into the placeholder JMP0 in `IF`. )
+
+
+( we now have enough language to define `f32` and `i32` which converts input to
+those types respectively. )
+
+: f32 ( x -- f32(x) e.g. ( 6i -- 6 ) )
+  dup typeof VAL_FLOAT I= IF     return THEN
+  dup typeof VAL_INT   I= IF I>F return THEN
+  "input is not int/float" halt
+;
+
+: i32 ( i -- i32(i) e.g. ( 7 -- 7i ) )
+  dup typeof VAL_INT   I= IF     return THEN
+  dup typeof VAL_FLOAT I= IF F>I return THEN
+  "input is not int/float" halt
+;
+
+(  this allows us to define a less picky `PICK` )
+
+: pick   i32 PICK ;
+
+
+: BOX-i32 (i:i32 T -- T(i))
+  swap dup typeof VAL_INT I!= IF
+    "box input not i32" halt
+  THEN
+  swap CAST
+;
+
+
+: roll   i32 ROLL ;
+: lorr   i32 LORR ;
+
 
 comptime : if
   there           ( -- p0)
@@ -30,24 +109,14 @@ comptime : else
   ( IF box               ( p1 -- p1:IF) )
 ;
 
+( and else and now then )
+
 comptime : then
   ( IF unbox     (p1:IF -- p1) )
   there there rot ( p1 -- t1 t1 p1 )
   navigate  ( t1 t1 p1 -- t1 t1 )
   SEW-ADDR     ( t1 t1 -- t1 )
   navigate        ( t1 -- )
-;
-
-: f32
-  dup typeof VAL_FLOAT I= if     return then
-  dup typeof VAL_INT   I= if I>F return then
-  halt ( TODO error message )
-;
-
-: i32
-  dup typeof VAL_INT   I= if     return then
-  dup typeof VAL_FLOAT I= if F>I return then
-  halt ( TODO error message )
 ;
 
 : set-global i32 SET-GLOBAL ;
@@ -59,9 +128,6 @@ comptime : then
   typeof VAL_INT I= assert
 ;
 
-: pick   i32 PICK ;
-: roll   i32 ROLL ;
-: lorr   i32 LORR ;
 : cast   dup assert-i32 CAST ;
 comptime : jmpi  <# i32 JMPI #> ;
 : jsri   i32 JSRI ;
@@ -81,6 +147,8 @@ comptime : call  <# i32 JSRI #>  ;
   rot I= assert
   VAL_INT CAST
 ;
+
+
 
 : $NEXT_GLOBAL 0i ;
 
@@ -144,3 +212,10 @@ mapnew $*OVERLOAD set-global
 100i 3.1415 *
 )
 
+
+
+"hello"
+"world??"
+"!!!"
+strjoin
+strjoin

@@ -16,6 +16,7 @@
 #include "utf8.h"
 #include "path.h"
 #include "main.h"
+#include "args.h"
 
 struct ringbuf {
 	uint8_t* data;
@@ -172,6 +173,9 @@ void gig_thread_tick(void)
 	struct io_event ev;
 	while (io_poll(g.io, &ev)) {
 		printf("TODO EV echo=%ld r=%ld!\n", ev.echo.i64, ev.result.i64);
+		assert(ev.echo.i64 == 42);
+		const int64_t sz = io_get_size(g.io, ev.result);
+		printf("sz=%zd\n", sz);
 	}
 }
 
@@ -201,16 +205,18 @@ void gig_init(void)
 
 	g.io = io_new(10, 128);
 
-	#if 0
-	io_open(g.io, ((struct iosub_open){
-		.echo = { .ptr = &g },
-		.path = strdup("FOO000"),
-		.read = 1,
-		.write = 1,
-		.create = 1,
-		.free_path_after_use = 1,
-	}));
-	#endif
+	if (arg_dir) {
+		char pathbuf[1<<14];
+		path_join(pathbuf, sizeof pathbuf, arg_dir, "DO_JOURNAL", NULL);
+		io_open(g.io, ((struct iosub_open){
+			.echo = { .i64 = 42 },
+			.path = strdup(pathbuf),
+			.read = 1,
+			.write = 1,
+			.create = 1,
+			.free_path_after_use = 1,
+		}));
+	}
 
 	#if 0
 	gig_thread_tick();
@@ -912,33 +918,4 @@ int doc_iterator_next(struct doc_iterator* it)
 	}
 
 	return 1;
-}
-
-static void open_journal(const char* dir)
-{
-	char pathbuf[1<<14];
-	path_join(pathbuf, sizeof pathbuf, dir, "DO_JOURNAL", NULL);
-	#if 0
-	io_open(g.io, ((struct iosub_open){
-		.echo = { .i64 = 10101 }, // XXX FIXME
-		.path = strdup(pathbuf),
-		.free_path_after_use = 1,
-		.read = 1,
-		.write = 1,
-		.create = 1,
-	}));
-	#endif
-}
-
-void gig_serve_dir(const char* dir)
-{
-	open_journal(dir);
-}
-
-void gig_record_dir(const char* dir)
-{
-	assert(!"TODO");
-	// XXX a record dir must be empty, open_journal() should have O_EXCL or
-	// something?
-	open_journal(dir);
 }

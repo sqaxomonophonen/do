@@ -35,8 +35,8 @@ static void error(void)
 	usage(stderr, EXIT_FAILURE);
 }
 
-static const char* opt_dir;
-static const char* opt_connect;
+const char* arg_dir;
+const char* arg_connect;
 
 void parse_args(int argc, char** argv)
 {
@@ -61,9 +61,9 @@ void parse_args(int argc, char** argv)
 			if (strcmp(rest, "help")==0 || strcmp(rest, "h")==0) {
 				help();
 			} else if (strcmp(rest, "dir")==0) {
-				grab = &opt_dir;
+				grab = &arg_dir;
 			} else if (strcmp(rest, "connect")==0) {
-				grab = &opt_connect;
+				grab = &arg_connect;
 			} else {
 				fprintf(stderr, "invalid switch %s\n", arg);
 				error();
@@ -73,14 +73,5 @@ void parse_args(int argc, char** argv)
 	if (grab) {
 		fprintf(stderr, "missing argument for switch %s\n", last_switch);
 		error();
-	}
-
-	if (opt_dir && !opt_connect) {
-		gig_serve_dir(opt_dir);
-	} else if (opt_dir && opt_connect) {
-		gig_record_dir(opt_dir);
-		assert(!"TODO");
-	} else if (!opt_dir && opt_connect) {
-		assert(!"TODO");
 	}
 }

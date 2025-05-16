@@ -14,8 +14,6 @@ enum ioerr {
 	IOERR_TOO_MANY_FILES,
 };
 
-#define IO_APPEND (-10101)
-
 union io64 {
 	int64_t  i64;
 	uint64_t u64;
@@ -49,7 +47,6 @@ struct iosub_pwrite {
 	void*  data;
 	int64_t size;
 	int64_t offset;
-	// set offset to IO_APPEND to append at end of file
 
 	unsigned      no_reply :1;
 	// backend will not reply with an io_event (suggested use: log files)
@@ -76,13 +73,13 @@ struct io_event {
 };
 
 // sync
-//int64_t io_get_size(struct io*, union io64 handle);
-// XXX implement if needed? but since it returns the internal point-in-time
-// value it's dangerous if there are already in-flight write requests?
+int64_t io_get_size(struct io*, union io64 handle);
 
-// async
 void io_open(struct io*, struct iosub_open);
+// io_event.result is negative on error (IOERR_*), otherwise a handle
+
 void io_close(struct io*, struct iosub_close);
+
 void io_pwrite(struct io*, struct iosub_pwrite);
 void io_pread(struct io*, struct iosub_pread);
 

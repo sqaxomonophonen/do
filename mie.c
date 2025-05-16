@@ -43,17 +43,45 @@
 #define LIST_OF_SYNTAX_WORDS \
 	/*<ENUM>      <STR>     <DOC> */ \
 	/* ====================================================================== */ \
-	X( COLON       , ":"        , "Word definiton, followed by word (name), e.g. `: foo`") \
-	X( COLONADDR   , ":&"       , "Word address definiton, followed by word (name), e.g. `:& foo_addr`") \
-	X( COLONLAMBDA , ":->"      , "Inline word, resolves to address, e.g. `:-> F+`") \
+	X( COLON       , ":"        , "Word definiton, followed by word (name), e.g. `: foo ... ;`") \
+	X( COLONADDR   , ":&"       , "Word address definiton, followed by word (name), e.g. `:& foo_addr ... ;`") \
+	X( COLONLAMBDA , ":->"      , "Inline word, resolves to address; `:-> ... ;`") \
 	X( SEMICOLON   , ";"        , "End of word definition") \
-	X( COMPTIME    , "comptime" , "Compile-time prefix for next word") \
-	X( ENTER_SEW   , "<#"       , "Start writing instructions outside of comptime (\"sewing\")") \
-	X( LEAVE_SEW   , "#>"       , "Stop writing instructions outside of comptime") \
+	X( COMPTIME    , "comptime" , "Compile-time prefix") \
+	X( ENTER_SEW   , "<#"       , "Increase sew-depth") \
+	X( LEAVE_SEW   , "#>"       , "Decrease sea-depth") \
 	/* ====================================================================== */
 
+// `comptime` before colon defines a "comptime word"; the compiler generates
+// code directly as it parses the source, but when it sees a call to a
+// "comptime word", it immediately executes it in the comptime VM. calling "sew
+// words" within a comptime word writes or modifies the program underneath it.
+// the `there` word gets the code write position, and `navigate` sets it. all
+// this allows you to define syntax (like if/else/then) in the language itself!
+// (all this is somewhat related to the `immediate`-keyword [and `postpone?`]
+// in forth, and the "comptime" word comes from zig)
 
-// these words have direct 1:1 mappings to vmie VM ops.
+// `comptime` before a word (or literal) executes it in the comptime VM. e.g.
+// `comptime 5` immediately pushes 5.0 in the comptime VM. it can be used to
+// push arguments for comptime words.
+
+// "sew syntax", <# ... #>, generates code-generating-code (!), and can
+// actually be nested for extra confusion (so code-generating
+// code-genrta... sewception!!) but:
+//   comptime : square <# dup * #> ;
+// is like an inline version of:
+//            : square    dup *    ;
+// they basically do the same thing, but the comptime version "burns" `dup *`
+// into the code, so there's no call ("JSR") at runtime. another cool comptime
+// example:
+//   comptime : square-root-of-2  2 FSQRT SEW-LIT ;
+// this inserts the /result/ of sqrt(2) into the code whereever it sees
+// `square-root-of-2`, so equivalent to typing 1.41421 basically, and doesn't
+// execute the square-root operation at runtime.
+
+
+
+// the words below have direct 1:1 mappings to vmie VM ops.
 // `foo:i32` means `foo` is bitwise ("reinterpret") cast to i32, i.e. without
 // any type checking. by convention, words that do bitwise casting should not
 // be lowercased since that "namespace" is reserved for typesafe words (so
@@ -66,9 +94,9 @@
 	X( HALT       , "halt"       , "Halt execution with an error") \
 	X( RETURN     , "return"     , "Return from subroutine [returnaddr -- ]") \
 	X( DROP       , "drop"       , "Remove top element from stack (x --)") \
-	X( PICK       , NULL         , "Pop n:i32, duplicate stack value (n -- stack[-1-n])") \
-	X( ROTATE     , NULL         , "Pop d:i32, then n:i32, then rotate n elements d places") \
-	X( EQ         , "="          , "Equals (x y -- x=y)") \
+	X( PICK       , NULL         , "Pop n:i32, duplicate nth stack value from top (n -- stack[-1-n])") \
+	X( ROTATE     , NULL         , "Pop d:i32, then n:i32, then rotate n elements d places left") \
+	X( EQ         , "=="         , "Equals (x y -- x==y)") \
 	X( TYPEOF     , "typeof"     , "Get type (x -- typeof(x))") \
 	X( CAST       , NULL         , "Set type (x T -- T(x))") \
 	X( HERE       , "here"       , "Push current instruction pointer to stack (-- ip)") \
@@ -132,6 +160,11 @@
 	X( IGE       , "I>="      , "Integer greater than or equal (x y -- x>=y)") \
 	X( IGT       , "I>"       , "Integer greater than (x y -- x>y)") \
 	/* ====================================================================== */ \
+	X( STRLEN    , "strlen"   , "") \
+	X( I2STR     , "I>str"    , "") \
+	X( F2STR     , "F>str"    , "") \
+	X( STRJOIN   , "strjoin"  , "") \
+	/* ====================================================================== */ \
 	/* convention (not sure if it's a good one): if it only reads the array */ \
 	/* it consumes the array; if it mutates the array, the array is the */ \
 	/* bottommost return value */ \
@@ -188,6 +221,7 @@ enum opcode {
 	_FIRST_WORDLESS_OP_,
 	OP_INT_LITERAL = _FIRST_WORDLESS_OP_, // integer literal, followed by i32
 	OP_FLOAT_LITERAL, // floating-point literal, followed by f32
+	OP_STR_LITERAL, // string literal, followed by i32 static(negative)/dynamic offset
 	OP_JMP, // unconditional jump, followed by address
 	OP_JMP0, // conditional jump, pops x, jumps if x=0. followed by address.
 	OP_JSR, // jump to subroutine, followed by address
@@ -208,6 +242,7 @@ static const char* get_opcode_str(enum opcode opcode)
 
 	case OP_INT_LITERAL   : return "INT_LITERAL";
 	case OP_FLOAT_LITERAL : return "FLOAT_LITERAL";
+	case OP_STR_LITERAL   : return "STR_LITERAL";
 	case OP_JMP     : return "JMP";
 	case OP_JMP0    : return "JMP0";
 	case OP_JSR     : return "JSR";
@@ -240,11 +275,12 @@ static enum builtin_word match_builtin_word(const char* word)
 enum tokenizer_state {
 	WORD=1,
 	STRING,
+	STRING_ESCAPE,
 	COMMENT,
 };
 
 #define MAX_ERROR_MESSAGE_SIZE (1<<14)
-#define WORD_BUF_CAP (1<<8)
+#define WORD_BUF_SIZE (1<<8)
 #define MAX_SEW_DEPTH (8) // storage req scales 3^X-ish - be careful!
 
 struct word_info {
@@ -267,6 +303,7 @@ static_assert(sizeof(union pword)==sizeof(uint32_t),"");
 
 struct program {
 	int write_cursor;
+	int entrypoint_address;
 	union pword* op_arr;
 	// be careful about grabbing references to op_arr; arrput may change the
 	// pointer (realloc), and both the compiler and comptime VM may write new
@@ -274,7 +311,8 @@ struct program {
 	// writing another part? feels "a bit fucked" but it should work as long as
 	// you don't grab references?)
 	struct location* pc_to_location_arr;
-	int entrypoint_address;
+	struct thicchar* static_string_store_arr;
+	struct val_str* static_string_arr;
 	// TODO: compile error?
 };
 
@@ -282,9 +320,12 @@ struct program {
 struct compiler {
 	struct location location, error_location;
 	enum tokenizer_state tokenizer_state;
+	size_t string_offset;
 	int comment_depth;
-	char word_buf[WORD_BUF_CAP];
 	int word_size;
+	char* word_buf;
+	char* error_message;
+
 	struct {
 		char* key;
 		struct word_info value;
@@ -299,10 +340,6 @@ struct compiler {
 
 	unsigned has_error :1;
 	unsigned prefix_comptime :1;
-
-	// fields below this line are kept (not cleared) between compilations. new
-	// fields must be explicitly added to and handled in compiler_begin().
-	char* error_message;
 };
 
 static inline int val2int(struct val v, int* out_int)
@@ -339,6 +376,10 @@ struct val_map {
 	}* map;
 };
 
+struct val_str {
+	int32_t offset,length;
+};
+
 struct val_i32arr {
 	int32_t* arr;
 };
@@ -347,10 +388,13 @@ struct val_f32arr {
 	float* arr;
 };
 
+
 struct valstore {
 	// arr arr!
 	struct val_arr*    arr_arr;
 	struct val_map*    map_arr;
+	struct thicchar*   char_store_arr;
+	struct val_str*    str_arr;
 	struct val_i32arr* i32arr_arr;
 	struct val_f32arr* f32arr_arr;
 };
@@ -360,7 +404,7 @@ struct vmie {
 	//  - globals?
 	//  - instruction counter/remaining (for cycle limiting)
 	struct val* stack_arr;
-	uint32_t* rstack_arr;
+	uint32_t*   rstack_arr;
 	struct val* global_arr;
 	int pc, error_pc;
 	struct program* program;
@@ -423,6 +467,8 @@ static void program_init(struct program* p)
 	memset(p, 0, sizeof *p);
 	arrinit(p->op_arr, &system_allocator);
 	arrinit(p->pc_to_location_arr, &system_allocator);
+	arrinit(p->static_string_store_arr, &system_allocator);
+	arrinit(p->static_string_arr, &system_allocator);
 	program_reset(p);
 }
 
@@ -478,18 +524,12 @@ static void program_sew(struct program* p, int sew_depth, int type, union pword 
 		const int d2 = sew_depth-1;
 		assert(d2 >= 0);
 		switch (type) {
-		case VAL_INT: {
-			program_sew(p, d2, VAL_INT, PWORD_INT(OP_INT_LITERAL), loc);
-			program_sew(p, d2, VAL_INT, pword, loc);
-			program_sew(p, d2, VAL_INT, PWORD_INT(OP_SEW), loc);
-		}	break;
-		case VAL_FLOAT: {
-			program_sew(p, d2, VAL_INT,   PWORD_INT(OP_FLOAT_LITERAL), loc);
-			program_sew(p, d2, VAL_FLOAT, pword, loc);
-			program_sew(p, d2, VAL_INT,   PWORD_INT(OP_SEW), loc);
-		}	break;
+		case VAL_INT:   program_sew(p, d2, VAL_INT, PWORD_INT(OP_INT_LITERAL), loc); break;
+		case VAL_FLOAT: program_sew(p, d2, VAL_INT, PWORD_INT(OP_FLOAT_LITERAL), loc); break;
 		default: assert(!"bad/unhandled type");
 		}
+		program_sew(p, d2, type   , pword, loc);
+		program_sew(p, d2, VAL_INT, PWORD_INT(OP_SEW), loc);
 	}
 }
 
@@ -548,6 +588,7 @@ static void* scratch_alloc(size_t sz)
 
 static void vmie_init(struct vmie* vm, struct program* program)
 {
+	//reset_our_scratch();
 	memset(vm, 0, sizeof *vm);
 	arrinit(vm->stack_arr, get_scratch_allocator());
 	arrinit(vm->rstack_arr, get_scratch_allocator());
@@ -571,6 +612,38 @@ static void vmie_init(struct vmie* vm, struct program* program)
 		vmie_errorf(vm, "no sew target (called outside of comptime vm?)"); \
 		return -1; \
 	}
+
+static struct thicchar* resolve_string(struct vmie* vm, int id, int* out_length)
+{
+	struct thicchar* tc = NULL;
+	struct val_str vs = {0};
+	if (id < 0) {
+		const int index = -1-id;
+		struct program* prg = vm->program;
+		vs = arrchkget(prg->static_string_arr, index);
+		tc = arrchkptr(prg->static_string_store_arr, vs.offset);
+		(void)arrchkptr(prg->static_string_store_arr, vs.offset+vs.length-1);
+	} else {
+		struct valstore* vals = &vm->vals;
+		vs = arrchkget(vals->str_arr, id);
+		tc = arrchkptr(vals->char_store_arr, vs.offset);
+		(void)arrchkptr(vals->char_store_arr, vs.offset+vs.length-1);
+	}
+	if (out_length) *out_length = vs.length;
+	return tc;
+}
+
+static void vmie_pop_str(struct vmie* vm, struct thicchar** out_str, int* out_length)
+{
+	const struct val v = arrpop(vm->stack_arr);
+	if (v.type != VAL_STR) {
+		vmie_errorf(vm, "expected VAL_STR (%d), got type %d", VAL_STR, v.type);
+		return;
+	}
+	const int id = v.i32;
+	struct thicchar* s = resolve_string(vm, id, out_length);
+	if (out_str) *out_str = s;
+}
 
 
 static struct val_arr* vmie_pop_arr(struct vmie* vm)
@@ -619,6 +692,32 @@ static void vmie_dup(struct vmie* vm)
 {
 	struct val v = vmie_top(vm);
 	arrput(vm->stack_arr, v);
+}
+
+static int32_t vmie_alloc_string(struct vmie* vm, size_t len, struct thicchar** out_str)
+{
+	struct valstore* vals = &vm->vals;
+
+	if (vals->char_store_arr == NULL) {
+		arrinit(vals->char_store_arr, get_scratch_allocator());
+	}
+	if (vals->str_arr == NULL) {
+		arrinit(vals->str_arr, get_scratch_allocator());
+	}
+	assert(vals->char_store_arr != NULL);
+	assert(vals->str_arr != NULL);
+
+	const int off = arrlen(vals->char_store_arr);
+	struct thicchar* str = arraddnptr(vals->char_store_arr, len);
+	if (out_str) *out_str = str;
+
+	const int32_t id = arrlen(vals->str_arr);
+	arrput(vals->str_arr, ((struct val_str){
+		.offset = off,
+		.length = len,
+	}));
+
+	return id;
 }
 
 int vmie_run2(struct vmie* vm)
@@ -673,8 +772,16 @@ int vmie_run2(struct vmie* vm)
 			}	break;
 
 			case OP_FLOAT_LITERAL: {
-				if (TRACE) printf(" FLITERAL %f\n", pw->f32);
+				if (TRACE) printf(" FLOAT_LITERAL %f\n", pw->f32);
 				arrput(vm->stack_arr, floatval(pw->f32));
+			}	break;
+
+			case OP_STR_LITERAL: {
+				if (TRACE) printf(" STR_LITERAL %d\n", pw->i32);
+				arrput(vm->stack_arr, ((struct val) {
+					.type = VAL_STR,
+					.i32 = pw->i32,
+				}));
 			}	break;
 
 			default:
@@ -707,6 +814,7 @@ int vmie_run2(struct vmie* vm)
 			case OP_JSR:
 			case OP_INT_LITERAL:
 			case OP_FLOAT_LITERAL:
+			case OP_STR_LITERAL:
 				set_num_defer = 1;
 				break;
 
@@ -771,6 +879,13 @@ int vmie_run2(struct vmie* vm)
 					for (int i=0; i<n; ++i) p0[i] = p1[stb_mod_eucl(i+d,n)];
 					arrsetlen(vm->stack_arr, n0);
 				}
+			}	break;
+
+			case OP_EQ: {
+				VMIE_OP_STACK_GUARD(2)
+				const struct val va = arrpop(vm->stack_arr);
+				const struct val vb = arrpop(vm->stack_arr);
+				arrput(vm->stack_arr, intval((va.i32==vb.i32)));
 			}	break;
 
 			case OP_TYPEOF: { // (x -- typeof(x))
@@ -939,6 +1054,30 @@ int vmie_run2(struct vmie* vm)
 			DEF_IUNOP( OP_ILNOT , (!a)   )
 			DEF_IUNOP( OP_IABS  , abs(a) )
 			#undef DEF_IUNOP
+
+			// = strings ====================
+
+			case OP_STRLEN: {
+				VMIE_OP_STACK_GUARD(1)
+				int len=0;
+				vmie_pop_str(vm, NULL, &len);
+				arrput(vm->stack_arr, intval(len));
+			}	break;
+
+			case OP_STRJOIN: {
+				VMIE_OP_STACK_GUARD(2)
+				int len0=0,len1=0;
+				struct thicchar* str0=NULL;
+				struct thicchar* str1=NULL;
+				vmie_pop_str(vm, &str1, &len1);
+				vmie_pop_str(vm, &str0, &len0);
+				struct thicchar* str2=NULL;
+				const int32_t id = vmie_alloc_string(vm, len0+len1, &str2);
+				assert(id >= 0);
+				memcpy(str2, str0, len0*sizeof(*str0));
+				memcpy(str2+len0, str1, len1*sizeof(*str0));
+				arrput(vm->stack_arr, typeval(VAL_STR, id));
+			}	break;
 
 			// = arrays =====================
 
@@ -1506,7 +1645,6 @@ static void compiler_push_word(struct compiler* cm, const char* word)
 	}
 }
 
-
 static void compiler_push_char(struct compiler* cm, struct thicchar ch)
 {
 	if (cm->has_error) return;
@@ -1527,8 +1665,9 @@ static void compiler_push_char(struct compiler* cm, struct thicchar ch)
 			cm->tokenizer_state = COMMENT;
 			cm->comment_depth = 1;
 			is_break = 1;
-		} else if ((c=='"') || (c=='\\')) {
+		} else if (c=='"') {
 			cm->tokenizer_state = STRING;
+			cm->string_offset = arrlen(cm->program->static_string_store_arr);
 			is_break = 1;
 		} else if (c <= ' ') {
 			is_break = 1;
@@ -1544,7 +1683,7 @@ static void compiler_push_char(struct compiler* cm, struct thicchar ch)
 			// reserve enough space for:
 			//  string nul terminator (1)
 			//  max utf8 sequence length (4)
-			const int max_word_size = (WORD_BUF_CAP - 1 - UTF8_MAX_SIZE);
+			const int max_word_size = (WORD_BUF_SIZE - 1 - UTF8_MAX_SIZE);
 			if (cm->word_size > max_word_size) {
 				compiler_errorf(cm, "word too long (exceeded %d bytes)\n", max_word_size);
 				return;
@@ -1553,13 +1692,31 @@ static void compiler_push_char(struct compiler* cm, struct thicchar ch)
 			char* p1;
 			p1 = utf8_encode(p0, c);
 			cm->word_size += (p1-p0);
-			assert(cm->word_size < WORD_BUF_CAP);
+			assert(cm->word_size < WORD_BUF_SIZE);
 			cm->word_buf[cm->word_size] = 0; // word_buf is MAX_WORD_SIZE+1 long
 		}
 	}	break;
 
 	case STRING: {
-		assert(!"TODO");
+		if (c == '"') {
+			const int id = -1-arrlen(cm->program->static_string_arr);
+			arrput(cm->program->static_string_arr, ((struct val_str) {
+				.offset = cm->string_offset,
+				.length = (arrlen(cm->program->static_string_store_arr) - cm->string_offset),
+			}));
+			compiler_push_opcode(cm, OP_STR_LITERAL);
+			compiler_push_int(cm, id);
+			cm->tokenizer_state = WORD;
+		} else if (c == '\\') {
+			cm->tokenizer_state = STRING_ESCAPE;
+		} else {
+			arrput(cm->program->static_string_store_arr, ch);
+		}
+	}	break;
+
+	case STRING_ESCAPE: {
+		arrput(cm->program->static_string_store_arr, ch);
+		cm->tokenizer_state = STRING;
 	}	break;
 
 	case COMMENT: {
@@ -1630,6 +1787,8 @@ static void compiler_begin(struct compiler* cm, struct program* program)
 	memset(cm, 0, sizeof *cm);
 	cm->error_message = scratch_alloc(MAX_ERROR_MESSAGE_SIZE);
 	cm->error_message[0] = 0;
+
+	cm->word_buf = scratch_alloc(sizeof(*cm->word_buf)*WORD_BUF_SIZE);
 
 	assert(cm->word_lut == NULL);
 	sh_new_strdup_with_context(cm->word_lut, get_scratch_allocator());
@@ -1871,6 +2030,13 @@ void vmie_dump_val(struct val v)
 	switch (v.type) {
 	case VAL_INT:    fprintf(out, "%di", v.i32); break;
 	case VAL_FLOAT:  fprintf(out, "%f", v.f32); break;
+	case VAL_STR:
+		fprintf(out, "\"");
+		int n;
+		struct thicchar* tc = resolve_string(&tlg.vmie, v.i32, &n);
+		for (int i=0; i<n; ++i) fprintf(out, "%c", tc[i].codepoint); // XXX no utf8 support
+		fprintf(out, "\" (%d)", n);
+		break;
 	default:         fprintf(out, "%uT:%u(?)", v.type, (uint32_t)v.i32); break;
 	}
 }

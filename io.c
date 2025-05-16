@@ -27,9 +27,7 @@ struct iosub {
 
 struct file {
 	int fd;
-	int64_t size;
-	//_Atomic(int64_t) size;
-	// XXX probably want it atomic if io_get_size() is implemented
+	_Atomic(int64_t) size;
 };
 
 struct files {
@@ -103,6 +101,14 @@ static void submit(struct io* io, struct iosub sub)
 	io->subs[head & get_index_mask(io)] = sub;
 	++head;
 	atomic_store(&io->sub_head, head);
+}
+
+int64_t io_get_size(struct io* io, union io64 handle)
+{
+	struct files* f = &io->files;
+	assert((0 <= handle.i64) && (handle.i64 < f->cap));
+	struct file* ff = &f->files[handle.i64];
+	return atomic_load(&ff->size);
 }
 
 void io_open(struct io* io, struct iosub_open sub)
@@ -233,7 +239,6 @@ static void spool(struct io* io)
 			const struct iosub_pwrite* s = &sub->pwrite;
 			struct file* f = get_file(io, (int)s->handle.i64);
 			int64_t offset = s->offset;
-			if (offset == IO_APPEND) offset = f->size;
 			assert((0L <= offset) && (offset <= f->size));
 			const int64_t size_increase = (offset + s->size) - f->size;
 			const int e = pwrite(f->fd, s->data, s->size, offset);
