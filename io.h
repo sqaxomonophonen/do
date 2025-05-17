@@ -49,7 +49,8 @@ struct iosub_pwrite {
 	int64_t offset;
 
 	unsigned      no_reply :1;
-	// backend will not reply with an io_event (suggested use: log files)
+	// backend will not reply with an io_event. suggested for log files. has no
+	// effect with io_pwrite_now().
 
 	unsigned      free_data_after_use :1;
 	// backend must `free(data)` after use (transfer of ownership)
@@ -72,16 +73,29 @@ struct io_event {
 	union io64 result;
 };
 
-// sync
 int64_t io_get_size(struct io*, union io64 handle);
 
+
+// functions with `_now()` suffix are "synchronous" / "blocking": they execute
+// the operation immediately and returns the result. they work exactly like
+// their asynchronous counterparts except they don't return the echo value
+// (rather pointness), only the union io64 result.
+
 void io_open(struct io*, struct iosub_open);
-// io_event.result is negative on error (IOERR_*), otherwise a handle
+union io64 io_open_now(struct io*, struct iosub_open);
+// result is negative on error (IOERR_*), otherwise a handle
 
 void io_close(struct io*, struct iosub_close);
+union io64 io_close_now(struct io*, struct iosub_close);
+// result is negative on error (IOERR_*), otherwise 0
 
 void io_pwrite(struct io*, struct iosub_pwrite);
+union io64 io_pwrite_now(struct io*, struct iosub_pwrite);
+// result is negative on error (IOERR_*), otherwise 0
+
 void io_pread(struct io*, struct iosub_pread);
+union io64 io_pread_now(struct io*, struct iosub_pread);
+// result is negative on error (IOERR_*), otherwise 0
 
 int io_poll(struct io*, struct io_event*);
 

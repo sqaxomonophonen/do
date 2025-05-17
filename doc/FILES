@@ -32,7 +32,7 @@ utility code
   allocator.c - allocator interface and allocators
   leb128.h    - LEB128 variable-length integer codec
   utf8.c      - UTF-8 code
-  io.c        - Async I/O for files (TODO: UDP/tcp)
+  io.c        - I/O for files (TODO: UDP/TCP)
   path.c      - File path handling
   sep2dconv.c - separable 2D convolution (used for HDR blur)
   see also: stb_ds_sysalloc.h

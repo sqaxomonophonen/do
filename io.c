@@ -111,26 +111,6 @@ int64_t io_get_size(struct io* io, union io64 handle)
 	return atomic_load(&ff->size);
 }
 
-void io_open(struct io* io, struct iosub_open sub)
-{
-	submit(io, ((struct iosub){.type=OPEN, .open=sub}));
-}
-
-void io_close(struct io* io, struct iosub_close sub)
-{
-	submit(io, ((struct iosub){.type=CLOSE, .close=sub}));
-}
-
-void io_pwrite(struct io* io, struct iosub_pwrite sub)
-{
-	submit(io, ((struct iosub){.type=PWRITE, .pwrite=sub}));
-}
-
-void io_pread(struct io* io, struct iosub_pread sub)
-{
-	submit(io, ((struct iosub){.type=PREAD, .pread=sub}));
-}
-
 struct io* io_new(int ringbuf_size_log2, int max_num_files)
 {
 	assert((0 <= ringbuf_size_log2) && (ringbuf_size_log2 <= MAX_SIZE_LOG2));
@@ -171,6 +151,113 @@ static void complete(struct io* io, union io64 echo, union io64 result)
 
 static union io64 io64i(int i) { return ((union io64){.i64=i}); }
 
+void io_open(struct io* io, struct iosub_open sub)
+{
+	submit(io, ((struct iosub){.type=OPEN, .open=sub}));
+}
+
+union io64 io_open_now(struct io* io, struct iosub_open sub)
+{
+	int flags = 0;
+	if (sub.read && !sub.write) {
+		flags |= O_RDONLY;
+	} else if (!sub.read && sub.write) {
+		flags |= O_WRONLY;
+	} else if (sub.read && sub.write) {
+		flags |= O_RDWR;
+	} else {
+		assert(!"open() submission has neither read nor write flag?");
+	}
+	int mode = 0;
+	if (sub.create) {
+		assert(sub.write && "create without write");
+		flags |= O_CREAT;
+		mode = 0666;
+	}
+	int fd = open(sub.path, flags, mode);
+	int64_t r = 0;
+	if (fd == -1) {
+		switch (errno) {
+		case ENOENT : r=IOERR_NOT_FOUND   ; break;
+		case EACCES : r=IOERR_NOT_ALLOWED ; break;
+		default     : r=IOERR_ERROR       ; break;
+		}
+	} else {
+		const int64_t size = lseek(fd, 0, SEEK_END);
+		if (size == -1) {
+			close(fd);
+			r=IOERR_ERROR;
+		} else {
+			r = alloc_file(io);
+			if (r == -1) {
+				close(fd);
+				r = IOERR_TOO_MANY_FILES;
+			} else {
+				assert((0 <= r) && (r <= INT_MAX));
+				struct file* file = get_file(io, (int)r);
+				file->fd = fd;
+				file->size = size;
+			}
+		}
+	}
+	if (sub.free_path_after_use) free(sub.path);
+	return io64i(r);
+}
+
+void io_close(struct io* io, struct iosub_close sub)
+{
+	submit(io, ((struct iosub){.type=CLOSE, .close=sub}));
+}
+
+union io64 io_close_now(struct io* io, struct iosub_close sub)
+{
+	struct file* f = get_file(io, (int)sub.handle.i64);
+	return io64i(close(f->fd) == -1 ? IOERR_ERROR : 0);
+}
+
+void io_pwrite(struct io* io, struct iosub_pwrite sub)
+{
+	submit(io, ((struct iosub){.type=PWRITE, .pwrite=sub}));
+}
+
+union io64 io_pwrite_now(struct io* io, struct iosub_pwrite sub)
+{
+	struct file* f = get_file(io, (int)sub.handle.i64);
+	int64_t offset = sub.offset;
+	assert((0L <= offset) && (offset <= f->size));
+	const int64_t size_increase = (offset + sub.size) - f->size;
+	const int e = pwrite(f->fd, sub.data, sub.size, offset);
+	if (size_increase > 0) f->size += size_increase;
+	if (sub.free_data_after_use) {
+		free(sub.data);
+	}
+	int64_t r=0;
+	if (e == -1) {
+		r = IOERR_ERROR;
+	} else {
+		if (sub.sync) {
+			const int e2 = fdatasync(f->fd);
+			if (e2 == -1) r = IOERR_ERROR;
+		}
+	}
+	return io64i(r);
+}
+
+void io_pread(struct io* io, struct iosub_pread sub)
+{
+	submit(io, ((struct iosub){.type=PREAD, .pread=sub}));
+}
+
+union io64 io_pread_now(struct io* io, struct iosub_pread sub)
+{
+	struct file* f = get_file(io, (int)sub.handle.i64);
+	assert((sub.data != NULL) && "should we have alloc on demand here?");
+	const int e = pread(f->fd, sub.data, sub.size, sub.offset);
+	int64_t r=0;
+	if (e == -1) r = IOERR_ERROR;
+	return io64i(r);
+}
+
 static void spool(struct io* io)
 {
 	const unsigned index_mask = get_index_mask(io);
@@ -181,91 +268,24 @@ static void spool(struct io* io)
 		switch (sub->type) {
 
 		case OPEN: {
-			const struct iosub_open* s = &sub->open;
-			int flags = 0;
-			if (s->read && !s->write) {
-				flags |= O_RDONLY;
-			} else if (!s->read && s->write) {
-				flags |= O_WRONLY;
-			} else if (s->read && s->write) {
-				flags |= O_RDWR;
-			} else {
-				assert(!"open() submission has neither read nor write flag?");
-			}
-			int mode = 0;
-			if (s->create) {
-				assert(s->write && "create without write");
-				flags |= O_CREAT;
-				mode = 0666;
-			}
-			int fd = open(s->path, flags, mode);
-			int64_t r = 0;
-			if (fd == -1) {
-				switch (errno) {
-				case ENOENT : r=IOERR_NOT_FOUND   ; break;
-				case EACCES : r=IOERR_NOT_ALLOWED ; break;
-				default     : r=IOERR_ERROR       ; break;
-				}
-			} else {
-				const int64_t size = lseek(fd, 0, SEEK_END);
-				if (size == -1) {
-					close(fd);
-					r=IOERR_ERROR;
-				} else {
-					r = alloc_file(io);
-					if (r == -1) {
-						close(fd);
-						r = IOERR_TOO_MANY_FILES;
-					} else {
-						assert((0 <= r) && (r <= INT_MAX));
-						struct file* file = get_file(io, (int)r);
-						file->fd = fd;
-						file->size = size;
-					}
-				}
-			}
-			complete(io, s->echo, io64i(r));
-			if (s->free_path_after_use) free(s->path);
+			struct iosub_open s = sub->open;
+			complete(io, s.echo, io_open_now(io, s));
 		}	break;
 
 		case CLOSE: {
-			const struct iosub_close* s = &sub->close;
-			struct file* f = get_file(io, (int)s->handle.i64);
-			const int r = close(f->fd);
-			complete(io, s->echo, io64i(r == -1 ? IOERR_ERROR : 0));
+			struct iosub_close s = sub->close;
+			complete(io, s.echo, io_close_now(io, s));
 		}	break;
 
 		case PWRITE: {
-			const struct iosub_pwrite* s = &sub->pwrite;
-			struct file* f = get_file(io, (int)s->handle.i64);
-			int64_t offset = s->offset;
-			assert((0L <= offset) && (offset <= f->size));
-			const int64_t size_increase = (offset + s->size) - f->size;
-			const int e = pwrite(f->fd, s->data, s->size, offset);
-			if (size_increase > 0) f->size += size_increase;
-			if (s->free_data_after_use) {
-				free(s->data);
-			}
-			int64_t r=0;
-			if (e == -1) {
-				r = IOERR_ERROR;
-			} else {
-				if (s->sync) {
-					const int e2 = fdatasync(f->fd);
-					if (e2 == -1) r = IOERR_ERROR;
-				}
-			}
-			if (!s->no_reply) complete(io, s->echo, io64i(r));
+			struct iosub_pwrite s = sub->pwrite;
+			union io64 r = io_pwrite_now(io, s);
+			if (!s.no_reply) complete(io, s.echo, r);
 		}	break;
 
 		case PREAD: {
-			const struct iosub_pread* s = &sub->pread;
-			struct file* f = get_file(io, (int)s->handle.i64);
-			assert((s->data != NULL) && "should we have alloc on demand here?");
-			const int e = pread(f->fd, s->data, s->size, s->offset);
-			int64_t r=0;
-			if (e == -1) r = IOERR_ERROR;
-			complete(io, s->echo, io64i(r));
+			struct iosub_pread s = sub->pread;
+			complete(io, s.echo, io_pread_now(io, s));
 		}	break;
 
 		default: assert(!"unhandled opcode");
@@ -274,6 +294,7 @@ static void spool(struct io* io)
 	}
 	atomic_store(&io->sub_tail, tail);
 }
+
 
 void io_run(void)
 {

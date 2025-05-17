@@ -162,8 +162,8 @@
 	/* ====================================================================== */ \
 	X( STRLEN    , "strlen"   , "Get length of string (s -- strlen(s))") \
 	X( STRCOMPS  , NULL       , "Get string components at index (s i:32 -- s[i].codepoint s[i].rgbx)") \
-	X( STRENC    , NULL       , "Encode string from [codepoint,rgbx] component pairs on stack ( ... n:i32 -- s )") \
-	X( STRJOIN   , "strjoin"  , "Join strings (a b -- strjoin(a,b))") \
+	X( STRNEW    , NULL       , "Make string from [codepoint,rgbx] component pairs on stack ( ... n:i32 -- s )") \
+	X( STRCATN   , NULL       , "Pop n:i32 and join n strings e.g. ( a b 2i -- strjoin(a,b) )") \
 	/* ====================================================================== */ \
 	/* convention (not sure if it's a good one): if it only reads the array */ \
 	/* it consumes the array; if it mutates the array, the array is the */ \
@@ -325,7 +325,6 @@ struct compiler {
 	int word_size;
 	char* word_buf;
 	char* error_message;
-
 	struct {
 		char* key;
 		struct word_info value;
@@ -615,19 +614,23 @@ static void vmie_init(struct vmie* vm, struct program* program)
 
 static struct thicchar* resolve_string(struct vmie* vm, int id, int* out_length)
 {
-	struct thicchar* tc = NULL;
 	struct val_str vs = {0};
+	struct thicchar* tc = NULL;
 	if (id < 0) {
 		const int index = -1-id;
 		struct program* prg = vm->program;
 		vs = arrchkget(prg->static_string_arr, index);
-		tc = arrchkptr(prg->static_string_store_arr, vs.offset);
-		(void)arrchkptr(prg->static_string_store_arr, vs.offset+vs.length-1);
+		if (vs.length > 0) {
+			tc = arrchkptr(prg->static_string_store_arr, vs.offset);
+			(void)arrchkptr(prg->static_string_store_arr, vs.offset+vs.length-1);
+		}
 	} else {
 		struct valstore* vals = &vm->vals;
 		vs = arrchkget(vals->str_arr, id);
-		tc = arrchkptr(vals->char_store_arr, vs.offset);
-		(void)arrchkptr(vals->char_store_arr, vs.offset+vs.length-1);
+		if (vs.length > 0) {
+			tc = arrchkptr(vals->char_store_arr, vs.offset);
+			(void)arrchkptr(vals->char_store_arr, vs.offset+vs.length-1);
+		}
 	}
 	if (out_length) *out_length = vs.length;
 	return tc;
@@ -642,7 +645,7 @@ static int vmie_pop_str(struct vmie* vm, struct thicchar** out_str, int* out_len
 	}
 	const int id = v.i32;
 	struct thicchar* s = resolve_string(vm, id, out_length);
-	if (out_str) *out_str = s;
+	if (s && out_str) *out_str = s;
 	return 1;
 }
 
@@ -681,12 +684,25 @@ static struct val_map* vmie_pop_map(struct vmie* vm)
 	return &vals->map_arr[id];
 }
 
-
-struct val vmie_top(struct vmie* vm)
+static void vmie_dropn(struct vmie* vm, int n)
 {
+	const int len0 = arrlen(vm->stack_arr);
+	assert(n <= len0);
+	const int len1 = len0-n;
+	arrsetlen(vm->stack_arr, len1);
+}
+
+static struct val vmie_peek(struct vmie* vm, int index_from_top)
+{
+	assert(index_from_top >= 0);
 	const int n = arrlen(vm->stack_arr);
-	assert(n>0);
-	return vm->stack_arr[n-1];
+	assert(n > index_from_top);
+	return vm->stack_arr[n - 1 - index_from_top];
+}
+
+static struct val vmie_top(struct vmie* vm)
+{
+	return vmie_peek(vm, 0);
 }
 
 static void vmie_dup(struct vmie* vm)
@@ -1110,14 +1126,18 @@ int vmie_run2(struct vmie* vm)
 				arrput(vm->stack_arr, intval(thicchar_rgbx_to_i32(tc)));
 			}	break;
 
-			case OP_STRENC: {
+			case OP_STRNEW: {
 				VMIE_OP_STACK_GUARD(1)
 				const int n = arrpop(vm->stack_arr).i32;
 				if (n < 0) {
-					vmie_errorf(vm, "STRENC got negative string length (%d)", n);
+					vmie_errorf(vm, "STRNEW got negative string length (%d)", n);
 					return -1;
 				}
-				VMIE_OP_STACK_GUARD(n*2) // XXX produces a slightly misleading error message on fail?
+				const int n2 = 2*n;
+				if (STACK_HEIGHT() < n2) {
+					vmie_errorf(vm, "%di STRNEW expected at least %d elements on stack", n, n2);
+					return -1;
+				}
 				struct thicchar* str=NULL;
 				const int32_t id = vmie_alloc_string(vm, n, &str);
 				for (int i=(n-1); i>=0; --i) {
@@ -1128,18 +1148,48 @@ int vmie_run2(struct vmie* vm)
 				arrput(vm->stack_arr, typeval(VAL_STR, id));
 			}	break;
 
-			case OP_STRJOIN: {
-				VMIE_OP_STACK_GUARD(2)
-				int len0=0,len1=0;
-				struct thicchar* str0=NULL;
-				struct thicchar* str1=NULL;
-				if (!vmie_pop_str(vm, &str1, &len1)) return -1;
-				if (!vmie_pop_str(vm, &str0, &len0)) return -1;
-				struct thicchar* str2=NULL;
-				const int32_t id = vmie_alloc_string(vm, len0+len1, &str2);
+			case OP_STRCATN: {
+				VMIE_OP_STACK_GUARD(1)
+				const int n = arrpop(vm->stack_arr).i32;
+				if (n < 0) {
+					vmie_errorf(vm, "STRCATN got negative count (%d)", n);
+					return -1;
+				}
+				if (STACK_HEIGHT() < n) {
+					vmie_errorf(vm, "%di STRCATN expected at least %d elements on stack", n, n);
+					return -1;
+				}
+
+				int len_total = 0;
+				for (int i=0; i<n; ++i) {
+					struct val v = vmie_peek(vm, i);
+					if (v.type != VAL_STR) {
+						vmie_errorf(vm, "%di STRCATN: element %d from top is not a string", n, i);
+						return -1;
+					}
+					int len=0;
+					resolve_string(vm, v.i32, &len);
+					len_total += len;
+				}
+
+				struct thicchar* str=NULL;
+				const int32_t id = vmie_alloc_string(vm, len_total, &str);
+				assert(str != NULL);
+				struct thicchar* wp = str;
 				assert(id >= 0);
-				memcpy(str2, str0, len0*sizeof(*str0));
-				memcpy(str2+len0, str1, len1*sizeof(*str0));
+				for (int i=(n-1); i>=0; --i) {
+					struct val v = vmie_peek(vm, i);
+					assert(v.type == VAL_STR);
+					int len=0;
+					struct thicchar* src = resolve_string(vm, v.i32, &len);
+					if (len > 0) {
+						memcpy(wp, src, len*sizeof(*wp));
+						wp += len;
+					}
+				}
+
+				vmie_dropn(vm, n);
+
 				arrput(vm->stack_arr, typeval(VAL_STR, id));
 			}	break;
 
@@ -1325,7 +1375,7 @@ int vmie_run2(struct vmie* vm)
 					program_push(vm->sew_target, PWORD_FLOAT(lit.f32));
 					break;
 				default:
-					vmie_errorf(vm, "SEW_LIT on unhandled type (%d)", lit.type);
+					vmie_errorf(vm, "SEW-LIT on unhandled type (%d)", lit.type);
 					return -1;
 				}
 			}	break;
@@ -1479,6 +1529,11 @@ static int compiler_push_float(struct compiler* cm, float v)
 }
 
 #define LAMBDA0 (-(1<<20))
+
+static inline struct vmie* get_comptime_vm(void)
+{
+	return &tlg.vmie;
+}
 
 static void compiler_push_word(struct compiler* cm, const char* word)
 {
@@ -1654,7 +1709,15 @@ static void compiler_push_word(struct compiler* cm, const char* word)
 			if (!cm->prefix_comptime) {
 				compiler_push_opcode(cm, do_encode_opcode);
 			} else {
-				assert(!"TODO execute comptime'd opcode");
+				assert(cm->sew_depth == 0);
+				struct program* prg = cm->program;
+				const int addr = arrlen(prg->op_arr);
+				assert(prg->write_cursor == addr);
+				compiler_push_opcode(cm, do_encode_opcode);
+				compiler_push_opcode(cm, OP_RETURN);
+				vmie_call(get_comptime_vm(), addr);
+				arrsetlen(prg->op_arr, addr);
+				prg->write_cursor = addr;
 				cm->prefix_comptime = 0;
 			}
 		}
@@ -1667,15 +1730,20 @@ static void compiler_push_word(struct compiler* cm, const char* word)
 			case OP_FLOAT_LITERAL: compiler_push_float(cm, number.f32); break;
 			default: assert(!"unhandled case");
 			}
-		} else {
-			assert(cm->sew_depth == 0);
-			assert(!"TODO execute comptime'd literal");
+		} else { // cm->prefix_comptime
+			assert((cm->sew_depth == 0) && "comptime in <# ... #> not expected");
+			struct vmie* vm = get_comptime_vm();
+			switch (number.type) {
+			case OP_INT_LITERAL:   arrput(vm->stack_arr, intval(number.i32));   break;
+			case OP_FLOAT_LITERAL: arrput(vm->stack_arr, floatval(number.f32)); break;
+			default: assert(!"unhandled case");
+			}
 			cm->prefix_comptime = 0;
 		}
 	} else if ((wi = shgeti(cm->word_lut, word)) >= 0) {
 		struct word_info* info = &cm->word_lut[wi].value;
-		if (info->is_comptime) {
-			struct vmie* vm = &tlg.vmie;
+		if (info->is_comptime || cm->prefix_comptime) {
+			struct vmie* vm = get_comptime_vm();
 			assert(!vm->has_error);
 			assert(vm->sew_target != NULL);
 			vmie_call(vm, info->addr);
@@ -1696,9 +1764,6 @@ static void compiler_push_word(struct compiler* cm, const char* word)
 			} else {
 				assert(!"unreachable");
 			}
-		} else if (cm->prefix_comptime) {
-			assert(!"TODO execute comptime'd user word");
-			cm->prefix_comptime = 0;
 		} else {
 			assert(!"unreachable");
 		}
@@ -1768,8 +1833,15 @@ static void compiler_push_char(struct compiler* cm, struct thicchar ch)
 				.offset = cm->string_offset,
 				.length = (arrlen(cm->program->static_string_store_arr) - cm->string_offset),
 			}));
-			compiler_push_opcode(cm, OP_STR_LITERAL);
-			compiler_push_int(cm, id);
+			if (!cm->prefix_comptime) {
+				compiler_push_opcode(cm, OP_STR_LITERAL);
+				compiler_push_int(cm, id);
+			} else {
+				assert((cm->sew_depth == 0) && "comptime in <# ... #> not expected");
+				struct vmie* vm = get_comptime_vm();
+				arrput(vm->stack_arr, typeval(VAL_STR, id));
+				cm->prefix_comptime = 0;
+			}
 			cm->tokenizer_state = WORD;
 		} else if (c == '\\') {
 			cm->tokenizer_state = STRING_ESCAPE;
@@ -1920,7 +1992,7 @@ static void compiler_end(struct compiler* cm)
 	// itself should explain what the problem is (since the VM doesn't even
 	// know what if/else/then looks like it can't say "looks like invalid
 	// if/else/then syntax")
-	struct vmie* vm = &tlg.vmie;
+	struct vmie* vm = get_comptime_vm();
 	const size_t comptime_stack_height = arrlen(vm->stack_arr);
 	const size_t comptime_rstack_height = arrlen(vm->rstack_arr);
 	if ((comptime_stack_height != 0) || (comptime_rstack_height != 0)) {
@@ -2278,10 +2350,22 @@ void mie_selftest(void)
 	#undef TAG
 }
 
-// TODO
-//  - stack traces (just knowing location at pc isn't enough)... does this mean
-//    rstack ought to be "sealed"?
+// TODO stack traces (just knowing location at pc isn't enough)... does this
+// mean rstack ought to be "sealed"?
 
+// FIXME comptime issues/thoughts
+//  - complex values can't be exported/sewn from comptime. it would technically
+//    be possible to sew any value by writing a program that reconstructs the
+//    value. e.g. strings can be made from integer literals and STRNEW calls,
+//    but I don't know it it's a good idea.
+//  - globals stored during comptime aren't available at runtime.
+//  - related: operator overloading doesn't work inside comptime because it
+//    relies on globals being properly set up (currently only set up in the
+//    runtime)
+//  - it doesn't seem like the worst idea to migrate all globals from comptime
+//    to runtime. you could argue that you risk migrating comptime-only globals
+//    too, but we already do that with comptime words (no dead code elimination
+//    yet)
 
 // TODO I think I'd like a debugging feature where I can see the stack height
 // at the beginning of each line. that means I should inject some code at the

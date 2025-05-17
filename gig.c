@@ -179,6 +179,23 @@ void gig_thread_tick(void)
 	}
 }
 
+static void host_dir(const char* dir)
+{
+	char pathbuf[1<<14];
+	path_join(pathbuf, sizeof pathbuf, dir, "DO_JOURNAL", NULL);
+	union io64 r = io_open_now(g.io, ((struct iosub_open){
+		.path = pathbuf,
+		.read = 1,
+		.write = 1,
+		.create = 1,
+	}));
+	if (r.i64 == -1) assert(!"TODO handle dir not found?");
+	assert(r.i64 >= 0);
+	int64_t sz = io_get_size(g.io, r);
+	printf("r=%ld sz=%zd\n", r.i64, sz); // XXX
+	// TODO
+}
+
 void gig_init(void)
 {
 	//ringbuf_init(&g.command_ringbuf, 16);
@@ -206,16 +223,7 @@ void gig_init(void)
 	g.io = io_new(10, 128);
 
 	if (arg_dir) {
-		char pathbuf[1<<14];
-		path_join(pathbuf, sizeof pathbuf, arg_dir, "DO_JOURNAL", NULL);
-		io_open(g.io, ((struct iosub_open){
-			.echo = { .i64 = 42 },
-			.path = strdup(pathbuf),
-			.read = 1,
-			.write = 1,
-			.create = 1,
-			.free_path_after_use = 1,
-		}));
+		host_dir(arg_dir);
 	}
 
 	#if 0
