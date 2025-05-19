@@ -29,8 +29,6 @@ left. negative <d> to the right )
 : swap  2i  1i ROTATE   ( a b -- b a )   ;
 : rot   3i  1i ROTATE ( a b c -- b c a ) ;
 : tro   3i -1i ROTATE ( a b c -- c a b ) ;
-: ROLL      1i ROTATE ; ( defined as UPPERCASE because input "MUST" be integer )
-: LORR     -1i ROTATE ;
 
 : dup2     ( a b -- a b a b )
   swap dup ( a b -- b a a )
@@ -84,11 +82,13 @@ floating-point numbers: )
 
 ( and so on )
 
-: roll        i32 ROLL ;
-: lorr        i32 LORR ;
+: roll        i32  1i ROTATE ; ( rotate n stack elements one step left  )
+: llor        i32 -1i ROTATE ; ( rotate n stack elements one step right )
+
 : strcomps    i32 STRCOMPS ; ( string index -- codepoint rgbx )
 : strnew      i32 STRNEW   ; ( n×[codepoint rgbx] n -- string )
-: strcatn     i32 STRCATN ;
+: strcatn     i32 STRCATN  ; ( concat n strings on stack ( ... n -- str ) )
+
 : set-global  i32 SET-GLOBAL ; ( value index -- ) (sets global[index]=value)
 : get-global  i32 GET-GLOBAL ; ( index -- global[index] )
 

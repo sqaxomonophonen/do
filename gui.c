@@ -1153,7 +1153,7 @@ static void handle_editor_input(struct pane* pane)
 			case KEY_ARROW_RIGHT : mimf("0Ml"); break;
 			case KEY_ARROW_UP    : mimf("0Mk"); break;
 			case KEY_ARROW_DOWN  : mimf("0Mj"); break;
-			case KEY_ENTER       : mimf("0i\n\033"); break;
+			case KEY_ENTER       : mimf("0,1i\n"); break;
 			case KEY_BACKSPACE   : mimf("0X"); break;
 			case KEY_DELETE      : mimf("0x"); break;
 			//case KEY_ESCAPE       mimf("\033"); break;
@@ -1176,9 +1176,8 @@ static void handle_editor_input(struct pane* pane)
 	const int num_chars = utf8_strlen(g.text_buffer_arr);
 	if (num_chars > 0) {
 		const int num_bytes = arrlen(g.text_buffer_arr) - 1;
-		mimf("0i");
+		mimf("0,%di", num_bytes);
 		for (int i=0; i<num_bytes; ++i) mim8(arrchkget(g.text_buffer_arr, i));
-		mimf("\033");
 	}
 	end_mim();
 }

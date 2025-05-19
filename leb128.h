@@ -98,6 +98,24 @@ LEB128_DEFINE_FOR_TYPE(
 	/*NAME=*/int64)
 
 
+static void leb128_buf_write_fn(uint8_t v, void* userdata)
+{
+	uint8_t** bufp = userdata;
+	*((*bufp)++) = v;
+}
+
+static inline uint8_t* leb128_encode_int_buf(uint8_t* buf, int value)
+{
+	leb128_encode_int(leb128_buf_write_fn, &buf, value);
+	return buf;
+}
+
+static inline uint8_t* leb128_encode_int64_buf(uint8_t* buf, int64_t value)
+{
+	leb128_encode_int64(leb128_buf_write_fn, &buf, value);
+	return buf;
+}
+
 #define LEB128_H
 #endif
 

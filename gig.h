@@ -77,9 +77,10 @@ struct caret {
 
 struct mim_state {
 	int artist_id, session_id;
-	// [artist_id,session_id] is the "unique mim state key"
+	// mim state is keyed by [artist_id,session_id]
 	int document_id;
 	struct caret* caret_arr;
+	uint8_t color[4];
 	// (update mim_state_copy() when adding arr-fields here)
 };
 
@@ -193,6 +194,17 @@ void mim8(uint8_t v);
 void get_state_and_doc(int session_id, struct mim_state** out_mim_state, struct document** out_doc);
 
 int get_my_artist_id(void);
+
+static inline uint32_t decode_u32(const uint8_t** pp)
+{
+	uint32_t val =
+		  (*pp[0])
+		+ (*pp[1] << 8)
+		+ (*pp[2] << 16)
+		+ (*pp[3] << 24);
+	(*pp) += 4;
+	return val;
+}
 
 #define GIG_H
 #endif

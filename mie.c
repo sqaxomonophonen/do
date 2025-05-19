@@ -3,15 +3,26 @@
 //  - see built-in word definitions near top of this file
 //  - copious use of macros, including "X macros". search for e.g. BINOP for
 //    how binary operators (like `a+b`/`a b +`) are implemented with macros
-//  - compilation and program execution (vmie) uses "scratch memory" to
-//    simplify memory mangement. this implies that 1) you can have "complex
-//    lifetimes" without worrying about memory leaks because you don't need to
-//    free individual allocations (in fact, the scratch allocator's fn_free()
-//    is a no-op) and, 2) memory allocation is very fast (see scratch_realloc()
-//    in allocator.c; O(1) although upsizing realloc()s do a O(N) memcpy()).
-//    since we don't want resource-heavy and/or long-running compilations
-//    and/or executions in a live-coding environment, scratch memory seems like
-//    a good fit.
+
+// the vm (vmie) and the compiler (which also runs a compile-time vmie) uses a
+// "scratch allocator" (aka "arena allocator") which does a couple of things:
+//  - it lets in the memory corruption bugs from hell,.. but hear me out!
+//  - it lets you code as if you had a garbage collector when it comes to
+//    temporary memory
+//  - it can (TODO) very likely be used to implement simple/fast compiler/vm
+//    savestates and restores, each with a single memcpy() ("skipping stdlib")
+
+// memory corruption may occur when a "temporary allocation" (see:
+// scratch_alloc() / get_scratch_allocator()) is used after a
+// free_all_our_scratch_allocations()-call, after which the same memory region
+// can be allocated again. ouch!
+
+// the compiler and vm(/vmie) state is global, but thread local, i.e. you have
+// one instance of them per thread. this is because compilation plus program
+// execution should always feel instant (<20ms?); it's not designed for
+// long-running programs, so there's no point in having more than one instance
+// per thread at that timescale. it also means we only need one scratch
+// allocator per thread.
 
 #include <stdio.h> // XXX remove me eventually?
 #include <string.h>
@@ -35,8 +46,8 @@
 
 // the following "X macros" (it's a thing; look it up!) define built-in words
 // and VM ops, and take (ENUM,STR,DOC) "arguments":
-//  - ENUM: enum identifier for the word (ops also get an "OP_"-prefix)
-//  - STR: string name; pass NULL to use the string representation of ENUM;
+//  - ENUM: enum identifier for the word (ops also get an "OP_"-prefix) - STR:
+//  string name; pass NULL to use the string representation of ENUM;
 //    pass "" if the word cannot be used directly from the source.
 //  - DOC: short documentation of the word/op
 
@@ -87,132 +98,131 @@
 // be lowercased since that "namespace" is reserved for typesafe words (so
 // "pick" can work with both i32 and f32 indices, but "PICK" assumes i32
 // without checking)
+// new column <#MIN> is the minimum stack height required by the op
 #define LIST_OF_OP_WORDS \
-	/*<ENUM>      <STR>       <DOC> */ \
+	/*<ENUM>      <STR>        <#MIN>  <DOC> */ \
 	/* ====================================================================== */ \
-	X( NOP        , NULL         , "No operation ( -- )") \
-	X( HALT       , "halt"       , "Halt execution with an error") \
-	X( RETURN     , "return"     , "Return from subroutine [returnaddr -- ]") \
-	X( DROP       , "drop"       , "Remove top element from stack (x --)") \
-	X( PICK       , NULL         , "Pop n:i32, duplicate nth stack value from top (n -- stack[-1-n])") \
-	X( ROTATE     , NULL         , "Pop d:i32, then n:i32, then rotate n elements d places left") \
-	X( EQ         , "=="         , "Equals (x y -- x==y)") \
-	X( TYPEOF     , "typeof"     , "Get type (x -- typeof(x))") \
-	X( CAST       , NULL         , "Set type (x T -- T(x))") \
-	X( HERE       , "here"       , "Push current instruction pointer to stack (-- ip)") \
-	X( JMPI       , NULL         , "Pop address:i32 from stack => indirect jump (address -- )" ) \
-	X( JSRI       , NULL         , "Pop address:i32 from stack => indirect jump-to-subroutine (address --)" ) \
-	X( F2I        , "F>I"        , "Pop a:f32, push after conversion to i32 (a:f32 -- i)") \
-	X( I2F        , "I>F"        , "Pop a:i32, push after conversion to f32 (a:i32 -- f)") \
-	X( SET_GLOBAL , "SET-GLOBAL" , "Pop index:i32, then value, set globals[index]=value (value index --)") \
-	X( GET_GLOBAL , "GET-GLOBAL" , "Pop index:i32, push globals[index] (index -- globals[index])") \
+	X( NOP        , NULL         , 0 , "No operation ( -- )") \
+	X( HALT       , "halt"       , 0 , "Halt execution with an optional error string") \
+	X( RETURN     , "return"     , 0 , "Return from subroutine [returnaddr -- ]") \
+	X( DROP       , "drop"       , 1 , "Remove top element from stack (x --)") \
+	X( PICK       , NULL         , 1 , "Pop n:i32, duplicate nth stack value from top (n -- stack[-1-n])") \
+	X( ROTATE     , NULL         , 2 , "Pop d:i32, then n:i32, then rotate n elements d places left") \
+	X( EQ         , "=="         , 2 , "Equals (x y -- x==y)") \
+	X( TYPEOF     , "typeof"     , 1 , "Get type (x -- typeof(x))") \
+	X( CAST       , NULL         , 2 , "Set type (x T -- T(x))") \
+	X( HERE       , "here"       , 0 , "Push current instruction pointer to stack (-- ip)") \
+	X( JMPI       , NULL         , 1 , "Pop address:i32 from stack => indirect jump (address -- )" ) \
+	X( JSRI       , NULL         , 1 , "Pop address:i32 from stack => indirect jump-to-subroutine (address --)" ) \
+	X( F2I        , "F>I"        , 1 , "Pop a:f32, push after conversion to i32 (a:f32 -- i)") \
+	X( I2F        , "I>F"        , 1 , "Pop a:i32, push after conversion to f32 (a:i32 -- f)") \
+	X( SET_GLOBAL , "SET-GLOBAL" , 2 , "Pop index:i32, then value, set globals[index]=value (value index --)") \
+	X( GET_GLOBAL , "GET-GLOBAL" , 1 , "Pop index:i32, push globals[index] (index -- globals[index])") \
 	/* ====================================================================== */ \
 	/* All inputs are x:f32/y:f32 (bitwise cast to f32) */ \
-	X( FADD      , "F+"       , "Floating-point add (x y -- x+y)") \
-	X( FNEG      , "F~"       , "Floating-point negate (x -- -x)") \
-	X( FMUL      , "F*"       , "Floating-point multiply (x y -- x*y)") \
-	X( FMOD      , "F%"       , "Floating-point remainder/modulus (x y -- x%y)") \
-	X( FINV      , "F1/"      , "Floating-point reciprocal (x -- 1/x)") \
-	X( FDIV      , "F/"       , "Floating-point division (x y -- x/y)") \
-	X( FCOS      , NULL       , "(x -- cos(x))") \
-	X( FSIN      , NULL       , "(x -- sin(x))") \
-	X( FTAN      , NULL       , "(x -- tan(x))") \
-	X( FACOS     , NULL       , "(x -- acos(x))") \
-	X( FASIN     , NULL       , "(x -- asin(x))") \
-	X( FATAN     , NULL       , "(x -- atan(x))") \
-	X( FATAN2    , NULL       , "(x y -- atan2(x,y))") \
-	X( FEXP      , NULL       , "(x -- exp(x))") \
-	X( FLOG      , NULL       , "(x -- log(x))") \
-	X( FPOW      , NULL       , "(x y -- pow(x,y))") \
-	X( FSQRT     , NULL       , "(x -- sqrt(x))") \
-	X( FFLOOR    , NULL       , "(x -- floor(x))") \
-	X( FCEIL     , NULL       , "(x -- ceil(x))") \
-	X( FROUND    , NULL       , "(x -- round(x))") \
-	X( FABS      , NULL       , "(x -- abs(x))") \
-	X( FLT       , "F<"       , "Floating-point less than (x y -- x<y)") \
-	X( FLE       , "F<="      , "Floating-point less than or equal (x y -- x<=y)") \
-	X( FNE       , "F!="      , "Floating-point not equal (x y -- x!=y)") \
-	X( FEQ       , "F="       , "Floating-point equal (x y -- x=y)") \
-	X( FGE       , "F>="      , "Floating-point greater than or equal (x y -- x>=y)") \
-	X( FGT       , "F>"       , "Floating-point greater than (x y -- x>y)") \
+	X( FADD      , "F+"       , 2 , "Floating-point add (x y -- x+y)") \
+	X( FNEG      , "F~"       , 1 , "Floating-point negate (x -- -x)") \
+	X( FMUL      , "F*"       , 2 , "Floating-point multiply (x y -- x*y)") \
+	X( FMOD      , "F%"       , 2 , "Floating-point remainder/modulus (x y -- x%y)") \
+	X( FINV      , "F1/"      , 1 , "Floating-point reciprocal (x -- 1/x)") \
+	X( FDIV      , "F/"       , 2 , "Floating-point division (x y -- x/y)") \
+	X( FCOS      , NULL       , 1 , "(x -- cos(x))") \
+	X( FSIN      , NULL       , 1 , "(x -- sin(x))") \
+	X( FTAN      , NULL       , 1 , "(x -- tan(x))") \
+	X( FACOS     , NULL       , 1 , "(x -- acos(x))") \
+	X( FASIN     , NULL       , 1 , "(x -- asin(x))") \
+	X( FATAN     , NULL       , 1 , "(x -- atan(x))") \
+	X( FATAN2    , NULL       , 2 , "(x y -- atan2(x,y))") \
+	X( FEXP      , NULL       , 1 , "(x -- exp(x))") \
+	X( FLOG      , NULL       , 1 , "(x -- log(x))") \
+	X( FPOW      , NULL       , 2 , "(x y -- pow(x,y))") \
+	X( FSQRT     , NULL       , 1 , "(x -- sqrt(x))") \
+	X( FFLOOR    , NULL       , 1 , "(x -- floor(x))") \
+	X( FCEIL     , NULL       , 1 , "(x -- ceil(x))") \
+	X( FROUND    , NULL       , 1 , "(x -- round(x))") \
+	X( FABS      , NULL       , 1 , "(x -- abs(x))") \
+	X( FLT       , "F<"       , 2 , "Floating-point less than (x y -- x<y)") \
+	X( FLE       , "F<="      , 2 , "Floating-point less than or equal (x y -- x<=y)") \
+	X( FNE       , "F!="      , 2 , "Floating-point not equal (x y -- x!=y)") \
+	X( FEQ       , "F="       , 2 , "Floating-point equal (x y -- x=y)") \
+	X( FGE       , "F>="      , 2 , "Floating-point greater than or equal (x y -- x>=y)") \
+	X( FGT       , "F>"       , 2 , "Floating-point greater than (x y -- x>y)") \
 	/* ====================================================================== */ \
 	/* All inputs are x:i32/y:i32 (bitwise cast to i32) */ \
-	X( IADD      , "I+"       , "Integer add (x y -- x+y)") \
-	X( INEG      , "I~"       , "Integer negate (x -- -x)") \
-	X( IMUL      , "I*"       , "Integer multiply (x y -- x*y)") \
-	X( IDIV      , "I/"       , "Integer euclidean division (x y -- x//y)") \
-	X( IMOD      , "I%"       , "Integer euclidean remainder/modulus (x y -- x%y)") \
-	X( IABS      , NULL       , "(x -- abs(x))") \
-	X( IBAND     , "I&"       , "Integer bitwise AND (x y -- x&y)") \
-	X( IBOR      , "I|"       , "Integer bitwise OR (x y -- x|y)") \
-	X( IBXOR     , "I^"       , "Integer bitwise XOR (x y -- x^y)") \
-	X( IBNOT     , "I!"       , "Integer bitwise NOT (x -- !y)") \
-	X( ILAND     , "I&&"      , "Integer logical AND (x y -- x&&y)") \
-	X( ILOR      , "I||"      , "Integer logical OR (x y -- x||y)") \
-	X( ILXOR     , "I^^"      , "Integer logical XOR (x y -- x^^y)") \
-	X( ILNOT     , "I!!"      , "Integer logical NOT (x -- !!y)") \
-	X( ILSHIFT   , "I<<"      , "Integer shift left (x y -- x<<y)") \
-	X( IRSHIFT   , "I>>"      , "Integer shift right (x y -- x>>y)") \
-	X( ILT       , "I<"       , "Integer less than (x y -- x<y)") \
-	X( ILE       , "I<="      , "Integer less than or equal (x y -- x<=y)") \
-	X( IEQ       , "I="       , "Integer equal (x y -- x=y)") \
-	X( INE       , "I!="      , "Integer equal (x y -- x!=y)") \
-	X( IGE       , "I>="      , "Integer greater than or equal (x y -- x>=y)") \
-	X( IGT       , "I>"       , "Integer greater than (x y -- x>y)") \
+	X( IADD      , "I+"       , 2 , "Integer add (x y -- x+y)") \
+	X( INEG      , "I~"       , 1 , "Integer negate (x -- -x)") \
+	X( IMUL      , "I*"       , 2 , "Integer multiply (x y -- x*y)") \
+	X( IDIV      , "I/"       , 2 , "Integer euclidean division (x y -- x//y)") \
+	X( IMOD      , "I%"       , 2 , "Integer euclidean remainder/modulus (x y -- x%y)") \
+	X( IABS      , NULL       , 1 , "(x -- abs(x))") \
+	X( IBAND     , "I&"       , 2 , "Integer bitwise AND (x y -- x&y)") \
+	X( IBOR      , "I|"       , 2 , "Integer bitwise OR (x y -- x|y)") \
+	X( IBXOR     , "I^"       , 2 , "Integer bitwise XOR (x y -- x^y)") \
+	X( IBNOT     , "I!"       , 2 , "Integer bitwise NOT (x -- !y)") \
+	X( ILAND     , "I&&"      , 2 , "Integer logical AND (x y -- x&&y)") \
+	X( ILOR      , "I||"      , 2 , "Integer logical OR (x y -- x||y)") \
+	X( ILXOR     , "I^^"      , 2 , "Integer logical XOR (x y -- x^^y)") \
+	X( ILNOT     , "I!!"      , 1 , "Integer logical NOT (x -- !!y)") \
+	X( ILSHIFT   , "I<<"      , 2 , "Integer shift left (x y -- x<<y)") \
+	X( IRSHIFT   , "I>>"      , 2 , "Integer shift right (x y -- x>>y)") \
+	X( ILT       , "I<"       , 2 , "Integer less than (x y -- x<y)") \
+	X( ILE       , "I<="      , 2 , "Integer less than or equal (x y -- x<=y)") \
+	X( IEQ       , "I="       , 2 , "Integer equal (x y -- x=y)") \
+	X( INE       , "I!="      , 2 , "Integer equal (x y -- x!=y)") \
+	X( IGE       , "I>="      , 2 , "Integer greater than or equal (x y -- x>=y)") \
+	X( IGT       , "I>"       , 2 , "Integer greater than (x y -- x>y)") \
 	/* ====================================================================== */ \
-	X( STRLEN    , "strlen"   , "Get length of string (s -- strlen(s))") \
-	X( STRCOMPS  , NULL       , "Get string components at index (s i:32 -- s[i].codepoint s[i].rgbx)") \
-	X( STRNEW    , NULL       , "Make string from [codepoint,rgbx] component pairs on stack ( ... n:i32 -- s )") \
-	X( STRCATN   , NULL       , "Pop n:i32 and join n strings e.g. ( a b 2i -- strjoin(a,b) )") \
+	X( STRLEN    , "strlen"   , 1 , "Get length of string (s -- strlen(s))") \
+	X( STRCOMPS  , NULL       , 2 , "Get string components at index (s i:32 -- s[i].codepoint s[i].rgbx)") \
+	X( STRNEW    , NULL       , 1 , "Make string from [codepoint,rgbx] component pairs on stack ( ... n:i32 -- s )") \
+	X( STRCATN   , NULL       , 1 , "Pop n:i32 and join n strings e.g. ( a b 2i -- strjoin(a,b) )") \
 	/* ====================================================================== */ \
 	/* convention (not sure if it's a good one): if it only reads the array */ \
 	/* it consumes the array; if it mutates the array, the array is the */ \
 	/* bottommost return value */ \
-	X( ARRNEW    , "arrnew"   , "Create array (-- arr)") \
-	X( ARRLEN    , "arrlen"   , "Length of array (arr -- len(arr))") \
-	X( ARRGET    , NULL       , "Get element (arr i -- arr[i])") \
-	X( ARRPUT    , "arrput"   , "Append item to array ([x] y -- [x,y])") \
-	X( ARRPOP    , "arrpop"   , "Get top element ([x,y] -- [x] y)") \
-	X( ARRSET    , NULL       , "Set element (arr index value -- arr)") \
-	X( ARRJOIN   , "arrjoin"  , "Join two arrays (arr1 arr2 -- arr1..arr2)") \
-	X( ARRSPLIT  , NULL       , "Split array at pivot (arr pivot -- arr[0:pivot] arr[pivot:])") \
+	X( ARRNEW    , "arrnew"   , 0 , "Create array (-- arr)") \
+	X( ARRLEN    , "arrlen"   , 1 , "Length of array (arr -- len(arr))") \
+	X( ARRGET    , NULL       , 2 , "Get element (arr i -- arr[i])") \
+	X( ARRPUT    , "arrput"   , 2 , "Append item to array ([x] y -- [x,y])") \
+	X( ARRPOP    , "arrpop"   , 1 , "Get top element ([x,y] -- [x] y)") \
+	X( ARRSET    , NULL       , 3 , "Set element (arr index value -- arr)") \
+	X( ARRJOIN   , "arrjoin"  , 2 , "Join two arrays (arr1 arr2 -- arr1..arr2)") \
+	/* FIXME convert ARRJOIN to ARRCATN modelled after STRCATN? */ \
+	X( ARRSPLIT  , NULL       , 2 , "Split array at pivot (arr pivot -- arr[0:pivot] arr[pivot:])") \
 	/* ====================================================================== */ \
-	X( MAPNEW    , "mapnew"   , "Create map (-- map)") \
-	X( MAPHAS    , "maphas"   , "Returns if key exists in map (map key -- exists?)") \
-	X( MAPGET    , "mapget"   , "Get value from map (map key -- value)") \
-	X( MAPSET    , "mapset"   , "Set value in map (map key value -- map)") \
-	X( MAPDEL    , "mapdel"   , "Delete key from map (map key -- map)") \
+	X( MAPNEW    , "mapnew"   , 0 , "Create map (-- map)") \
+	X( MAPHAS    , "maphas"   , 2 , "Returns if key exists in map (map key -- exists?)") \
+	X( MAPGET    , "mapget"   , 2 , "Get value from map (map key -- value)") \
+	X( MAPSET    , "mapset"   , 3 , "Set value in map (map key value -- map)") \
+	X( MAPDEL    , "mapdel"   , 2 , "Delete key from map (map key -- map)") \
 	/* ====================================================================== */ \
-	X( THERE         , "there"         , "Get PC outside of comptime (-- addr)") \
-	X( NAVIGATE      , "navigate"      , "Set PC outside of comptime (addr --)") \
-	X( SEW           , NULL            , "Write raw i32 or f32 outside of comptime (val --)") \
+	X( THERE         , "there"         , 0 , "Get PC outside of comptime (-- addr)") \
+	X( NAVIGATE      , "navigate"      , 1 , "Set PC outside of comptime (addr --)") \
+	X( SEW           , NULL            , 1 , "Write raw i32 or f32 outside of comptime (val --)") \
 	/* XXX should the following be stdlib stuff? */ \
-	X( SEW_JMP       , "SEW-JMP"       , "Write JMP outside of comptime (addr --)") \
-	X( SEW_JMP0      , "SEW-JMP0"      , "Write JMP0 outside of comptime (addr --)") \
-	X( SEW_JSR       , "SEW-JSR"       , "Write JSR outside of comptime (addr --)") \
-	X( SEW_ADDR      , "SEW-ADDR"      , "Write jump address outside of comptime (addr --)") \
-	X( SEW_LIT       , "SEW-LIT"       , "Write literal outside of comptime (lit --)") \
-	X( SEW_COLON     , "SEW-COLON"     , "Begin word def outside of comptime (name --)") \
-	X( SEW_SEMICOLON , "SEW-SEMICOLON" , "End word def outside of comptime") \
+	X( SEW_JMP       , "SEW-JMP"       , 1 , "Write JMP outside of comptime (addr --)") \
+	X( SEW_JMP0      , "SEW-JMP0"      , 1 , "Write JMP0 outside of comptime (addr --)") \
+	X( SEW_JSR       , "SEW-JSR"       , 1 , "Write JSR outside of comptime (addr --)") \
+	X( SEW_ADDR      , "SEW-ADDR"      , 1 , "Write jump address outside of comptime (addr --)") \
+	X( SEW_LIT       , "SEW-LIT"       , 1 , "Write literal outside of comptime (lit --)") \
+	X( SEW_COLON     , "SEW-COLON"     , 1 , "Begin word def outside of comptime (name --)") \
+	X( SEW_SEMICOLON , "SEW-SEMICOLON" , 0 , "End word def outside of comptime") \
 	/* ====================================================================== */
 
 
-#define LIST_OF_WORDS \
-	X(_NO_WORD_,"","") \
-	LIST_OF_SYNTAX_WORDS \
-	LIST_OF_OP_WORDS
-
-
 enum builtin_word {
-	#define X(E,_S,_D) E,
-	LIST_OF_WORDS
+	_NO_WORD_=0,
+	#define FIRST_WORD (_NO_WORD_ + 1)
+	#define X(E,...) E,
+	LIST_OF_SYNTAX_WORDS
+	LIST_OF_OP_WORDS
 	#undef X
 	_FIRST_USER_WORD_ // ids below this are built-in words
 };
 
 enum opcode {
 	// ops that have a corresponding word (1:1)
-	#define X(E,_S,_D) OP_##E,
+	#define X(E,_S,_N,_D) OP_##E,
 	LIST_OF_OP_WORDS
 	#undef X
 
@@ -236,7 +246,7 @@ static const char* get_opcode_str(enum opcode opcode)
 {
 	switch (opcode) {
 
-	#define X(E,_S,_D) case OP_##E: return #E;
+	#define X(E,_S,_N,_D) case OP_##E: return #E;
 	LIST_OF_OP_WORDS
 	#undef X
 
@@ -253,20 +263,34 @@ static const char* get_opcode_str(enum opcode opcode)
 	assert(!"unreachable");
 }
 
+static int get_opcode_minimum_stack_height(enum opcode opcode)
+{
+	switch (opcode) {
+
+	#define X(E,_S,N,_D) case OP_##E: return N;
+	LIST_OF_OP_WORDS
+	#undef X
+
+	default: return 0;
+
+	}
+	assert(!"unreachable");
+}
+
+
+
 static enum builtin_word match_builtin_word(const char* word)
 {
-	int i=0;
+	int i=FIRST_WORD;
 	// match word's S (string representation) if not null, else #E (enum as
 	// string)
-	#define X(E,S,_D) \
-	{ \
-		const char* s = S; \
-		const char* e = #E; \
-		const int is_marker = e[0]=='_'; \
-		if (!is_marker && strcmp(word,s!=NULL?s:e) == 0) return (enum builtin_word)i; \
-		++i; \
-	}
-	LIST_OF_WORDS
+	#define X(E,S,...) \
+		if (strcmp(word,S!=NULL?S:#E) == 0) { \
+			return (enum builtin_word)i; \
+		} \
+		++i;
+	LIST_OF_SYNTAX_WORDS
+	LIST_OF_OP_WORDS
 	#undef X
 	assert((i == _FIRST_USER_WORD_) && "something's not right");
 	return _NO_WORD_;
@@ -444,10 +468,10 @@ static inline struct allocator* get_scratch_allocator(void)
 	#endif
 }
 
-static void reset_our_scratch(void)
+static void free_all_our_scratch_allocations(void)
 {
 	#ifndef MIE_ONLY_SYSALLOC
-	reset_scratch(tlg.scratch_header);
+	free_all_scratch_allocations(tlg.scratch_header);
 	#endif
 }
 
@@ -587,7 +611,7 @@ static void* scratch_alloc(size_t sz)
 
 static void vmie_init(struct vmie* vm, struct program* program)
 {
-	//reset_our_scratch();
+	//free_all_our_scratch_allocations();
 	memset(vm, 0, sizeof *vm);
 	arrinit(vm->stack_arr, get_scratch_allocator());
 	arrinit(vm->rstack_arr, get_scratch_allocator());
@@ -597,14 +621,6 @@ static void vmie_init(struct vmie* vm, struct program* program)
 	vm->error_message = scratch_alloc(MAX_ERROR_MESSAGE_SIZE);
 	vm->error_message[0] = 0;
 }
-
-#define VMIE_STACK_GUARD(OP,N) \
-	if (STACK_HEIGHT() < (N)) { \
-		vmie_errorf(vm, "%s expected a minimum stack height of %d, but it was only %d", get_opcode_str(OP), (N), STACK_HEIGHT()); \
-		return -1; \
-	}
-
-#define VMIE_OP_STACK_GUARD(N) VMIE_STACK_GUARD(op,N)
 
 #define VMIE_SEW_GUARD \
 	if (vm->sew_target == NULL) { \
@@ -783,7 +799,13 @@ int vmie_run2(struct vmie* vm)
 
 			case OP_JMP0: {
 				if (TRACE) printf(" JMP pc %d->%d\n", pc, pw->u32);
-				VMIE_STACK_GUARD(deferred_op,1)
+				if (STACK_HEIGHT() < 1) {
+					vmie_errorf(vm,
+						"%s expected a minimum stack height of 1, but it was only %d",
+						get_opcode_str(deferred_op),
+						STACK_HEIGHT());
+					return -1;
+				}
 				const struct val v = arrpop(vm->stack_arr);
 				if ((v.type==VAL_INT && v.i32==0) || (v.type==VAL_FLOAT && v.f32==0.0f)) {
 					next_pc = pw->u32;
@@ -826,6 +848,17 @@ int vmie_run2(struct vmie* vm)
 
 			if (TRACE) printf("[%.4x] %.2x %s\n", pc, op, get_opcode_str(op));
 
+			const int opcode_minimum_stack_height = get_opcode_minimum_stack_height(op);
+
+			if (STACK_HEIGHT() < opcode_minimum_stack_height) {
+				vmie_errorf(vm,
+					"%s expected a minimum stack height of %d, but it was only %d",
+					get_opcode_str(op),
+					opcode_minimum_stack_height,
+					STACK_HEIGHT());
+				return -1;
+			}
+
 			switch (op) {
 
 			case OP_NOP: {
@@ -867,7 +900,6 @@ int vmie_run2(struct vmie* vm)
 
 			case OP_JMPI:
 			case OP_JSRI: {
-				VMIE_OP_STACK_GUARD(1)
 				const int32_t addr = arrpop(vm->stack_arr).i32;
 				if (op==OP_JSRI) {
 					arrput(vm->rstack_arr, (pc+1));
@@ -886,12 +918,10 @@ int vmie_run2(struct vmie* vm)
 
 
 			case OP_DROP: {
-				VMIE_OP_STACK_GUARD(1)
 				(void)arrpop(vm->stack_arr);
 			}	break;
 
 			case OP_PICK: {
-				VMIE_OP_STACK_GUARD(1)
 				struct val vi = arrpop(vm->stack_arr);
 				const int i = vi.i32;
 				if (i<0) {
@@ -908,7 +938,6 @@ int vmie_run2(struct vmie* vm)
 			}	break;
 
 			case OP_ROTATE: {
-				VMIE_OP_STACK_GUARD(2)
 				const struct val vd = arrpop(vm->stack_arr);
 				const struct val vn = arrpop(vm->stack_arr);
 				const int d=vd.i32; \
@@ -929,20 +958,17 @@ int vmie_run2(struct vmie* vm)
 			}	break;
 
 			case OP_EQ: {
-				VMIE_OP_STACK_GUARD(2)
 				const struct val va = arrpop(vm->stack_arr);
 				const struct val vb = arrpop(vm->stack_arr);
 				arrput(vm->stack_arr, intval((va.i32==vb.i32)));
 			}	break;
 
 			case OP_TYPEOF: { // (x -- typeof(x))
-				VMIE_OP_STACK_GUARD(1)
 				const struct val x = arrpop(vm->stack_arr);
 				arrput(vm->stack_arr, intval(x.type));
 			}	break;
 
 			case OP_CAST: { // (value T -- T(value))
-				VMIE_OP_STACK_GUARD(2)
 				const struct val T = arrpop(vm->stack_arr);
 				struct val value = arrpop(vm->stack_arr);
 				value.type = T.i32;
@@ -954,19 +980,16 @@ int vmie_run2(struct vmie* vm)
 			}	break;
 
 			case OP_I2F: {
-				VMIE_OP_STACK_GUARD(1)
 				const int v = arrpop(vm->stack_arr).i32;
 				arrput(vm->stack_arr, floatval(v));
 			}	break;
 
 			case OP_F2I: {
-				VMIE_OP_STACK_GUARD(1)
 				const float v = arrpop(vm->stack_arr).f32;
 				arrput(vm->stack_arr, intval((int)floorf(v)));
 			}	break;
 
 			case OP_SET_GLOBAL: {
-				VMIE_OP_STACK_GUARD(2)
 				const int index = arrpop(vm->stack_arr).i32;
 				const struct val value = arrpop(vm->stack_arr);
 				if (index < 0) {
@@ -986,7 +1009,6 @@ int vmie_run2(struct vmie* vm)
 			}	break;
 
 			case OP_GET_GLOBAL: {
-				VMIE_OP_STACK_GUARD(1)
 				const int index = arrpop(vm->stack_arr).i32;
 				const size_t n = arrlen(vm->global_arr);
 				if (!(0 <= index && index < n)) {
@@ -1001,7 +1023,6 @@ int vmie_run2(struct vmie* vm)
 
 			#define DEF_FBINOP(ENUM, TYPE, ASSIGN) \
 			case ENUM: { \
-				VMIE_OP_STACK_GUARD(2) \
 				const struct val vb = arrpop(vm->stack_arr); \
 				const struct val va = arrpop(vm->stack_arr); \
 				const float a=va.f32; \
@@ -1029,7 +1050,6 @@ int vmie_run2(struct vmie* vm)
 
 			#define DEF_FUNOP(ENUM, EXPR) \
 			case ENUM: { \
-				VMIE_OP_STACK_GUARD(1) \
 				const struct val va = arrpop(vm->stack_arr); \
 				const float a=va.f32; \
 				arrput(vm->stack_arr, ((struct val){ \
@@ -1058,7 +1078,6 @@ int vmie_run2(struct vmie* vm)
 
 			#define DEF_IBINOP(ENUM, EXPR) \
 			case ENUM: { \
-				VMIE_OP_STACK_GUARD(2) \
 				const struct val vb = arrpop(vm->stack_arr); \
 				const struct val va = arrpop(vm->stack_arr); \
 				const int32_t a=va.i32; \
@@ -1091,7 +1110,6 @@ int vmie_run2(struct vmie* vm)
 
 			#define DEF_IUNOP(ENUM, EXPR) \
 			case ENUM: { \
-				VMIE_OP_STACK_GUARD(1) \
 				const struct val va = arrpop(vm->stack_arr); \
 				const int32_t a=va.i32; \
 				arrput(vm->stack_arr, intval(EXPR)); \
@@ -1105,14 +1123,12 @@ int vmie_run2(struct vmie* vm)
 			// = strings ====================
 
 			case OP_STRLEN: {
-				VMIE_OP_STACK_GUARD(1)
 				int len=0;
 				if (!vmie_pop_str(vm, NULL, &len)) return -1;
 				arrput(vm->stack_arr, intval(len));
 			}	break;
 
 			case OP_STRCOMPS: {
-				VMIE_OP_STACK_GUARD(2)
 				const int index = arrpop(vm->stack_arr).i32;
 				struct thicchar* str=NULL;
 				int len=0;
@@ -1127,7 +1143,6 @@ int vmie_run2(struct vmie* vm)
 			}	break;
 
 			case OP_STRNEW: {
-				VMIE_OP_STACK_GUARD(1)
 				const int n = arrpop(vm->stack_arr).i32;
 				if (n < 0) {
 					vmie_errorf(vm, "STRNEW got negative string length (%d)", n);
@@ -1149,7 +1164,6 @@ int vmie_run2(struct vmie* vm)
 			}	break;
 
 			case OP_STRCATN: {
-				VMIE_OP_STACK_GUARD(1)
 				const int n = arrpop(vm->stack_arr).i32;
 				if (n < 0) {
 					vmie_errorf(vm, "STRCATN got negative count (%d)", n);
@@ -1208,14 +1222,12 @@ int vmie_run2(struct vmie* vm)
 			}	break;
 
 			case OP_ARRLEN: {
-				VMIE_OP_STACK_GUARD(1)
 				struct val_arr* arr = vmie_pop_arr(vm);
 				if (arr == NULL) return -1;
 				arrput(vm->stack_arr, intval(arrlen(arr->arr)));
 			}	break;
 
 			case OP_ARRPUT: {
-				VMIE_OP_STACK_GUARD(2)
 				const struct val v = arrpop(vm->stack_arr);
 				const struct val k = vmie_top(vm);
 				struct val_arr* arr = vmie_pop_arr(vm);
@@ -1225,7 +1237,6 @@ int vmie_run2(struct vmie* vm)
 			}	break;
 
 			case OP_ARRGET: {
-				VMIE_OP_STACK_GUARD(2)
 				const int32_t index = arrpop(vm->stack_arr).i32;
 				struct val_arr* arr = vmie_pop_arr(vm);
 				if (arr == NULL) return -1;
@@ -1296,7 +1307,6 @@ int vmie_run2(struct vmie* vm)
 			}	break;
 
 			case OP_NAVIGATE: {
-				VMIE_OP_STACK_GUARD(1)
 				VMIE_SEW_GUARD
 				const struct val v = arrpop(vm->stack_arr);
 				if (v.type != VAL_INT) {
@@ -1314,7 +1324,6 @@ int vmie_run2(struct vmie* vm)
 			}	break;
 
 			case OP_SEW: {
-				VMIE_OP_STACK_GUARD(1)
 				const struct val v = arrpop(vm->stack_arr);
 				VMIE_SEW_GUARD
 				switch (v.type) {
@@ -1329,7 +1338,6 @@ int vmie_run2(struct vmie* vm)
 			case OP_SEW_JMP0:
 			case OP_SEW_JMP:
 			case OP_SEW_JSR: {
-				VMIE_OP_STACK_GUARD(1)
 				const struct val addr = arrpop(vm->stack_arr);
 				VMIE_SEW_GUARD
 				int op2;
@@ -1344,7 +1352,6 @@ int vmie_run2(struct vmie* vm)
 			}	break;
 
 			case OP_SEW_ADDR: {
-				VMIE_OP_STACK_GUARD(1)
 				const struct val addr = arrpop(vm->stack_arr);
 				VMIE_SEW_GUARD
 				const int op2 = program_read_at(vm->sew_target, vm->sew_target->write_cursor++).i32;
@@ -1362,7 +1369,6 @@ int vmie_run2(struct vmie* vm)
 			}	break;
 
 			case OP_SEW_LIT: {
-				VMIE_OP_STACK_GUARD(1)
 				const struct val lit = arrpop(vm->stack_arr);
 				VMIE_SEW_GUARD
 				switch (lit.type) {
@@ -1698,7 +1704,9 @@ static void compiler_push_word(struct compiler* cm, const char* word)
 			--cm->sew_depth;
 		}	break;
 
-		#define X(E,_S,_D) case E: do_encode_opcode = OP_##E; break;
+		// XXX should we try to have the word/op enums overlap, so this
+		// conversion can be skipped?
+		#define X(E,_S,_N,_D) case E: do_encode_opcode = OP_##E; break;
 		LIST_OF_OP_WORDS
 		#undef X
 
@@ -1920,7 +1928,7 @@ static void compiler_begin(struct compiler* cm, struct program* program)
 	assert(tlg.currently_compiling == 0);
 	tlg.currently_compiling = 1;
 
-	reset_our_scratch();
+	free_all_our_scratch_allocations();
 
 	// clear cm, but keep some field(s)
 	memset(cm, 0, sizeof *cm);

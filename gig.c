@@ -154,6 +154,11 @@ static struct {
 	int using_session_id;
 	int in_mim;
 	struct io* io;
+	struct io_appender journal_appender;
+	struct io_bufread journal_bufread;
+	struct io_appender savestates_data_appender;
+	struct io_appender savestates_index_appender;
+	int64_t journal_timestamp_start;
 } g;
 
 #if 0
@@ -172,27 +177,160 @@ void gig_thread_tick(void)
 {
 	struct io_event ev;
 	while (io_poll(g.io, &ev)) {
-		printf("TODO EV echo=%ld r=%ld!\n", ev.echo.i64, ev.result.i64);
-		assert(ev.echo.i64 == 42);
-		const int64_t sz = io_get_size(g.io, ev.result);
-		printf("sz=%zd\n", sz);
+		if (io_appender_ack(&g.journal_appender, &ev)) continue;
+		printf("TODO EV echo=%d h=%d st=%d!\n", ev.echo.ia32, ev.handle, ev.status);
+		assert(ev.echo.ia32 == 42);
+		const int64_t sz = io_get_size(g.io, ev.handle);
+		printf("sz=%ld\n", sz);
 	}
+}
+
+static char* get_mim_buffer_top(void)
+{
+	arrsetmincap(g.mim_buffer_arr, arrlen(g.mim_buffer_arr) + STB_SPRINTF_MIN);
+	return (char*)g.mim_buffer_arr + arrlen(g.mim_buffer_arr);
+}
+
+static void mimsrc(uint8_t* src, size_t n)
+{
+	uint8_t* dst = arraddnptr(g.mim_buffer_arr, n);
+	memcpy(dst, src, n);
+	(void)get_mim_buffer_top();
+}
+
+static char* wrote_mim_cb(const char* buf, void* user, int len)
+{
+	arrsetlen(g.mim_buffer_arr, arrlen(g.mim_buffer_arr)+len);
+	return get_mim_buffer_top();
+}
+
+void mimf(const char* fmt, ...)
+{
+	assert(g.in_mim);
+	va_list va;
+	va_start(va, fmt);
+	stbsp_vsprintfcb(wrote_mim_cb, NULL, get_mim_buffer_top(), fmt, va);
+	va_end(va);
+}
+
+void mim8(uint8_t v)
+{
+	uint8_t* p = (uint8_t*)get_mim_buffer_top();
+	*p = v;
+	arrsetlen(g.mim_buffer_arr, arrlen(g.mim_buffer_arr)+1);
+}
+
+#define DOJO_MAGIC ("DOJO0001")
+#define DO_FORMAT_VERSION (1)
+#define SYNC (0xfa)
+
+static uint8_t bufread_fn(void* userdata)
+{
+	return io_bufread_next((struct io_bufread*)userdata);
+}
+
+static int64_t journal_read_leb128_i64(void)
+{
+	return leb128_decode_int64(bufread_fn, &g.journal_bufread);
+}
+
+static void journal_read_raw(void* data, size_t sz)
+{
+	io_bufread_read(&g.journal_bufread, data, sz);
+}
+
+static uint8_t journal_read_byte(void)
+{
+	return bufread_fn(&g.journal_bufread);
 }
 
 static void host_dir(const char* dir)
 {
 	char pathbuf[1<<14];
 	path_join(pathbuf, sizeof pathbuf, dir, "DO_JOURNAL", NULL);
-	union io64 r = io_open_now(g.io, ((struct iosub_open){
+	struct io_event ev = io_open_now(g.io, ((struct iosub_open){
 		.path = pathbuf,
 		.read = 1,
 		.write = 1,
 		.create = 1,
 	}));
-	if (r.i64 == -1) assert(!"TODO handle dir not found?");
-	assert(r.i64 >= 0);
-	int64_t sz = io_get_size(g.io, r);
-	printf("r=%ld sz=%zd\n", r.i64, sz); // XXX
+	if (ev.status < 0) assert(!"TODO handle dir not found?");
+	struct io_appender* a = &g.journal_appender;
+	io_appender_init(a, g.io, ev.handle, /*ringbuf_cap_log2=*/16, /*inflight_cap=*/8);
+	int64_t sz = io_get_size(g.io, ev.handle);
+	if (sz == 0) {
+		io_appender_write_raw(a, DOJO_MAGIC, strlen(DOJO_MAGIC));
+		io_appender_write_leb128(a, DO_FORMAT_VERSION);
+		// TODO epoch timestamp?
+		io_appender_flush_now(a);
+		g.journal_timestamp_start = get_nanoseconds();
+	} else {
+		uint8_t magic[8];
+		// XXX
+		assert("FIXME ERROR HANDLING" && (0 == io_pread_now(g.io, ((struct iosub_pread){
+			.handle = ev.handle,
+			.data = magic,
+			.size = 8,
+			.offset = 0,
+		}))));
+		assert("FIXME ERROR HANDLING" && (memcmp(magic, DOJO_MAGIC, 8) == 0)); // XXX
+
+		uint8_t buf[1<<12];
+		struct io_bufread* jbr = &g.journal_bufread;
+		memset(jbr, 0, sizeof *jbr);
+		jbr->io = g.io;
+		jbr->handle = ev.handle,
+		jbr->file_cursor = 8;
+		jbr->buf = buf;
+		jbr->bufsize = sizeof(buf);
+
+		const int64_t do_format_version = journal_read_leb128_i64();
+		assert((do_format_version == DO_FORMAT_VERSION) && "XXX error handling");
+
+		static uint8_t* mimbuf_arr = NULL;
+		while (!jbr->end_of_file) {
+			const uint8_t sync = journal_read_byte();
+			assert((sync == SYNC) && "XXX error handling");
+			const int64_t timestamp_us = journal_read_leb128_i64();
+			const int64_t artist_id = journal_read_leb128_i64();
+			const int64_t session_id = journal_read_leb128_i64();
+			const int64_t num_bytes = journal_read_leb128_i64();
+			#if 1
+			printf("%ld %ld %ld %ld\n",
+				timestamp_us,
+				artist_id,
+				session_id,
+				num_bytes);
+			#endif
+			arrsetlen(mimbuf_arr, num_bytes);
+			journal_read_raw(mimbuf_arr, num_bytes);
+			begin_mim(session_id);
+			mimsrc(mimbuf_arr, num_bytes);
+			end_mim();
+			assert(!"XXX end_mim() writes back to journal");
+		}
+
+		assert(!"TODO INIT FROM DISK");
+		#if 0
+		int64_t remaining = sz;
+		int64_t offset = 0;
+		while (remaining > 0) {
+			uint8_t buf[1<<12];
+			const size_t bufsz = sizeof(buf);
+			size_t rsize = (remaining > bufsz) ? bufsz : remaining;
+			assert(0 == io_pread_now(g.io, ((struct iosub_pread){
+				.handle = ev.handle,
+				.data = buf,
+				.size = rsize,
+				.offset = offset,
+			}))); // FIXME handle error
+			offset += rsize;
+			remaining -= rsize;
+		}
+		assert(remaining == 0);
+		assert(!"TODO INIT FROM DISK");
+		#endif
+	}
 	// TODO
 }
 
@@ -322,28 +460,49 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 	arrreset(number_stack_arr);
 
 	enum {
-		ESCAPE='\033',
+		COMMAND=1,
+		NUMBER,
+		INSERT_STRING,
+		INSERT_COLOR_STRING,
+		MOTION,
 	};
 
 	enum {
-		COMMAND=1,
-		NUMBER=2,
-		INSERT_STRING=3,
-		MOTION=4,
+		UTF8,
+		U32,
 	};
 
 	int mode = COMMAND;
+	int datamode = UTF8;
 	int previous_mode = -1;
 	int number=0, number_sign=0;
 	int push_chr = -1;
+	int string_bytes_remaining = 0;
 	int arg_tag = -1;
 	int arg_num = -1;
 	int motion_cmd = -1;
 
 	const int64_t now = get_nanoseconds();
 
+	int chr=0;
+	uint32_t u32val=0;
 	while ((push_chr>=0) || (remaining>0)) {
-		const int chr = (push_chr>=0) ? push_chr : utf8_decode(&p, &remaining);
+		const char* p0 = p;
+		if (datamode == UTF8) {
+			chr = (push_chr>=0) ? push_chr : utf8_decode(&p, &remaining);
+		} else if (datamode == U32) {
+			assert(push_chr == -1);
+			assert(remaining >= 4);
+			const uint8_t* p8 = (const uint8_t*)p;
+			u32val = decode_u32(&p8);
+			p = (const char*)p8;
+			remaining -= 4;
+			assert(!"TODO");
+		} else {
+			assert(!"unhandled datamode");
+		}
+		const char* p1 = p;
+		const int num_bytes = (p1-p0);
 		push_chr = -1;
 		if (chr == -1) {
 			mimerr("invalid UTF-8 input");
@@ -473,16 +632,23 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 					mode = MOTION;
 				}	break;
 
-				case 'i': {
-					if (num_args != 1) {
-						mimerr("command 'i' expected 1 argument; got %d", num_args);
+				case 'i':
+				case 'I': {
+					if (num_args != 2) {
+						mimerr("command '%c' expected 2 arguments; got %d", chr, num_args);
 						return 0;
 					}
+					assert(string_bytes_remaining == 0);
+					string_bytes_remaining = arrchkget(number_stack_arr, 1);
 					arg_tag = arrchkget(number_stack_arr, 0);
 					arrreset(number_stack_arr);
 
 					previous_mode = mode;
-					mode = INSERT_STRING;
+					switch (chr) {
+					case 'i': mode = INSERT_STRING; break;
+					case 'I': mode = INSERT_COLOR_STRING; break;
+					default: assert(!"unexpected chr");
+					}
 				}	break;
 
 				case 'X': // backspace
@@ -562,13 +728,25 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 			}
 		}	break;
 
-		case INSERT_STRING: {
-
-			if (chr == ESCAPE) {
-				arrreset(number_stack_arr);
-				assert(previous_mode == COMMAND);
-				mode = previous_mode;
+		case INSERT_STRING:
+		case INSERT_COLOR_STRING: {
+			int do_insert = 0;
+			int next_datamode = datamode;
+			if (mode == INSERT_STRING) {
+				assert(datamode == UTF8);
+				do_insert = 1;
+			} else if (mode == INSERT_COLOR_STRING) {
+				if (datamode == U32) {
+					do_insert = 1;
+					next_datamode = UTF8;
+				} else {
+					next_datamode = U32;
+				}
 			} else {
+				assert(!"unreachable");
+			}
+
+			if (do_insert) {
 				if (chr < ' ') {
 					switch (chr) {
 					case '\n':
@@ -580,6 +758,24 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 						return 0;
 					}
 				}
+
+				uint8_t r,g,b,x;
+				if (mode == INSERT_STRING) {
+					// insert with artist mim state color
+					r=ms->color[0];
+					g=ms->color[1];
+					b=ms->color[2];
+					x=ms->color[3];
+				} else if (mode == INSERT_COLOR_STRING) {
+					// insert with encoded color
+					r=(u32val    ) & 0xff,
+					g=(u32val>>8 ) & 0xff,
+					b=(u32val>>16) & 0xff,
+					x=(u32val>>24) & 0xff;
+				} else {
+					assert(!"unreachable");
+				}
+
 				for (int i=0; i<num_carets; ++i) {
 					struct caret* car = arrchkptr(ms->caret_arr, i);
 					if (car->tag != arg_tag) continue;
@@ -593,7 +789,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 					arrins(doc->fat_char_arr, off, ((struct fat_char){
 						.thicchar = {
 							.codepoint = chr,
-							// TODO color?
+							.color = {r,g,b,x},
 						},
 						.timestamp = now,
 						//.artist_id = get_my_artist_id(),
@@ -610,6 +806,19 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 					*anchor = *loc;
 				}
 			}
+
+			datamode = next_datamode;
+
+			assert(string_bytes_remaining > 0);
+			string_bytes_remaining -= num_bytes;
+			assert(string_bytes_remaining >= 0);
+			if (string_bytes_remaining == 0) {
+				assert(datamode == UTF8);
+				arrreset(number_stack_arr);
+				assert(previous_mode == COMMAND);
+				mode = previous_mode;
+			}
+
 		}	break;
 
 		case MOTION: {
@@ -763,6 +972,19 @@ void end_mim(void)
 	mim_state_copy(msr, &scratch_state);
 	document_copy(doc, &scratch_doc);
 
+	// XXX more assumptions that we are the host
+
+	struct io_appender* a = &g.journal_appender;
+	io_appender_write_raw(a, "\xfa", 1);
+	const int64_t journal_timestamp = (get_nanoseconds() - g.journal_timestamp_start)/1000LL;
+	io_appender_write_leb128(a, journal_timestamp);
+	io_appender_write_leb128(a, get_my_artist_id());
+	io_appender_write_leb128(a, g.using_session_id);
+	io_appender_write_leb128(a, num_bytes);
+	io_appender_write_raw(a, data, num_bytes);
+	io_appender_flush(a);
+
+
 	#if 0
 	uint8_t header[1<<8];
 	uint8_t* hp = header;
@@ -774,34 +996,6 @@ void end_mim(void)
 	ringbuf_writen(&g.command_ringbuf, data, num_bytes);
 	ringbuf_commit(&g.command_ringbuf);
 	#endif
-}
-
-static char* get_mim_buffer_top(void)
-{
-	arrsetmincap(g.mim_buffer_arr, arrlen(g.mim_buffer_arr) + STB_SPRINTF_MIN);
-	return (char*)g.mim_buffer_arr + arrlen(g.mim_buffer_arr);
-}
-
-static char* wrote_mim_cb(const char* buf, void* user, int len)
-{
-	arrsetlen(g.mim_buffer_arr, arrlen(g.mim_buffer_arr)+len);
-	return get_mim_buffer_top();
-}
-
-void mimf(const char* fmt, ...)
-{
-	assert(g.in_mim);
-	va_list va;
-	va_start(va, fmt);
-	stbsp_vsprintfcb(wrote_mim_cb, NULL, get_mim_buffer_top(), fmt, va);
-	va_end(va);
-}
-
-void mim8(uint8_t v)
-{
-	uint8_t* p = (uint8_t*)get_mim_buffer_top();
-	*p = v;
-	arrsetlen(g.mim_buffer_arr, arrlen(g.mim_buffer_arr)+1);
 }
 
 void gig_selftest(void)
