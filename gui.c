@@ -1245,10 +1245,10 @@ static void draw_code_pane(struct pane* pane)
 			const int d1 = location_line_distance(loc1 , &it.location);
 			if (min_y_dist < 0 || d0 < min_y_dist) min_y_dist = d0;
 			if (min_y_dist < 0 || d1 < min_y_dist) min_y_dist = d1;
-			const int cmp0 = location_compare(&it.location, loc0);
-			const int cmp1 = location_compare(&it.location, loc1);
+			const int cmp0  = location_compare(&it.location, loc0);
+			const int cmp1  = location_compare(&it.location, loc1);
 			const int cmp1r = location_compare(&it.location, crloc);
-			const int same = (0 == location_compare(loc0, loc1));
+			const int same  = (0 == location_compare(loc0, loc1));
 			if (cmp1r==0) draw_caret = 1;
 			if (!same && cmp0>=0 && cmp1<0) {
 				bg_color[1] += 0.1f;

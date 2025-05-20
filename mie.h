@@ -1,8 +1,10 @@
 #ifndef MIE_H
 
 #include <stdint.h>
+#include <setjmp.h> // (!)
 
 #include "gig.h"
+#include "allocator.h"
 
 #define LIST_OF_VAL_TYPES \
 	X(VAL_NIL) \
@@ -65,10 +67,7 @@ static inline struct val floatval(float f) {
 	});
 }
 
-
 void mie_thread_init(void);
-// must be called at least once from any thread wishing to use this API.
-// subsequent calls are no-ops.
 
 int mie_compile_thicc(const struct thicchar*, int num_chars);
 int mie_compile_graycode(const char* utf8src, int num_bytes);
@@ -88,6 +87,48 @@ void vmie_dump_val(struct val);
 const char* mie_error(void);
 
 void mie_selftest(void);
+
+void mie_begin_scrallox(void);
+void mie_end_scrallox(void);
+jmp_buf* mie_prep_scrallox_jmp_buf_for_out_of_memory(void);
+struct allocator* mie_borrow_scrallox(void);
+void mie_scrallox_save(int);
+void mie_scrallox_restore(int);
+void mie_scrallox_stats(size_t* out_allocated, size_t* out_capacity);
+// functions for interfacing with mie.c's scratch allocator. notes:
+//  - the compiler and vm (vmie) uses this scratch allocator a lot. see mie.c /
+//    allocator.h / grep for more discussion.
+//  - you can only use the allocator, and by extension the compiler/vm, between
+//    mie_begin_scrallox() and mie_end_scrallox() calls (mie.c never calls
+//    these on its own)
+//  - between begin/end you can "borrow" the allocator with
+//    mie_borrow_scrallox() and make your own allocations with it. these
+//    allocations are only valid between begin/end. it's most likely a lot
+//    safer to call mie_borrow_scrallox() just-in-time when you need it instead
+//    of holding on to the allocator.
+//  - mie_prep_scrallox_jmp_buf_for_out_of_memory() is used together with
+//    setjmp() (look it up!) to handle out-of-memory errors that can happen
+//    because the scratch allocator is initialized with a fixed amount of
+//    memory, which is all it can give you, and it never allocates more on
+//    demand. calling this function also instructs the allocator to actually
+//    use the jmp_buf (otherwise it just panics on out-of-memory) so only call
+//    it if you're using it. suggested/example usage:
+//      mie_begin_scrallox();
+//      if (0 == setjmp(*mie_prep_scrallox_jmp_buf_for_out_of_memory())) {
+//        // compile, use VM, mie_borrow_scrallox(), etc..
+//      } else {
+//        // out of memory! setjmp() continues from here, so do any clean-up /
+//        // error handling here
+//      }
+//      mie_end_scrallox();
+//    NOTE that mie_end_scrallox() must be called after mie_begin_scrallox()
+//    even in the case of errors. also, mie_begin_scrallox() always clears the
+//    jmp_buf behavior, so there's no need for a "stop using jmp_buf" function.
+//  - TODO save/restore docs?
+//  - all these precautions and rules are here to prevent memory corruption
+//    bugs from hell, while the scratch allocator in turn facilitates simpler
+//    (GC-like) memory management in the compiler/vm, and also speeds things up
+//    considerably. you know, traaadeofffs!
 
 #define MIE_H
 #endif

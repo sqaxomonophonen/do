@@ -61,18 +61,33 @@ static void validate_pattern(void* mem, size_t n, uint32_t seed)
 #ifdef USE_REAL_REALLOC
 #define REALLOC(PTR,SZ) realloc(PTR,SZ)
 #else
-#define REALLOC(PTR,SZ) (a.fn_realloc(a.allocator_context, (PTR), (SZ)))
+#define REALLOC(PTR,SZ) (A.fn_realloc(A.allocator_context, (PTR), (SZ)))
 #endif
 
 #define VERBOSE (1)
+
+static int depth;
+static struct allocator A;
+static void begin(int size_log2)
+{
+	init_scratch_allocator(&A, size_log2);
+	begin_scratch_allocator(&A);
+	++depth;
+}
+
+static void end(void)
+{
+	end_scratch_allocator(&A);
+	--depth;
+}
 
 static void test_scratch_allocator(void)
 {
 	#ifndef USE_REAL_REALLOC
 	{
 		// test simple allocation and abort longjmp
-		struct allocator a={0};
-		struct scratch_context_header* h = init_scratch_allocator(&a, 1<<8);
+		begin(1<<8);
+		struct scratch_context_header* h = get_scratch_context_header(&A);
 		assert(h->allocated == 0);
 		assert(h->capacity == 1<<8);
 		h->has_abort_jmp_buf = 1;
@@ -85,11 +100,12 @@ static void test_scratch_allocator(void)
 			validate_pattern(m0, s0, 42);
 			assert(h->allocated == (sizeof(size_t) + s0)); // NOTE includes size_t allocation header
 			// this allocation fails, and falls back to setjmp() above
-			a.fn_realloc(a.allocator_context, NULL, 1<<8);
+			A.fn_realloc(A.allocator_context, NULL, 1<<8);
 			assert(!"unreachable");
 		} else {
 			assert(jmpval == 1);
 		}
+		end();
 		if (VERBOSE) printf("simple test: OK\n");
 	}
 	#endif
@@ -99,8 +115,8 @@ static void test_scratch_allocator(void)
 		// test that allocations can be downsized and upsized within their
 		// capacity without the overall allocation counter going up, and
 		// without disturbing the data.
-		struct allocator a={0};
-		struct scratch_context_header* h = init_scratch_allocator(&a, 1<<15);
+		begin(1<<15);
+		struct scratch_context_header* h = get_scratch_context_header(&A);
 		const size_t s0 = 1234*4;
 		for (int pass=0; pass<5; ++pass) {
 			void* m0 = REALLOC(NULL, s0);
@@ -124,14 +140,15 @@ static void test_scratch_allocator(void)
 			const int N2 = h->allocated;
 			assert(N2==N1);
 		}
+		end();
 		if (VERBOSE) printf("shrink test: OK\n");
 	}
 	#endif
 
 	{
 		// test growing allocations
-		struct allocator a={0};
-		struct scratch_context_header* h = init_scratch_allocator(&a, 1<<20);
+		begin(1<<20);
+		struct scratch_context_header* h = get_scratch_context_header(&A);
 		const size_t s0 = 3333*4;
 		for (int pass=0; pass<3; ++pass) {
 			const int seed = 1001+pass;
@@ -148,13 +165,12 @@ static void test_scratch_allocator(void)
 				}
 			}
 		}
+		end();
 		if (VERBOSE) printf("grow test: OK\n");
 	}
 
 	{
-		struct allocator a={0};
-		struct scratch_context_header* h = init_scratch_allocator(&a, 1<<28);
-		(void)h;
+		begin(1<<28);
 		struct rng rng = make_rng(999);
 
 		#define N (1<<8)
@@ -175,6 +191,7 @@ static void test_scratch_allocator(void)
 		}
 		for (int i=0; i<N; ++i)  validate_pattern(pointers[i],sizes[i],i);
 		#undef N
+		end();
 		if (VERBOSE) printf("random test: OK\n");
 	}
 
@@ -182,16 +199,14 @@ static void test_scratch_allocator(void)
 		// test of stb_ds.dynamic array hashmap with custom scratch allocator
 		// (perhaps roll back into stbds_unit_tests() in stb_ds.h?)
 
-		struct allocator a={0};
-		struct scratch_context_header* h = init_scratch_allocator(&a, 1<<20);
-		(void)h;
+		begin(1<<20);
 
 		int* xs = NULL;
 		int* ys = NULL;
 		int* zs = NULL;
-		arrinit(xs, &a);
-		arrinit(ys, &a);
-		arrinit(zs, &a);
+		arrinit(xs, &A);
+		arrinit(ys, &A);
+		arrinit(zs, &A);
 		for (int i=0; i<1000; ++i) {
 			arrput(xs, i);
 			arrput(ys, 2*i);
@@ -209,6 +224,8 @@ static void test_scratch_allocator(void)
 			assert(zs[3*i+2] == 3*i-2);
 		}
 
+		end();
+
 		if (VERBOSE) printf("stb_ds.h array + scratch allocator test: OK\n");
 	}
 
@@ -216,9 +233,7 @@ static void test_scratch_allocator(void)
 		// test of stb_ds.h hashmap with custom scratch allocator
 		// (perhaps roll back into stbds_unit_tests() in stb_ds.h?)
 
-		struct allocator a={0};
-		struct scratch_context_header* h = init_scratch_allocator(&a, 1<<24);
-		(void)h;
+		begin(1<<24);
 
 		struct value {
 			int b1;
@@ -233,7 +248,7 @@ static void test_scratch_allocator(void)
 
 		for (int pass1=0; pass1<3; ++pass1) {
 
-			sh_new_strdup_with_context(lut, &a);
+			sh_new_strdup_with_context(lut, &A);
 
 			for (int pass2=0; pass2<4; ++pass2) {
 
@@ -382,8 +397,11 @@ static void test_scratch_allocator(void)
 			assert(lut == NULL);
 		}
 
+		end();
+
 		if (VERBOSE) printf("stb_ds.h hashmap + scratch allocator test: OK\n");
 	}
+	assert((depth == 0) && "end() forgotten?");
 }
 
 int main(int argc, char** argv)

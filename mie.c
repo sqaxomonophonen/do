@@ -46,17 +46,16 @@
 
 // the following "X macros" (it's a thing; look it up!) define built-in words
 // and VM ops, and take (ENUM,STR,DOC) "arguments":
-//  - ENUM: enum identifier for the word (ops also get an "OP_"-prefix) - STR:
-//  string name; pass NULL to use the string representation of ENUM;
-//    pass "" if the word cannot be used directly from the source.
-//  - DOC: short documentation of the word/op
+//  - <ENUM>: enum identifier for the word (ops also get an "OP_"-prefix)
+//  - <STR>: string name, or NULL to use the string representation of <ENUM>
+//  - <DOC>: short documentation of the word/op
 
 #define LIST_OF_SYNTAX_WORDS \
-	/*<ENUM>      <STR>     <DOC> */ \
+	/*<ENUM>      <STR>           <DOC> */ \
 	/* ====================================================================== */ \
 	X( COLON       , ":"        , "Word definiton, followed by word (name), e.g. `: foo ... ;`") \
-	X( COLONADDR   , ":&"       , "Word address definiton, followed by word (name), e.g. `:& foo_addr ... ;`") \
-	X( COLONLAMBDA , ":->"      , "Inline word, resolves to address; `:-> ... ;`") \
+	X( COLONADDR   , ":&"       , "Address-word definiton, followed by word (name), e.g. `:& foo_addr ... ;`") \
+	X( COLONLAMBDA , ":->"      , "Inline word; pushes its address; `:-> ... ; ( -- addr )`") \
 	X( SEMICOLON   , ";"        , "End of word definition") \
 	X( COMPTIME    , "comptime" , "Compile-time prefix") \
 	X( ENTER_SEW   , "<#"       , "Increase sew-depth") \
@@ -277,8 +276,6 @@ static int get_opcode_minimum_stack_height(enum opcode opcode)
 	assert(!"unreachable");
 }
 
-
-
 static enum builtin_word match_builtin_word(const char* word)
 {
 	int i=FIRST_WORD;
@@ -324,46 +321,6 @@ static_assert(sizeof(union pword)==sizeof(uint32_t),"");
 
 #define PWORD_INT(v)   ((union pword){.i32=(v)})
 #define PWORD_FLOAT(v) ((union pword){.f32=(v)})
-
-struct program {
-	int write_cursor;
-	int entrypoint_address;
-	union pword* op_arr;
-	// be careful about grabbing references to op_arr; arrput may change the
-	// pointer (realloc), and both the compiler and comptime VM may write new
-	// instructions (in fact, comptime VM executes part of the program while
-	// writing another part? feels "a bit fucked" but it should work as long as
-	// you don't grab references?)
-	struct location* pc_to_location_arr;
-	struct thicchar* static_string_store_arr;
-	struct val_str* static_string_arr;
-	// TODO: compile error?
-};
-
-
-struct compiler {
-	struct location location, error_location;
-	enum tokenizer_state tokenizer_state;
-	size_t string_offset;
-	int comment_depth;
-	int word_size;
-	char* word_buf;
-	char* error_message;
-	struct {
-		char* key;
-		struct word_info value;
-	}* word_lut;
-	int* word_index_arr;
-	int* wordscope0_arr;
-	int* wordskip_addraddr_arr;
-	//int next_user_word_id;
-	struct program* program;
-	int sew_depth;
-	int colon;
-
-	unsigned has_error :1;
-	unsigned prefix_comptime :1;
-};
 
 static inline int val2int(struct val v, int* out_int)
 {
@@ -422,6 +379,57 @@ struct valstore {
 	struct val_f32arr* f32arr_arr;
 };
 
+struct program {
+	int write_cursor;
+	int entrypoint_address;
+	union pword* op_arr;
+	// be careful about grabbing references to op_arr; arrput may change the
+	// pointer (realloc), and both the compiler and comptime VM may write new
+	// instructions (in fact, comptime VM executes part of the program while
+	// writing another part? feels "a bit fucked" but it should work as long as
+	// you don't grab references?)
+	struct location* pc_to_location_arr;
+	struct thicchar* static_string_store_arr;
+	struct val_str* static_string_arr;
+	// TODO: compile error?
+	// NOTE if you add any _arr fields, please update program_copy()
+};
+
+static void program_copy(struct program* dst, struct program* src)
+{
+	struct program tmp = *dst;
+	*dst = *src;
+	arrcpy(dst->op_arr, tmp.op_arr);
+	arrcpy(dst->pc_to_location_arr, tmp.pc_to_location_arr);
+	arrcpy(dst->static_string_store_arr, tmp.static_string_store_arr);
+	arrcpy(dst->static_string_arr, tmp.static_string_arr);
+}
+
+struct compiler {
+	struct location location, error_location;
+	enum tokenizer_state tokenizer_state;
+	size_t string_offset;
+	int comment_depth;
+	int word_size;
+	char* word_buf;
+	char* error_message;
+	struct {
+		char* key;
+		struct word_info value;
+	}* word_lut;
+	int* word_index_arr;
+	int* wordscope0_arr;
+	int* wordskip_addraddr_arr;
+	//int next_user_word_id;
+	struct program* program;
+	int sew_depth;
+	int colon;
+
+	unsigned has_error :1;
+	unsigned prefix_comptime :1;
+};
+
+
 struct vmie {
 	// TODO?
 	//  - globals?
@@ -446,32 +454,35 @@ static struct {
 	size_t preamble_val_types_size;
 } g;
 
+struct savestate {
+	struct compiler compiler; // uses scrallox
+	struct vmie vmie;         // uses scrallox
+	struct program program;   // uses system allocator
+	struct scratch_context_header* expected_header;
+	uint8_t* scratch_buf; // scratch buffer contents are stored here
+};
+
 THREAD_LOCAL static struct {
-	struct compiler compiler;
 	#ifndef MIE_ONLY_SYSALLOC
-	struct allocator scratch_allocator;
-	struct scratch_context_header* scratch_header;
+	struct allocator our_scratch_allocator;
 	#endif
+	struct compiler compiler;
 	struct vmie vmie;
 	const char* error_message;
-	unsigned thread_locals_were_initialized  :1;
 	unsigned currently_compiling             :1;
+	unsigned thread_locals_were_initialized  :1;
+	struct savestate* savestate_arr;
 } tlg; // thread-local globals
 
-
-static inline struct allocator* get_scratch_allocator(void)
-{
-	#ifdef MIE_ONLY_SYSALLOC
-	return &system_allocator; // only for test
-	#else
-	return &tlg.scratch_allocator;
-	#endif
-}
-
-static void free_all_our_scratch_allocations(void)
+// returns our own thread-local scratch allocator; NOTE that I briefly
+// considered using the same allocator for document edits ("mim" stuff in
+// gig.c)
+static struct allocator* scrallox(void)
 {
 	#ifndef MIE_ONLY_SYSALLOC
-	free_all_scratch_allocations(tlg.scratch_header);
+	return &tlg.our_scratch_allocator;
+	#else
+	return &system_allocator;
 	#endif
 }
 
@@ -605,17 +616,17 @@ void vmie_errorf(struct vmie* vm, const char* fmt, ...)
 
 static void* scratch_alloc(size_t sz)
 {
-	struct allocator* a = get_scratch_allocator();
+	struct allocator* a = scrallox();
 	return a->fn_realloc(a->allocator_context, NULL, sz);
 }
 
 static void vmie_init(struct vmie* vm, struct program* program)
 {
-	//free_all_our_scratch_allocations();
 	memset(vm, 0, sizeof *vm);
-	arrinit(vm->stack_arr, get_scratch_allocator());
-	arrinit(vm->rstack_arr, get_scratch_allocator());
-	arrinit(vm->global_arr, get_scratch_allocator());
+	struct allocator* a = scrallox();
+	arrinit(vm->stack_arr, a);
+	arrinit(vm->rstack_arr, a);
+	arrinit(vm->global_arr, a);
 	vm->program = program;
 	vm->pc = program->entrypoint_address;
 	vm->error_message = scratch_alloc(MAX_ERROR_MESSAGE_SIZE);
@@ -731,12 +742,9 @@ static int32_t vmie_alloc_string(struct vmie* vm, size_t len, struct thicchar** 
 {
 	struct valstore* vals = &vm->vals;
 
-	if (vals->char_store_arr == NULL) {
-		arrinit(vals->char_store_arr, get_scratch_allocator());
-	}
-	if (vals->str_arr == NULL) {
-		arrinit(vals->str_arr, get_scratch_allocator());
-	}
+	struct allocator* a = scrallox();
+	if (vals->char_store_arr == NULL) arrinit(vals->char_store_arr, a);
+	if (vals->str_arr == NULL) arrinit(vals->str_arr, a);
 	assert(vals->char_store_arr != NULL);
 	assert(vals->str_arr != NULL);
 
@@ -777,6 +785,9 @@ int vmie_run2(struct vmie* vm)
 	int num_defer = 0;
 	uint32_t deferred_op = 0;
 	// TODO cycle limiting in while() condition?
+
+	struct allocator* a = scrallox();
+
 	while ((0 <= pc) && (pc < prg_len)) {
 		vm->pc = pc;
 		if (vm->has_error) return -1;
@@ -790,6 +801,7 @@ int vmie_run2(struct vmie* vm)
 
 		if (num_defer > 0) {
 			--num_defer;
+			assert((num_defer == 0) && "TODO wide op? or bug?");
 			switch (deferred_op) {
 
 			case OP_JMP: {
@@ -1212,12 +1224,12 @@ int vmie_run2(struct vmie* vm)
 			case OP_ARRNEW: {
 				struct valstore* vals = &vm->vals;
 				if (vals->arr_arr == NULL) {
-					arrinit(vals->arr_arr, get_scratch_allocator());
+					arrinit(vals->arr_arr, a);
 				}
 				assert(vals->arr_arr != NULL);
 				const int32_t id = (int32_t)arrlen(vals->arr_arr);
 				struct val_arr* arr = arraddnptr(vals->arr_arr, 1);
-				arrinit(arr->arr, get_scratch_allocator());
+				arrinit(arr->arr, a);
 				arrput(vm->stack_arr, typeval(VAL_ARR, id));
 			}	break;
 
@@ -1253,12 +1265,12 @@ int vmie_run2(struct vmie* vm)
 			case OP_MAPNEW: {
 				struct valstore* vals = &vm->vals;
 				if (vals->map_arr == NULL) {
-					arrinit(vals->map_arr, get_scratch_allocator());
+					arrinit(vals->map_arr, a);
 				}
 				assert(vals->map_arr != NULL);
 				const int32_t id = (int32_t)arrlen(vals->map_arr);
 				struct val_map* map = arraddnptr(vals->map_arr, 1);
-				hminit(map->map, get_scratch_allocator());
+				hminit(map->map, a);
 				arrput(vm->stack_arr, typeval(VAL_MAP, id));
 			}	break;
 
@@ -1928,8 +1940,6 @@ static void compiler_begin(struct compiler* cm, struct program* program)
 	assert(tlg.currently_compiling == 0);
 	tlg.currently_compiling = 1;
 
-	free_all_our_scratch_allocations();
-
 	// clear cm, but keep some field(s)
 	memset(cm, 0, sizeof *cm);
 	cm->error_message = scratch_alloc(MAX_ERROR_MESSAGE_SIZE);
@@ -1937,14 +1947,15 @@ static void compiler_begin(struct compiler* cm, struct program* program)
 
 	cm->word_buf = scratch_alloc(sizeof(*cm->word_buf)*WORD_BUF_SIZE);
 
+	struct allocator* a = scrallox();
 	assert(cm->word_lut == NULL);
-	sh_new_strdup_with_context(cm->word_lut, get_scratch_allocator());
+	sh_new_strdup_with_context(cm->word_lut, a);
 	assert(cm->word_index_arr == NULL);
-	arrinit(cm->word_index_arr, get_scratch_allocator());
+	arrinit(cm->word_index_arr, a);
 	assert(cm->wordscope0_arr == NULL);
-	arrinit(cm->wordscope0_arr, get_scratch_allocator());
+	arrinit(cm->wordscope0_arr, a);
 	assert(cm->wordskip_addraddr_arr == NULL);
-	arrinit(cm->wordskip_addraddr_arr, get_scratch_allocator());
+	arrinit(cm->wordskip_addraddr_arr, a);
 
 	cm->program = program;
 	program_reset(cm->program);
@@ -2047,7 +2058,7 @@ static int alloc_program_index(void)
 void mie_program_free(int program_index)
 {
 	//assert(thrd_success == mtx_lock(&g.program_alloc_mutex));
-	// XXX this could be regarded as an "expensive assert"?
+	// XXX the following could be regarded as an "expensive assert"?
 	const int n = arrlen(g.program_freelist_arr);
 	for (int i=0; i<n; ++i) {
 		assert((program_index != g.program_freelist_arr[i]) && "program double-free!");
@@ -2098,10 +2109,12 @@ const char* mie_error(void)
 	return tlg.error_message;
 }
 
+
 static void init_globals(void)
 {
 	if (g.globals_were_initialized) return;
 	g.globals_were_initialized = 1;
+
 	//assert(thrd_success == mtx_init(&g.program_alloc_mutex, mtx_plain));
 	arrinit(g.program_arr, &system_allocator);
 	arrinit(g.program_freelist_arr, &system_allocator);
@@ -2125,21 +2138,21 @@ static void init_globals(void)
 	g.preamble_val_types_size = strlen(g.preamble_val_types);
 }
 
-void mie_thread_init(void)
+static void init_thread_locals(void)
 {
-	#ifdef MIE_ONLY_SYSALLOC
-	printf("(Built with MIE_ONLY_SYSALLOC; not for production!)\n");
-	// memory checkers like valgrind have a harder time finding memory bugs
-	// when you're managing memory yourself; MIE_ONLY_SYSALLOC prevents the use
-	// of our own scratch allocator, and only uses the system_allocator. this
-	// causes leaks, but valgrind can find some memory bugs this way.
-	#endif
-	init_globals();
 	if (tlg.thread_locals_were_initialized) return;
 	tlg.thread_locals_were_initialized = 1;
 	#ifndef MIE_ONLY_SYSALLOC
-	tlg.scratch_header = init_scratch_allocator(get_scratch_allocator(), 1L<<24);
+	init_scratch_allocator(&tlg.our_scratch_allocator, 1L<<24);
+	#else
+	printf("WARNING: using system allocator instead of scratch allocator in mie.c; not for production! leaks galore!\n");
 	#endif
+}
+
+void mie_thread_init(void)
+{
+	init_globals();
+	init_thread_locals();
 }
 
 void vmie_reset(int program_index)
@@ -2204,6 +2217,81 @@ void vmie_dump_stack(void)
 	}
 }
 
+void mie_begin_scrallox(void)
+{
+	struct scratch_context_header* h = get_scratch_context_header(&tlg.our_scratch_allocator);
+	h->has_abort_jmp_buf = 0;
+	memset(&h->abort_jmp_buf, 0, sizeof h->abort_jmp_buf);
+	begin_scratch_allocator(&tlg.our_scratch_allocator);
+}
+
+jmp_buf* mie_prep_scrallox_jmp_buf_for_out_of_memory(void)
+{
+	struct scratch_context_header* h = get_scratch_context_header(&tlg.our_scratch_allocator);
+	assert((h->in_scope) && "not in scope (call mie_scrallox_get_jmpbuf() just after mie_begin_scrallox())");
+	h->has_abort_jmp_buf = 1;
+	return &h->abort_jmp_buf;
+}
+
+void mie_end_scrallox(void)
+{
+	// NOTE friendly reminder that this function is asked to be called even
+	// when scrallox runs out of memory and longjmps (see:
+	// mie_prep_scrallox_jmp_buf_for_out_of_memory()). so keep that in mind if
+	// "overloading" this function.
+	end_scratch_allocator(&tlg.our_scratch_allocator);
+}
+
+struct allocator* mie_borrow_scrallox(void)
+{
+	assert((get_scratch_context_header(&tlg.our_scratch_allocator)->in_scope) && "borrow out of scope");
+	return &tlg.our_scratch_allocator;
+}
+
+void mie_scrallox_save(int savestate_id)
+{
+	struct scratch_context_header* h = get_scratch_context_header(&tlg.our_scratch_allocator);
+	assert((h->in_scope) && "not in scrallox scope");
+	assert(tlg.compiler.program == tlg.vmie.program);
+	if (arrlen(tlg.savestate_arr) <= savestate_id) {
+		arrsetlen(tlg.savestate_arr, savestate_id);
+	}
+	struct savestate* sav = &tlg.savestate_arr[savestate_id];
+	program_copy(&sav->program, tlg.compiler.program);
+	struct program* prg = &sav->program;
+	sav->compiler = tlg.compiler;
+	sav->compiler.program = prg;
+	sav->vmie = tlg.vmie;
+	sav->vmie.program = prg;
+	sav->expected_header = h;
+	if (sav->scratch_buf == NULL) arrinit(sav->scratch_buf, &system_allocator);
+	arrsetlen(sav->scratch_buf, h->allocated);
+	memcpy(sav->scratch_buf, get_scratch_memory_ptr(h), h->allocated);
+}
+
+void mie_scrallox_restore(int savestate_id)
+{
+	struct scratch_context_header* h = get_scratch_context_header(&tlg.our_scratch_allocator);
+	assert((h->in_scope) && "not in scrallox scope");
+	const int n = arrlen(tlg.savestate_arr);
+	assert((0 <= savestate_id) && (savestate_id < n));
+	struct savestate sav = tlg.savestate_arr[savestate_id];
+	assert((sav.expected_header == h) && "cannot restore! scrallox was re-initialized?");
+	// TODO maybe do a `int mie_scrallox_can_restore(int savestate_id)` if it makes sense?
+	tlg.compiler = sav.compiler;
+	tlg.vmie = sav.vmie;
+	h->allocated = arrlen(sav.scratch_buf);
+	memcpy(get_scratch_memory_ptr(h), sav.scratch_buf, h->allocated);
+}
+
+void mie_scrallox_stats(size_t* out_allocated, size_t* out_capacity)
+{
+	struct scratch_context_header* h = get_scratch_context_header(&tlg.our_scratch_allocator);
+	assert((h->in_scope) && "not in scope (call stats before mie_end_scrallox())");
+	if (out_allocated) *out_allocated = h->allocated;
+	if (out_capacity) *out_capacity   = h->capacity;
+}
+
 void mie_selftest(void)
 {
 	mie_thread_init();
@@ -2253,7 +2341,9 @@ void mie_selftest(void)
 	for (int i=0; i<ARRAY_LENGTH(programs_that_fail_to_compile); ++i) {
 		const char* src = programs_that_fail_to_compile[i];
 		if (!ACCEPT(src)) continue;
+		mie_begin_scrallox();
 		const int prg = mie_compile_graycode(src, strlen(src));
+		mie_end_scrallox();
 		if (prg != -1) {
 			fprintf(stderr, "selftest expected compile error, but didn't get it for:\n %s\n", src);
 			abort();
@@ -2272,10 +2362,12 @@ void mie_selftest(void)
 	for (int i=0; i<ARRAY_LENGTH(programs_that_fail_at_runtime); ++i) {
 		const char* src = programs_that_fail_at_runtime[i];
 		if (!ACCEPT(src)) continue;
+		mie_begin_scrallox();
 		const int prg = mie_compile_graycode(src, strlen(src));
 		if (prg == -1) selftest_fail("compile", src);
 		vmie_reset(prg);
 		const int r = vmie_run();
+		mie_end_scrallox();
 		if (r != -1) {
 			fprintf(stderr, "selftest expected runtime error, but didn't get it for:\n %s\n", src);
 			abort();
@@ -2335,6 +2427,7 @@ void mie_selftest(void)
 	for (int i=0; i<ARRAY_LENGTH(programs_that_eval_to_1i); ++i) {
 		const char* src = programs_that_eval_to_1i[i];
 		if (!ACCEPT(src)) continue;
+		mie_begin_scrallox();
 		const int prg = mie_compile_graycode(src, strlen(src));
 		if (prg == -1) selftest_fail("compile", src);
 		vmie_reset(prg);
@@ -2352,6 +2445,7 @@ void mie_selftest(void)
 			fprintf(stderr, " for:\n %s\n", src);
 			abort();
 		}
+		mie_end_scrallox();
 	}
 
 	#undef ACCEPT

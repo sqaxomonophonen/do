@@ -127,6 +127,11 @@ struct io_appender {
 	// these flags can be changed after io_appender_init()
 };
 
+static inline int io_appender_is_initialized(struct io_appender* a)
+{
+	return (a->ringbuf != NULL);
+}
+
 void io_appender_init(struct io_appender*, struct io*, io_handle handle, int ringbuf_cap_log2, int inflight_cap);
 int  io_appender_flush_now(struct io_appender*);
 void io_appender_flush(struct io_appender*);
@@ -149,47 +154,7 @@ struct io_bufread {
 	uint8_t *_bufcur, *_bufend;
 };
 
-static inline io_status io_bufread_read(struct io_bufread* b, void* dst, size_t sz)
-{
-	void* dp = dst;
-	size_t remain_read = sz;
-	while (remain_read > 0) {
-		if (b->error < 0) return b->error;
-		if (b->end_of_file) return 0;
-		if (b->_bufcur == NULL) {
-			const size_t remain_file = (io_get_size(b->io, b->handle) - b->file_cursor);
-			if (remain_file == 0) {
-				b->end_of_file = 1;
-				return 0;
-			}
-			const size_t rsz = (remain_file > b->bufsize) ? b->bufsize : remain_file;
-			io_status e = io_pread_now(b->io, ((struct iosub_pread){
-				.handle = b->handle,
-				.data = b->buf,
-				.size = rsz,
-				.offset = b->file_cursor,
-			}));
-			if (e < 0) {
-				b->error = e;
-				return 0;
-			}
-			b->file_cursor += rsz;
-			b->_bufcur = b->buf;
-			b->_bufend = b->buf + rsz;
-		}
-		const size_t can_copy = (b->_bufend - b->buf);
-		const size_t n = (remain_read > can_copy) ? can_copy : remain_read;
-		memcpy(dp, b->_bufcur, n);
-		dp += n;
-		remain_read -= n;
-		b->_bufcur += n;
-		assert(b->_bufcur <= b->_bufend);
-		if (b->_bufcur == b->_bufend) {
-			b->_bufcur = NULL;
-		}
-	}
-	return 0;
-}
+io_status io_bufread_read(struct io_bufread* b, void* dst, size_t sz);
 
 static inline uint8_t io_bufread_next(struct io_bufread* b)
 {

@@ -84,6 +84,7 @@ struct mim_state {
 	// (update mim_state_copy() when adding arr-fields here)
 };
 
+#if 0
 enum document_type {
 	DOCUMENT_TYPE_ROOT = 1,
 	DOCUMENT_TYPE_AUDIO,
@@ -94,6 +95,7 @@ enum document_type {
 	// into "render_chars". but do I need a type per "presentation backend"?
 	// would a "braille backend" need another doc type?
 };
+#endif
 
 enum document_flag {
 
@@ -116,10 +118,11 @@ enum document_flag {
 };
 
 struct document {
-	//int flags; // XXX flags? for what?
 	int id;
-	//int version;
-	enum document_type type;
+	int book_id;
+	int order_key;
+	//enum document_type type;
+	char* name_arr;
 	struct fat_char* fat_char_arr;
 	// (update document_copy() when adding arr-fields here)
 };

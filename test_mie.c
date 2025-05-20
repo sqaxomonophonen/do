@@ -10,6 +10,7 @@
 #include <errno.h>
 
 #include "mie.h"
+#include "allocator.h"
 
 static char src[1<<20];
 
@@ -33,6 +34,8 @@ int main(int argc, char** argv)
 		assert(fread(src, sz, 1, f) == 1);
 		assert(fclose(f) != -1);
 
+		mie_begin_scrallox();
+
 		const int prg = mie_compile_graycode(src, sz);
 		if (prg == -1) {
 			fprintf(stderr, "%s: compile error: %s\n", path, mie_error());
@@ -46,6 +49,16 @@ int main(int argc, char** argv)
 		}
 
 		vmie_dump_stack();
+
+		size_t allocated, capacity;
+		mie_scrallox_stats(&allocated, &capacity);
+		printf("after %s: allocated %zd/%zd (%.1f%%)\n",
+			path,
+			allocated, capacity,
+			(double)(allocated*100L) / (double)(capacity));
+
+		mie_end_scrallox();
 	}
+
 	return EXIT_SUCCESS;
 }

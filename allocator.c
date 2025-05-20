@@ -33,9 +33,15 @@ static struct scratch_allocation_header* ptr_to_scratch_header(void* ptr)
 	return ((struct scratch_allocation_header*)ptr) - 1;
 }
 
+void* get_scratch_memory_ptr(struct scratch_context_header* h)
+{
+	return (void*)h + SCRATCH_HEADER_SIZE;
+}
+
 static void* scratch_malloc(void* allocator_context, size_t sz)
 {
 	struct scratch_context_header* h = allocator_context;
+	assert((h->in_scope) && "allocation outside of begin/end scope");
 	const size_t hsz = sizeof(struct scratch_allocation_header);
 	assert(IS_POWER_OF_TWO(hsz) && "the following round-up code only works if size is a power-of-two");
 	h->allocated = (h->allocated+hsz-1) & ~(hsz-1);
@@ -46,12 +52,15 @@ static void* scratch_malloc(void* allocator_context, size_t sz)
 		if (h->has_abort_jmp_buf) {
 			longjmp(h->abort_jmp_buf, 1);
 		} else {
-			assert(!"scratch_malloc(): allocation request exceeds capacity! (maybe increase capacity, or use abort_jmp_buf");
+			fprintf(stderr,
+				"scratch_malloc(%zd): alloc=%zd; cap=%zd; allocation request exceeds capacity! (maybe increase capacity, or use abort_jmp_buf",
+				sz, h->allocated, h->capacity);
+			abort();
 		}
 		assert(!"unreachable");
 	}
 
-	void* ptr = (void*)h + SCRATCH_HEADER_SIZE + h->allocated + hsz;
+	void* ptr = get_scratch_memory_ptr(h) + h->allocated + hsz;
 	ptr_to_scratch_header(ptr)->capacity = sz;
 	h->allocated = required;
 	return ptr;
@@ -59,6 +68,7 @@ static void* scratch_malloc(void* allocator_context, size_t sz)
 
 static void* scratch_realloc(void* allocator_context, void* ptr, size_t sz)
 {
+	assert((((struct scratch_context_header*)allocator_context)->in_scope) && "allocation outside of begin/end scope");
 	const int TRACE = 0;
 	if (TRACE) printf("SCRATCH REALLOC p=%p sz=%zd", ptr, sz);
 	if (sz == 0) return NULL;
@@ -79,17 +89,17 @@ static void* scratch_realloc(void* allocator_context, void* ptr, size_t sz)
 
 static void scratch_free(void* allocator_context, void* ptr)
 {
-	(void)allocator_context; (void)ptr;
-	// scratch allocators ignore frees
+	(void)allocator_context;
+	(void)ptr;
+	// scratch allocators ignore frees (that's kind of the point)
 }
 
-struct scratch_context_header* init_scratch_allocator(struct allocator* a, size_t capacity)
+void init_scratch_allocator(struct allocator* a, size_t capacity)
 {
 	memset(a, 0, sizeof *a);
 	a->allocator_context = malloc(SCRATCH_HEADER_SIZE + capacity);
 	memset(a->allocator_context, 0, SCRATCH_HEADER_SIZE);
-	((struct scratch_context_header*)a->allocator_context)->capacity = capacity;
+	get_scratch_context_header(a)->capacity = capacity;
 	a->fn_realloc = scratch_realloc;
 	a->fn_free = scratch_free;
-	return a->allocator_context;
 }
