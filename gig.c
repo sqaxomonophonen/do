@@ -6,9 +6,8 @@
 #include <string.h>
 #include <stdio.h> // XXX
 
-#include "stb_ds_sysalloc.h" // XXX we borrow mie's scrallox; consider mandatory arrinit() for all?
+#include "stb_ds.h"
 #include "stb_sprintf.h"
-
 #include "io.h"
 #include "gig.h"
 #include "util.h"
@@ -23,8 +22,10 @@ static void document_copy(struct document* dst, struct document* src)
 	struct document tmp = *dst;
 	*dst = *src;
 	dst->fat_char_arr = tmp.fat_char_arr;
+	if (dst->fat_char_arr == NULL) arrinit(dst->fat_char_arr, &system_allocator);
 	arrcpy(dst->fat_char_arr, src->fat_char_arr);
 	dst->name_arr = tmp.name_arr;
+	if (dst->name_arr == NULL) arrinit(dst->name_arr, &system_allocator);
 	arrcpy(dst->name_arr, src->name_arr);
 }
 
@@ -306,9 +307,7 @@ void mimf(const char* fmt, ...)
 
 void mim8(uint8_t v)
 {
-	uint8_t* p = (uint8_t*)get_mim_buffer_top();
-	*p = v;
-	arrsetlen(g.mim_buffer_arr, arrlen(g.mim_buffer_arr)+1);
+	mimsrc(&v, 1);
 }
 
 #define DOJO_MAGIC ("DOJO0001")
@@ -333,132 +332,6 @@ static void journal_read_raw(void* data, size_t sz)
 static uint8_t journal_read_byte(void)
 {
 	return bufread_fn(&g.journal_bufread);
-}
-
-static void host_dir(const char* dir)
-{
-	char pathbuf[1<<14];
-	path_join(pathbuf, sizeof pathbuf, dir, "DO_JOURNAL", NULL);
-	struct io_event ev = io_open_now(g.io, ((struct iosub_open){
-		.path = pathbuf,
-		.read = 1,
-		.write = 1,
-		.create = 1,
-	}));
-	if (ev.status < 0) assert(!"TODO handle dir not found?");
-	struct io_appender* a = &g.journal_appender;
-	io_appender_init(&g.journal_appender, g.io, ev.handle, /*ringbuf_cap_log2=*/16, /*inflight_cap=*/8);
-	int64_t sz = io_get_size(g.io, ev.handle);
-	if (sz == 0) {
-		io_appender_write_raw(a, DOJO_MAGIC, strlen(DOJO_MAGIC));
-		io_appender_write_leb128(a, DO_FORMAT_VERSION);
-		// TODO epoch timestamp?
-		io_appender_flush_now(a);
-		g.journal_timestamp_start = get_nanoseconds();
-	} else {
-		uint8_t magic[8];
-		// XXX
-		assert("FIXME ERROR HANDLING" && (0 == io_pread_now(g.io, ((struct iosub_pread){
-			.handle = ev.handle,
-			.data = magic,
-			.size = 8,
-			.offset = 0,
-		}))));
-		assert("FIXME ERROR HANDLING" && (memcmp(magic, DOJO_MAGIC, 8) == 0)); // XXX
-
-		uint8_t buf[1<<12];
-		struct io_bufread* jbr = &g.journal_bufread;
-		memset(jbr, 0, sizeof *jbr);
-		jbr->io = g.io;
-		jbr->handle = ev.handle,
-		jbr->file_cursor = 8;
-		jbr->buf = buf;
-		jbr->bufsize = sizeof(buf);
-
-		const int64_t do_format_version = journal_read_leb128_i64();
-		assert((do_format_version == DO_FORMAT_VERSION) && "XXX error handling");
-
-		static uint8_t* mimbuf_arr = NULL;
-		while (!jbr->end_of_file) {
-			const uint8_t sync = journal_read_byte();
-			assert((sync == SYNC) && "XXX error handling");
-			const int64_t timestamp_us = journal_read_leb128_i64();
-			const int64_t artist_id = journal_read_leb128_i64();
-			const int64_t session_id = journal_read_leb128_i64();
-			const int64_t num_bytes = journal_read_leb128_i64();
-			#if 1
-			printf("%ld %ld %ld %ld\n",
-				timestamp_us,
-				artist_id,
-				session_id,
-				num_bytes);
-			#endif
-			arrsetlen(mimbuf_arr, num_bytes);
-			journal_read_raw(mimbuf_arr, num_bytes);
-			begin_mim(session_id);
-			mimsrc(mimbuf_arr, num_bytes);
-			end_mim();
-			//assert(!"XXX end_mim() writes back to journal");
-		}
-
-		assert(!"TODO INIT FROM DISK");
-		#if 0
-		int64_t remaining = sz;
-		int64_t offset = 0;
-		while (remaining > 0) {
-			uint8_t buf[1<<12];
-			const size_t bufsz = sizeof(buf);
-			size_t rsize = (remaining > bufsz) ? bufsz : remaining;
-			assert(0 == io_pread_now(g.io, ((struct iosub_pread){
-				.handle = ev.handle,
-				.data = buf,
-				.size = rsize,
-				.offset = offset,
-			}))); // FIXME handle error
-			offset += rsize;
-			remaining -= rsize;
-		}
-		assert(remaining == 0);
-		assert(!"TODO INIT FROM DISK");
-		#endif
-	}
-	// TODO
-}
-
-void gig_init(void)
-{
-	//ringbuf_init(&g.command_ringbuf, 16);
-
-	// XXX "getting started"-stuff here:
-	g.my_artist_id = 1;
-	const int document_id = 1;
-	struct snapshot* ss = &g.cool_snapshot;
-	struct document* doc = arraddnptr(ss->document_arr, 1);
-	memset(doc, 0, sizeof *doc);
-	doc->id = document_id;
-	struct mim_state ms1 = {
-		.artist_id = get_my_artist_id(),
-		.session_id = 1,
-		.document_id = document_id,
-	};
-	struct caret cr = {
-		.tag=0,
-		.caret_loc={.line=1,.column=1},
-		.anchor_loc={.line=1,.column=1},
-	};
-	arrput(ms1.caret_arr, cr);
-	arrput(ss->mim_state_arr, ms1);
-
-	g.io = io_new(10, 128);
-
-	if (arg_dir) {
-		host_dir(arg_dir);
-	}
-
-	#if 0
-	gig_thread_tick();
-	gig_spool();
-	#endif
 }
 
 int get_my_artist_id(void)
@@ -553,6 +426,9 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 	int remaining = num_bytes;
 
 	static int* number_stack_arr = NULL;
+	if (number_stack_arr == NULL) {
+		arrinit(number_stack_arr, &system_allocator);
+	}
 	arrreset(number_stack_arr);
 
 	enum {
@@ -1046,37 +922,10 @@ static void document_to_thicchar_da(struct thicchar** arr, struct document* doc)
 	}
 }
 
-void end_mim(void)
+static void mim_spool_ex(uint8_t* data, int num_bytes, struct snapshot* snapshot)
 {
-	assert(g.in_mim);
-	const int num_bytes = arrlen(g.mim_buffer_arr);
-	g.in_mim = 0;
 	if (num_bytes == 0) return;
-
-	uint8_t* data = g.mim_buffer_arr;
-
-	#if 0
-	struct snapshot* ss = &g.cool_snapshot;
-
-	struct mim_state* msr = snapshot_get_personal_mim_state_by_id(ss, g.using_mim_session_id);
-	struct document* doc = snapshot_get_document_by_id(ss, msr->document_id);
-
-	// make "scratch copies" of state and doc and work on these; this
-	// protects the actual state in case of partially invalid input
-	static struct mim_state scratch_state = {0};
-	static struct document scratch_doc = {0};
-	mim_state_copy(&scratch_state, msr);
-	document_copy(&scratch_doc, doc);
-
-	struct mimop mo = { .ms=&scratch_state, .doc=&scratch_doc, };
-	if (!mim_spool(&mo, data, num_bytes)) {
-		assert(!"mim protocol error"); // XXX? should I have a "failable" flag? eg. for human input
-	}
-	#endif
-
-	struct snapshot* snapshot = &g.cool_snapshot;
 	mie_begin_scrallox();
-
 	if (0 == setjmp(*mie_prep_scrallox_jmp_buf_for_out_of_memory())) {
 		struct cow_snapshot cows = {0};
 		init_cow_snapshot(&cows, snapshot, mie_borrow_scrallox());
@@ -1095,6 +944,9 @@ void end_mim(void)
 
 		struct document* doc = cow_snapshot_get_readonly_document_by_id(&cows, ms->document_id);
 		static struct thicchar* dodoc_arr = NULL;
+		if (dodoc_arr == NULL) {
+			arrinit(dodoc_arr, &system_allocator);
+		}
 		document_to_thicchar_da(&dodoc_arr, doc);
 		const int prg = mie_compile_thicc(dodoc_arr, arrlen(dodoc_arr));
 		//printf("prg=%d\n", prg);
@@ -1122,13 +974,15 @@ void end_mim(void)
 	#endif
 
 	mie_end_scrallox();
+}
 
-	#if 0
-	mim_state_copy(msr, &scratch_state);
-	document_copy(doc, &scratch_doc);
-	#endif
-
-	// XXX more assumptions that we are the host
+void end_mim(void)
+{
+	assert(g.in_mim);
+	const int num_bytes = arrlen(g.mim_buffer_arr);
+	g.in_mim = 0;
+	uint8_t* data = g.mim_buffer_arr;
+	mim_spool_ex(data, num_bytes, &g.cool_snapshot);
 
 	struct io_appender* a = &g.journal_appender;
 	if (io_appender_is_initialized(a)) {
@@ -1143,6 +997,7 @@ void end_mim(void)
 	}
 
 	#if 0
+	// old command stream/ringbuf stuff. relavant for network? or throw out?
 	uint8_t header[1<<8];
 	uint8_t* hp = header;
 	uint8_t* end = header + sizeof(header);
@@ -1193,4 +1048,142 @@ int doc_iterator_next(struct doc_iterator* it)
 	}
 
 	return 1;
+}
+
+static void host_dir(const char* dir)
+{
+	char pathbuf[1<<14];
+	path_join(pathbuf, sizeof pathbuf, dir, "DO_JOURNAL", NULL);
+	struct io_event ev = io_open_now(g.io, ((struct iosub_open){
+		.path = pathbuf,
+		.read = 1,
+		.write = 1,
+		.create = 1,
+	}));
+	if (ev.status < 0) assert(!"TODO handle dir not found?");
+	struct io_appender* a = &g.journal_appender;
+	io_appender_init(&g.journal_appender, g.io, ev.handle, /*ringbuf_cap_log2=*/16, /*inflight_cap=*/8);
+	int64_t sz = io_get_size(g.io, ev.handle);
+	if (sz == 0) {
+		io_appender_write_raw(a, DOJO_MAGIC, strlen(DOJO_MAGIC));
+		io_appender_write_leb128(a, DO_FORMAT_VERSION);
+		// TODO epoch timestamp?
+		io_appender_flush_now(a);
+		g.journal_timestamp_start = get_nanoseconds();
+	} else {
+		uint8_t magic[8];
+		// XXX
+		assert("FIXME ERROR HANDLING" && (0 == io_pread_now(g.io, ((struct iosub_pread){
+			.handle = ev.handle,
+			.data = magic,
+			.size = 8,
+			.offset = 0,
+		}))));
+		assert("FIXME ERROR HANDLING" && (memcmp(magic, DOJO_MAGIC, 8) == 0)); // XXX
+
+		uint8_t buf[1<<12];
+		struct io_bufread* jbr = &g.journal_bufread;
+		memset(jbr, 0, sizeof *jbr);
+		jbr->io = g.io;
+		jbr->handle = ev.handle,
+		jbr->file_cursor = 8;
+		jbr->buf = buf;
+		jbr->bufsize = sizeof(buf);
+
+		const int64_t do_format_version = journal_read_leb128_i64();
+		assert((do_format_version == DO_FORMAT_VERSION) && "XXX error handling");
+
+		static uint8_t* mimbuf_arr = NULL;
+		while (!jbr->end_of_file) {
+			const uint8_t sync = journal_read_byte();
+			assert((sync == SYNC) && "XXX error handling");
+			const int64_t timestamp_us = journal_read_leb128_i64();
+			const int64_t artist_id = journal_read_leb128_i64();
+			const int64_t session_id = journal_read_leb128_i64();
+			const int64_t num_bytes = journal_read_leb128_i64();
+			#if 1
+			printf("%ld %ld %ld %ld\n",
+				timestamp_us,
+				artist_id,
+				session_id,
+				num_bytes);
+			#endif
+			arrsetlen(mimbuf_arr, num_bytes);
+			journal_read_raw(mimbuf_arr, num_bytes);
+			mim_spool_ex(mimbuf_arr, num_bytes, &g.cool_snapshot);
+		}
+
+		assert(!"TODO INIT FROM DISK");
+		#if 0
+		int64_t remaining = sz;
+		int64_t offset = 0;
+		while (remaining > 0) {
+			uint8_t buf[1<<12];
+			const size_t bufsz = sizeof(buf);
+			size_t rsize = (remaining > bufsz) ? bufsz : remaining;
+			assert(0 == io_pread_now(g.io, ((struct iosub_pread){
+				.handle = ev.handle,
+				.data = buf,
+				.size = rsize,
+				.offset = offset,
+			}))); // FIXME handle error
+			offset += rsize;
+			remaining -= rsize;
+		}
+		assert(remaining == 0);
+		assert(!"TODO INIT FROM DISK");
+		#endif
+	}
+	// TODO
+}
+
+static void snapshot_init(struct snapshot* ss)
+{
+	memset(ss, 0, sizeof *ss);
+	arrinit(ss->book_arr, &system_allocator);
+	arrinit(ss->document_arr, &system_allocator);
+	arrinit(ss->mim_state_arr, &system_allocator);
+}
+
+void gig_init(void)
+{
+	snapshot_init(&g.cool_snapshot);
+	snapshot_init(&g.hot_snapshot);
+	arrinit(g.mim_buffer_arr, &system_allocator);
+
+	//ringbuf_init(&g.command_ringbuf, 16);
+
+	// XXX "getting started"-stuff here:
+	g.my_artist_id = 1;
+	const int document_id = 1;
+	struct snapshot* ss = &g.cool_snapshot;
+	struct document* doc = arraddnptr(ss->document_arr, 1);
+	memset(doc, 0, sizeof *doc);
+	arrinit(doc->fat_char_arr, &system_allocator);
+	memset(doc, 0, sizeof *doc);
+	doc->id = document_id;
+	struct mim_state ms1 = {
+		.artist_id = get_my_artist_id(),
+		.session_id = 1,
+		.document_id = document_id,
+	};
+	arrinit(ms1.caret_arr, &system_allocator);
+	struct caret cr = {
+		.tag=0,
+		.caret_loc={.line=1,.column=1},
+		.anchor_loc={.line=1,.column=1},
+	};
+	arrput(ms1.caret_arr, cr);
+	arrput(ss->mim_state_arr, ms1);
+
+	g.io = io_new(10, 128);
+
+	if (arg_dir) {
+		host_dir(arg_dir);
+	}
+
+	#if 0
+	gig_thread_tick();
+	gig_spool();
+	#endif
 }
