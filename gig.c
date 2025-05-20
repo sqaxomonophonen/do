@@ -102,11 +102,6 @@ static struct mim_state* snapshot_get_mim_state_by_ids(struct snapshot* ss, int 
 	return ms;
 }
 
-static struct mim_state* snapshot_get_personal_mim_state_by_id(struct snapshot* ss, int session_id)
-{
-	return snapshot_get_mim_state_by_ids(ss, get_my_artist_id(), session_id);
-}
-
 // "cow" stands for "copy-on-write". moo! it represents pending changes to a
 // snapshot, and only contains the changed documents and mim states
 struct cow_snapshot {
@@ -922,7 +917,7 @@ static void document_to_thicchar_da(struct thicchar** arr, struct document* doc)
 	}
 }
 
-static void mim_spool_ex(uint8_t* data, int num_bytes, struct snapshot* snapshot)
+static void snapshot_spool_ex(struct snapshot* snapshot, uint8_t* data, int num_bytes, int artist_id, int session_id)
 {
 	if (num_bytes == 0) return;
 	mie_begin_scrallox();
@@ -930,12 +925,12 @@ static void mim_spool_ex(uint8_t* data, int num_bytes, struct snapshot* snapshot
 		struct cow_snapshot cows = {0};
 		init_cow_snapshot(&cows, snapshot, mie_borrow_scrallox());
 
-		struct mim_state* ms = snapshot_get_personal_mim_state_by_id(snapshot, g.using_mim_session_id);
+		struct mim_state* ms = snapshot_get_mim_state_by_ids(snapshot, artist_id, session_id);
 		struct mimop mo = {
 			.cows = &cows,
 			.document_id = ms->document_id,
-			.artist_id = get_my_artist_id(), // XXX?
-			.session_id = g.using_mim_session_id,
+			.artist_id = artist_id,
+			.session_id = session_id,
 		};
 
 		if (!mim_spool(&mo, data, num_bytes)) {
@@ -981,8 +976,10 @@ void end_mim(void)
 	assert(g.in_mim);
 	const int num_bytes = arrlen(g.mim_buffer_arr);
 	g.in_mim = 0;
+	if (num_bytes == 0) return;
+
 	uint8_t* data = g.mim_buffer_arr;
-	mim_spool_ex(data, num_bytes, &g.cool_snapshot);
+	snapshot_spool_ex(&g.cool_snapshot, data, num_bytes, get_my_artist_id(), g.using_mim_session_id);
 
 	struct io_appender* a = &g.journal_appender;
 	if (io_appender_is_initialized(a)) {
@@ -1094,6 +1091,9 @@ static void host_dir(const char* dir)
 		assert((do_format_version == DO_FORMAT_VERSION) && "XXX error handling");
 
 		static uint8_t* mimbuf_arr = NULL;
+		if (mimbuf_arr == NULL) {
+			arrinit(mimbuf_arr, &system_allocator);
+		}
 		while (!jbr->end_of_file) {
 			const uint8_t sync = journal_read_byte();
 			assert((sync == SYNC) && "XXX error handling");
@@ -1110,31 +1110,9 @@ static void host_dir(const char* dir)
 			#endif
 			arrsetlen(mimbuf_arr, num_bytes);
 			journal_read_raw(mimbuf_arr, num_bytes);
-			mim_spool_ex(mimbuf_arr, num_bytes, &g.cool_snapshot);
+			snapshot_spool_ex(&g.cool_snapshot, mimbuf_arr, num_bytes, artist_id, session_id);
 		}
-
-		assert(!"TODO INIT FROM DISK");
-		#if 0
-		int64_t remaining = sz;
-		int64_t offset = 0;
-		while (remaining > 0) {
-			uint8_t buf[1<<12];
-			const size_t bufsz = sizeof(buf);
-			size_t rsize = (remaining > bufsz) ? bufsz : remaining;
-			assert(0 == io_pread_now(g.io, ((struct iosub_pread){
-				.handle = ev.handle,
-				.data = buf,
-				.size = rsize,
-				.offset = offset,
-			}))); // FIXME handle error
-			offset += rsize;
-			remaining -= rsize;
-		}
-		assert(remaining == 0);
-		assert(!"TODO INIT FROM DISK");
-		#endif
 	}
-	// TODO
 }
 
 static void snapshot_init(struct snapshot* ss)
