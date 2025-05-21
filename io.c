@@ -544,7 +544,16 @@ int io_appender_ack(struct io_appender* a, struct io_event* ev)
 	return 1;
 }
 
-io_status io_bufread_read(struct io_bufread* b, void* dst, size_t sz)
+void io_bufread_init(struct io_bufread* b, struct io* io, size_t bufsize, io_handle handle)
+{
+	memset(b, 0, sizeof *b);
+	b->buf = calloc(bufsize, sizeof *b->buf);
+	b->bufsize = bufsize;
+	b->io = io;
+	b->handle = handle;
+}
+
+io_status io_bufread_raw(struct io_bufread* b, void* dst, size_t sz)
 {
 	void* dp = dst;
 	size_t remain_read = sz;
@@ -552,7 +561,7 @@ io_status io_bufread_read(struct io_bufread* b, void* dst, size_t sz)
 	while (remain_read > 0) {
 		if (b->error < 0) return b->error;
 		if (b->end_of_file) return 0;
-		if (b->_bufcur == NULL) {
+		if (b->bufcur == NULL) {
 			const size_t remain_file = (filesize - b->file_cursor);
 			if (remain_file == 0) {
 				b->end_of_file = 1;
@@ -569,19 +578,19 @@ io_status io_bufread_read(struct io_bufread* b, void* dst, size_t sz)
 				b->error = e;
 				return 0;
 			}
-			b->file_cursor += rsz;
-			b->_bufcur = b->buf;
-			b->_bufend = b->buf + rsz;
+			b->bufcur = b->buf;
+			b->bufend = b->buf + rsz;
 		}
-		const size_t can_copy = (b->_bufend - b->buf);
+		const size_t can_copy = (b->bufend - b->buf);
 		const size_t n = (remain_read > can_copy) ? can_copy : remain_read;
-		memcpy(dp, b->_bufcur, n);
+		memcpy(dp, b->bufcur, n);
 		dp += n;
+		b->bufcur += n;
+		b->file_cursor += n;
 		remain_read -= n;
-		b->_bufcur += n;
-		assert(b->_bufcur <= b->_bufend);
-		if (b->_bufcur == b->_bufend) {
-			b->_bufcur = NULL;
+		assert(b->bufcur <= b->bufend);
+		if (b->bufcur == b->bufend) {
+			b->bufcur = NULL;
 			if (b->file_cursor == filesize) {
 				b->end_of_file = 1;
 				return 0;
@@ -589,6 +598,37 @@ io_status io_bufread_read(struct io_bufread* b, void* dst, size_t sz)
 		}
 	}
 	return 0;
+}
+
+void io_bufread_seek(struct io_bufread* b, int64_t pos)
+{
+	b->file_cursor = pos;
+	// XXX this causes io_bufread_raw() to re-fill its buffer from disk which
+	// may or may not be necessary since a seek pos could be located in the
+	// buffer itself
+	b->bufcur = NULL;
+}
+
+int64_t io_bufread_tell(struct io_bufread* b)
+{
+	if (b->bufcur == NULL) {
+		return b->file_cursor;
+	} else {
+		assert(b->bufend != NULL);
+		return b->file_cursor + (b->bufend - b->bufcur);
+	}
+}
+
+const char* ioerrstr(enum ioerr e)
+{
+	switch (e) {
+	case IOERR_ERROR          : return "error";
+	case IOERR_NOT_FOUND      : return "not found";
+	case IOERR_ALREADY_EXISTS : return "already exists";
+	case IOERR_NOT_ALLOWED    : return "not allowed";
+	case IOERR_TOO_MANY_FILES : return "too many files";
+	}
+	return "error";
 }
 
 /*

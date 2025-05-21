@@ -166,6 +166,8 @@ static inline void doc_iterator_locate(struct doc_iterator* it, struct location*
 	}
 }
 
+void gig_host(const char* dir);
+void gig_testsetup(void);
 void gig_init(void);
 void gig_spool(void);
 void gig_thread_tick(void);

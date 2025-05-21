@@ -53,7 +53,7 @@ header {
 
 entry {
   u8 0xfa // sync byte
-  leb128 timestamp_us // microseconds since beginning
+  leb128 timestamp_us // microseconds since beginning // XXX why not time since last entry?
   leb128 artist_id
   leb128 session_id
   len128 num_mim_bytes
@@ -79,6 +79,7 @@ header {
 }
 
 manifest {
+  SYNC
   leb128 num_books
   leb128 num_docs
   leb128 num_mim_states

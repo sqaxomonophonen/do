@@ -24,6 +24,21 @@
 // FIXME what's good order of magnitude? :) 1kB? 10kB? 100kB 1000kB?
 // FIXME should probably be configurable? it's "kinda heuristic"
 
+#define DOJO_MAGIC ("DOJO0001")
+#define DOSI_MAGIC ("DOSI0001")
+#define DOSD_MAGIC ("DOSD0001")
+#define DO_FORMAT_VERSION (1)
+#define SYNC (0xfa)
+#define FILENAME_JOURNAL              "DO_JOURNAL"
+#define FILENAME_SNAPSHOTCACHE_DATA   "snapshotcache.data"
+#define FILENAME_SNAPSHOTCACHE_INDEX  "snapshotcache.index"
+
+enum fmterr {
+	// these errors can be returned as io_status and should not clash with
+	// `enum ioerr` (see io.h)
+	FMT_ERROR = -30000,
+};
+
 static void document_copy(struct document* dst, struct document* src)
 {
 	struct document tmp = *dst;
@@ -242,6 +257,12 @@ static void cow_snapshot_commit(struct cow_snapshot* cows)
 	}
 }
 
+struct iofile {
+	io_handle handle;
+	struct io_appender appender;
+	struct io_bufread bufread;
+};
+
 static struct {
 	int document_id_sequence;
 	struct snapshot cool_snapshot, hot_snapshot;
@@ -252,12 +273,20 @@ static struct {
 	struct io* io;
 	uint64_t journal_insignia;
 	uint64_t journal_offset_at_last_snapshotcache_push;
-	struct io_appender journal_appender;
-	struct io_bufread journal_bufread;
-	struct io_appender snapshotcache_data_appender;
-	struct io_appender snapshotcache_index_appender;
+	struct iofile iof_journal;
+	struct iofile iof_snapshotcache_data;
+	struct iofile iof_snapshotcache_index;
 	int64_t journal_timestamp_start;
+	char errormsg[1<<14];
 } g;
+
+static void iofile_init(struct iofile* iof, io_handle handle)
+{
+	memset(iof, 0, sizeof *iof);
+	iof->handle = handle;
+	io_appender_init(&iof->appender, g.io, handle, /*ringbuf_cap_log2=*/16, /*inflight_cap=*/8);
+	io_bufread_init(&iof->bufread, g.io, /*bufsize=*/1L<<14, handle);
+}
 
 void gig_spool(void)
 {
@@ -268,7 +297,7 @@ void gig_thread_tick(void)
 {
 	struct io_event ev;
 	while (io_poll(g.io, &ev)) {
-		if (io_appender_ack(&g.journal_appender, &ev)) continue;
+		if (io_appender_ack(&g.iof_journal.appender, &ev)) continue;
 		printf("TODO EV echo=%d h=%d st=%d!\n", ev.echo.ia32, ev.handle, ev.status);
 		assert(ev.echo.ia32 == 42);
 		const int64_t sz = io_get_size(g.io, ev.handle);
@@ -307,32 +336,6 @@ void mimf(const char* fmt, ...)
 void mim8(uint8_t v)
 {
 	mimsrc(&v, 1);
-}
-
-#define DOJO_MAGIC ("DOJO0001")
-#define DOSI_MAGIC ("DOSI0001")
-#define DOSD_MAGIC ("DOSD0001")
-#define DO_FORMAT_VERSION (1)
-#define SYNC (0xfa)
-
-static uint8_t bufread_fn(void* userdata)
-{
-	return io_bufread_next((struct io_bufread*)userdata);
-}
-
-static int64_t journal_read_leb128_i64(void)
-{
-	return leb128_decode_int64(bufread_fn, &g.journal_bufread);
-}
-
-static void journal_read_raw(void* data, size_t sz)
-{
-	io_bufread_read(&g.journal_bufread, data, sz);
-}
-
-static uint8_t journal_read_byte(void)
-{
-	return bufread_fn(&g.journal_bufread);
 }
 
 int get_my_artist_id(void)
@@ -980,13 +983,10 @@ static int it_is_time_for_a_snapshotcache_push(uint64_t journal_offset)
 
 static void snapshotcache_push(struct snapshot* snapshot, uint64_t journal_offset)
 {
-	struct io_appender* adat = &g.snapshotcache_data_appender;
-	struct io_appender* aidx = &g.snapshotcache_index_appender;
+	struct io_appender* adat = &g.iof_snapshotcache_data.appender;
+	struct io_appender* aidx = &g.iof_snapshotcache_index.appender;
 	assert(io_appender_is_initialized(adat));
 	assert(io_appender_is_initialized(aidx));
-
-	// TODO push individual snapshot datas that have changed since last
-	// snapshot; books, documents and mim states
 
 	const int num_books = arrlen(snapshot->book_arr);
 	const int num_documents = arrlen(snapshot->document_arr);
@@ -1042,7 +1042,8 @@ static void snapshotcache_push(struct snapshot* snapshot, uint64_t journal_offse
 		}
 	}
 
-	const int64_t snapshot_offset = adat->head;
+	const int64_t snapshot_manifest_offset = adat->head;
+	printf("writing snapshot offset %ld\n", snapshot_manifest_offset);
 	io_appender_write_u8(adat, SYNC);
 	io_appender_write_leb128(adat, num_books);
 	io_appender_write_leb128(adat, num_documents);
@@ -1064,13 +1065,12 @@ static void snapshotcache_push(struct snapshot* snapshot, uint64_t journal_offse
 
 	// write index triplet
 	io_appender_write_leu64(aidx, get_nanoseconds_epoch()); // XXX correct timestamp?
-	io_appender_write_leu64(aidx, snapshot_offset);
+	io_appender_write_leu64(aidx, snapshot_manifest_offset);
 	io_appender_write_leu64(aidx, journal_offset);
 	io_appender_flush(aidx);
 
 	g.journal_offset_at_last_snapshotcache_push = journal_offset;
 }
-
 
 void end_mim(void)
 {
@@ -1084,7 +1084,7 @@ void end_mim(void)
 	uint8_t* data = g.mim_buffer_arr;
 	snapshot_spool_ex(ss, data, num_bytes, get_my_artist_id(), g.using_mim_session_id);
 
-	struct io_appender* a = &g.journal_appender;
+	struct io_appender* a = &g.iof_journal.appender;
 	if (io_appender_is_initialized(a)) {
 		io_appender_write_u8(a, SYNC);
 		const int64_t journal_timestamp = (get_nanoseconds() - g.journal_timestamp_start)/1000LL;
@@ -1112,11 +1112,6 @@ void end_mim(void)
 	ringbuf_writen(&g.command_ringbuf, data, num_bytes);
 	ringbuf_commit(&g.command_ringbuf);
 	#endif
-}
-
-void gig_selftest(void)
-{
-	// TODO (used to be a mim test here)
 }
 
 int doc_iterator_next(struct doc_iterator* it)
@@ -1159,181 +1154,302 @@ static uint64_t make_insignia(void)
 	return get_nanoseconds_epoch(); // FIXME a random number might be slightly better here (no biggie)
 }
 
-static void savestatecache_stash_data(void)
+FORMATPRINTF2
+static io_status errf(io_status errcode, const char* fmt, ...)
 {
-	assert(!"TODO stash savestatecache.data (safely rename?)");
+	va_list va;
+	va_start(va, fmt);
+	stbsp_vsnprintf(g.errormsg, sizeof g.errormsg, fmt, va);
+	va_end(va);
+	return errcode;
 }
 
-static void savestatecache_stash_index(void)
+static io_status errfile(io_status e, const char* filename)
 {
-	assert(!"TODO stash savestatecache.index (safely rename?)");
+	return errf(e, "%s: %s (%d)", filename, ioerrstr(e), e);
 }
 
-static void snapshotcache_init(const char* dir, uint64_t journal_insignia)
+static void ioerrwarn(io_status e, const char* context)
+{
+	if (e>=0) return;
+	fprintf(stderr, "WARNING: %s (%d) returned for %s\n", ioerrstr(e), e, context);
+}
+
+#define IOERRWARN(e) ioerrwarn(e, #e " at " __FILE__ ":" STR2(__LINE__))
+
+static io_status snapshotcache_open(const char* dir, uint64_t journal_insignia)
 {
 	char pathbuf[1<<14];
 
-	path_join(pathbuf, sizeof pathbuf, dir, "savestatecache.data", NULL);
+	path_join(pathbuf, sizeof pathbuf, dir, FILENAME_SNAPSHOTCACHE_DATA, NULL);
+	struct io_event evdat = io_open_now(g.io, ((struct iosub_open){
+		.path = pathbuf,
+		.read = 1,
+		.write = 1,
+	}));
+	if (evdat.status < 0) return errfile(evdat.status, pathbuf);
+	const int64_t szdat = io_get_size(g.io, evdat.handle);
+	if (szdat == 0) {
+		IOERRWARN(ioi_close_now(g.io, evdat.handle));
+		return errf(FMT_ERROR, "%s: exists but is empty", pathbuf);
+	}
+
+	path_join(pathbuf, sizeof pathbuf, dir, FILENAME_SNAPSHOTCACHE_INDEX, NULL);
+	struct io_event evidx = io_open_now(g.io, ((struct iosub_open){
+		.path = pathbuf,
+		.read = 1,
+		.write = 1,
+	}));
+	if (evidx.status < 0) {
+		IOERRWARN(ioi_close_now(g.io, evdat.handle));
+		return errfile(evidx.status, pathbuf);
+	}
+	const int64_t szidx = io_get_size(g.io, evidx.handle);
+	if (szidx < 16) {
+		IOERRWARN(ioi_close_now(g.io, evidx.handle));
+		IOERRWARN(ioi_close_now(g.io, evdat.handle));
+		return errf(FMT_ERROR, "%s: exists but has no header (size is %ld)", pathbuf, szidx);
+	}
+	if (((szidx-16L) % 24L) != 0L) {
+		IOERRWARN(ioi_close_now(g.io, evidx.handle));
+		IOERRWARN(ioi_close_now(g.io, evdat.handle));
+		return errf(FMT_ERROR, "%s: exists but expected size after header to be multiple of 24 (size is %ld)", pathbuf, szidx);
+	}
+
+	// read&check snapshotcache headers and insignias
+
+	io_status e;
+
+	uint8_t idx_header[16];
+	e = io_pread_now(g.io, ((struct iosub_pread){
+		.handle = evidx.handle,
+		.data = idx_header,
+		.size = sizeof idx_header,
+		.offset = 0,
+	}));
+	if (e<0) {
+		IOERRWARN(ioi_close_now(g.io, evidx.handle));
+		IOERRWARN(ioi_close_now(g.io, evdat.handle));
+		return errfile(e, FILENAME_SNAPSHOTCACHE_INDEX);
+	}
+
+	uint8_t dat_header[16];
+	e = io_pread_now(g.io, ((struct iosub_pread){
+		.handle = evdat.handle,
+		.data = dat_header,
+		.size = sizeof dat_header,
+		.offset = 0,
+	}));
+	if (e<0) {
+		IOERRWARN(ioi_close_now(g.io, evidx.handle));
+		IOERRWARN(ioi_close_now(g.io, evdat.handle));
+		return errfile(e, FILENAME_SNAPSHOTCACHE_DATA);
+	}
+
+	assert(strlen(DOSI_MAGIC) == 8);
+	if (memcmp(idx_header, DOSI_MAGIC, 8) != 0) {
+		IOERRWARN(ioi_close_now(g.io, evidx.handle));
+		IOERRWARN(ioi_close_now(g.io, evdat.handle));
+		return errf(FMT_ERROR, "%s: missing header magic", FILENAME_SNAPSHOTCACHE_INDEX);
+	}
+
+	const uint64_t index_insignia = leu64_decode(&idx_header[8]);
+	if (index_insignia != journal_insignia) {
+		IOERRWARN(ioi_close_now(g.io, evidx.handle));
+		IOERRWARN(ioi_close_now(g.io, evdat.handle));
+		return errf(FMT_ERROR, "%s: insignia mismatch (%.8lx/j vs %.8lx/i) suggests it belong to a different %s",
+			FILENAME_SNAPSHOTCACHE_INDEX,
+			journal_insignia, index_insignia,
+			FILENAME_JOURNAL);
+	}
+
+	assert(strlen(DOSD_MAGIC) == 8);
+	if (memcmp(dat_header, DOSD_MAGIC, 8) != 0) {
+		IOERRWARN(ioi_close_now(g.io, evidx.handle));
+		IOERRWARN(ioi_close_now(g.io, evdat.handle));
+		return errf(FMT_ERROR, "%s: missing header magic", FILENAME_SNAPSHOTCACHE_DATA);
+	}
+
+	const uint64_t data_insignia = leu64_decode(&dat_header[8]);
+	if (data_insignia != journal_insignia) {
+		IOERRWARN(ioi_close_now(g.io, evidx.handle));
+		IOERRWARN(ioi_close_now(g.io, evdat.handle));
+		return errf(FMT_ERROR, "%s: insignia mismatch (%.8lx/j vs %.8lx/d) suggests it belong to a different %s",
+			FILENAME_SNAPSHOTCACHE_DATA,
+			journal_insignia, data_insignia,
+			FILENAME_JOURNAL);
+	}
+
+	iofile_init(&g.iof_snapshotcache_data  , evdat.handle);
+	iofile_init(&g.iof_snapshotcache_index , evidx.handle);
+
+	return 0;
+}
+
+static io_status snapshotcache_create(const char* dir, uint64_t journal_insignia)
+{
+	#if 0
+	printf("creating snapshots with insignia %ld\n", journal_insignia);
+	#endif
+	char pathbuf[1<<14];
+
+	path_join(pathbuf, sizeof pathbuf, dir, FILENAME_SNAPSHOTCACHE_DATA, NULL);
 	struct io_event evdat = io_open_now(g.io, ((struct iosub_open){
 		.path = pathbuf,
 		.read = 1,
 		.write = 1,
 		.create = 1,
 	}));
-	if (evdat.status < 0) assert(!"TODO handle open error");
+	if (evdat.status < 0) {
+		return errfile(evdat.status, FILENAME_SNAPSHOTCACHE_DATA);
+	}
 	const int64_t szdat = io_get_size(g.io, evdat.handle);
 
-	path_join(pathbuf, sizeof pathbuf, dir, "savestatecache.index", NULL);
+	path_join(pathbuf, sizeof pathbuf, dir, FILENAME_SNAPSHOTCACHE_INDEX, NULL);
 	struct io_event evidx = io_open_now(g.io, ((struct iosub_open){
 		.path = pathbuf,
 		.read = 1,
 		.write = 1,
 		.create = 1,
 	}));
-	if (evidx.status < 0) assert(!"TODO handle open error");
+	if (evidx.status < 0) {
+		IOERRWARN(ioi_close_now(g.io, evdat.handle));
+		return errfile(evidx.status, FILENAME_SNAPSHOTCACHE_INDEX);
+	}
 	const int64_t szidx = io_get_size(g.io, evidx.handle);
 
 	const int is_new = ((szdat == 0) || (szidx == 0));
-
-	int stash_data=0, stash_index=0;
-	int do_init=0;
-	if (is_new) {
-		stash_data  = (szdat > 0);
-		stash_index = (szidx > 0);
-		do_init = 1;
-	} else {
-		// read&check snapshotcache headers and insignias
-
-		uint8_t idx_header[16];
-		assert("FIXME ERROR HANDLING" && (0 == io_pread_now(g.io, ((struct iosub_pread){
-			.handle = evidx.handle,
-			.data = idx_header,
-			.size = sizeof idx_header,
-			.offset = 0,
-		}))));
-
-		uint8_t dat_header[16];
-		assert("FIXME ERROR HANDLING" && (0 == io_pread_now(g.io, ((struct iosub_pread){
-			.handle = evdat.handle,
-			.data = dat_header,
-			.size = sizeof dat_header,
-			.offset = 0,
-		}))));
-
-		assert(strlen(DOSI_MAGIC) == 8);
-		stash_index = 1;
-		if (memcmp(idx_header, DOSI_MAGIC, 8) == 0) {
-			uint64_t insignia = leu64_decode(&idx_header[8]);
-			if (insignia == journal_insignia) {
-				stash_index = 0;
-			}
-		}
-
-		assert(strlen(DOSD_MAGIC) == 8);
-		stash_data = 1;
-		if (memcmp(dat_header, DOSD_MAGIC, 8) == 0) {
-			uint64_t insignia = leu64_decode(&dat_header[8]);
-			if (insignia == journal_insignia) {
-				stash_data = 0;
-			}
-		}
-
-		if (stash_index || stash_data) {
-			stash_index = (szidx > 0);
-			stash_data  = (szdat > 0);
-			do_init = 1;
-		}
+	if (!is_new) {
+		IOERRWARN(ioi_close_now(g.io, evidx.handle));
+		IOERRWARN(ioi_close_now(g.io, evdat.handle));
+		return IOERR_ALREADY_EXISTS;
 	}
 
-	if (stash_data) {
-		savestatecache_stash_data();
-		assert(!"TODO reopen?");
+	iofile_init(&g.iof_snapshotcache_data  , evdat.handle);
+	iofile_init(&g.iof_snapshotcache_index , evidx.handle);
+	struct io_appender* adat = &g.iof_snapshotcache_data.appender;
+	struct io_appender* aidx = &g.iof_snapshotcache_index.appender;
+
+	io_status e;
+
+	io_appender_write_raw(aidx, DOSI_MAGIC, strlen(DOSI_MAGIC));
+	io_appender_write_leu64(aidx, journal_insignia);
+	e = io_appender_flush_now(aidx);
+	if (e<0) {
+		IOERRWARN(ioi_close_now(g.io, evidx.handle));
+		IOERRWARN(ioi_close_now(g.io, evdat.handle));
+		return errfile(e, FILENAME_SNAPSHOTCACHE_INDEX);
 	}
 
-	if (stash_index) {
-		savestatecache_stash_index();
-		assert(!"TODO reopen?");
+	io_appender_write_raw(adat, DOSD_MAGIC, strlen(DOSD_MAGIC));
+	io_appender_write_leu64(adat, journal_insignia);
+	e = io_appender_flush_now(adat);
+	if (e<0) {
+		IOERRWARN(ioi_close_now(g.io, evidx.handle));
+		IOERRWARN(ioi_close_now(g.io, evdat.handle));
+		return errf(e, FILENAME_SNAPSHOTCACHE_DATA);
 	}
 
-	struct io_appender* adat = &g.snapshotcache_data_appender;
-	struct io_appender* aidx = &g.snapshotcache_index_appender;
-	io_appender_init(adat, g.io, evdat.handle, /*ringbuf_cap_log2=*/16, /*inflight_cap=*/8);
-	io_appender_init(aidx, g.io, evidx.handle, /*ringbuf_cap_log2=*/16, /*inflight_cap=*/8);
-
-	if (do_init) {
-		adat->file_cursor = 0;
-		aidx->file_cursor = 0;
-
-		io_appender_write_raw(aidx, DOSI_MAGIC, strlen(DOSI_MAGIC));
-		io_appender_write_leu64(aidx, journal_insignia);
-		io_appender_flush_now(aidx);
-
-		io_appender_write_raw(adat, DOSD_MAGIC, strlen(DOSD_MAGIC));
-		io_appender_write_leu64(adat, journal_insignia);
-		io_appender_flush_now(adat);
-	} else {
-		assert(!"TODO?");
-	}
+	return 0;
 }
 
-static void host_dir(const char* dir)
+static io_status restore_snapshot(uint64_t snapshot_manifest_offset, uint64_t journal_offset)
+{
+	printf("o0=%ld o1=%ld\n", snapshot_manifest_offset, journal_offset);
+	struct io_bufread* b = &g.iof_snapshotcache_data.bufread;
+	io_bufread_seek(b, snapshot_manifest_offset);
+
+	const uint8_t sync = io_bufread_u8(b);
+	if (sync != SYNC) {
+		return errf(FMT_ERROR, "expected SYNC at snapshotcache data offset %ld", snapshot_manifest_offset);
+	}
+
+	const int64_t num_books      = io_bufread_leb128_i64(b);
+	const int64_t num_documents  = io_bufread_leb128_i64(b);
+	const int64_t num_mim_states = io_bufread_leb128_i64(b);
+	printf("books:%ld docs:%ld mims:%ld\n",
+	num_books      ,
+	num_documents  ,
+	num_mim_states );
+
+	assert(!"TODO");
+
+	return 0;
+}
+
+static io_status restore_latest_snapshot(void)
+{
+	uint64_t sz = io_get_size(g.io, g.iof_snapshotcache_index.handle);
+	struct io_bufread* b = &g.iof_snapshotcache_index.bufread;
+	printf("idxsz=%ld\n", sz);
+	io_bufread_seek(b, (sz - 2*sizeof(uint64_t)));
+	const uint64_t snapshot_manifest_offset = io_bufread_leu64(b);
+	const uint64_t journal_offset = io_bufread_leu64(b);
+	return restore_snapshot(snapshot_manifest_offset, journal_offset);
+}
+
+static io_status host_dir(const char* dir)
 {
 	char pathbuf[1<<14];
-	path_join(pathbuf, sizeof pathbuf, dir, "DO_JOURNAL", NULL);
+	path_join(pathbuf, sizeof pathbuf, dir, FILENAME_JOURNAL, NULL);
 	struct io_event ev = io_open_now(g.io, ((struct iosub_open){
 		.path = pathbuf,
 		.read = 1,
 		.write = 1,
 		.create = 1,
 	}));
-	if (ev.status < 0) assert(!"TODO handle dir not found?");
-	struct io_appender* a = &g.journal_appender;
-	io_appender_init(&g.journal_appender, g.io, ev.handle, /*ringbuf_cap_log2=*/16, /*inflight_cap=*/8);
-	const int64_t sz = io_get_size(g.io, ev.handle);
+	if (ev.status < 0) return errfile(ev.status, FILENAME_JOURNAL);
+
+	iofile_init(&g.iof_journal, ev.handle);
+
+	io_status e;
+	const int64_t sz = io_get_size(g.io, g.iof_journal.handle);
 	if (sz == 0) {
+		struct io_appender* a = &g.iof_journal.appender;
 		io_appender_write_raw(a, DOJO_MAGIC, strlen(DOJO_MAGIC));
 		io_appender_write_leb128(a, DO_FORMAT_VERSION);
 		g.journal_insignia = make_insignia();
 		io_appender_write_leu64(a, g.journal_insignia);
 		// TODO epoch timestamp?
-		io_appender_flush_now(a);
+		e = io_appender_flush_now(a);
+		if (e<0) return errfile(e, FILENAME_JOURNAL);
 		g.journal_timestamp_start = get_nanoseconds();
-		snapshotcache_init(dir, g.journal_insignia);
+		return snapshotcache_create(dir, g.journal_insignia);
 	} else {
-		assert(!"FIXME");//FIXME
+		struct io_bufread* jbr = &g.iof_journal.bufread;
+
 		uint8_t magic[8];
-		// XXX
-		assert("FIXME ERROR HANDLING" && (0 == io_pread_now(g.io, ((struct iosub_pread){
-			.handle = ev.handle,
-			.data = magic,
-			.size = 8,
-			.offset = 0,
-		}))));
-		assert("FIXME ERROR HANDLING" && (memcmp(magic, DOJO_MAGIC, 8) == 0)); // XXX
+		e = io_bufread_raw(jbr, magic, sizeof magic);
+		if (e<0) return errfile(e, FILENAME_JOURNAL);
+		if (memcmp(magic, DOJO_MAGIC, 8) != 0) {
+			return errf(FMT_ERROR, "invalid magic in journal header");
+		}
 
-		uint8_t buf[1<<12];
-		struct io_bufread* jbr = &g.journal_bufread;
-		memset(jbr, 0, sizeof *jbr);
-		jbr->io = g.io;
-		jbr->handle = ev.handle,
-		jbr->file_cursor = 8;
-		jbr->buf = buf;
-		jbr->bufsize = sizeof(buf);
-
-		const int64_t do_format_version = journal_read_leb128_i64();
+		const int64_t do_format_version = io_bufread_leb128_i64(jbr);
 		assert((do_format_version == DO_FORMAT_VERSION) && "XXX error handling");
+		g.journal_insignia = io_bufread_leu64(jbr);
+
+		int64_t spool_offset = io_bufread_tell(jbr);
+
+		e = snapshotcache_open(dir, g.journal_insignia);
+		if (e<0) return e;
+
+		e = restore_latest_snapshot();
+		if (e<0) return e;
+
+		assert(!"XXX set spool offset?");
 
 		static uint8_t* mimbuf_arr = NULL;
-		if (mimbuf_arr == NULL) {
-			arrinit(mimbuf_arr, &system_allocator);
-		}
+		if (mimbuf_arr == NULL) arrinit(mimbuf_arr, &system_allocator);
+
+		io_bufread_seek(jbr, spool_offset);
 		while (!jbr->end_of_file) {
-			const uint8_t sync = journal_read_byte();
+			const uint8_t sync = io_bufread_u8(jbr);
 			assert((sync == SYNC) && "XXX error handling");
-			const int64_t timestamp_us = journal_read_leb128_i64();
-			const int64_t artist_id = journal_read_leb128_i64();
-			const int64_t session_id = journal_read_leb128_i64();
-			const int64_t num_bytes = journal_read_leb128_i64();
+			const int64_t timestamp_us = io_bufread_leb128_i64(jbr);
+			const int64_t artist_id = io_bufread_leb128_i64(jbr);
+			const int64_t session_id = io_bufread_leb128_i64(jbr);
+			const int64_t num_bytes = io_bufread_leb128_i64(jbr);
 			#if 1
 			printf("%ld %ld %ld %ld\n",
 				timestamp_us,
@@ -1342,29 +1458,23 @@ static void host_dir(const char* dir)
 				num_bytes);
 			#endif
 			arrsetlen(mimbuf_arr, num_bytes);
-			journal_read_raw(mimbuf_arr, num_bytes);
+			io_bufread_raw(jbr, mimbuf_arr, num_bytes);
 			snapshot_spool_ex(&g.cool_snapshot, mimbuf_arr, num_bytes, artist_id, session_id);
 		}
 	}
 }
 
-static void snapshot_init(struct snapshot* ss)
+void gig_host(const char* dir)
 {
-	memset(ss, 0, sizeof *ss);
-	arrinit(ss->book_arr, &system_allocator);
-	arrinit(ss->document_arr, &system_allocator);
-	arrinit(ss->mim_state_arr, &system_allocator);
+	io_status e = host_dir(dir);
+	if (e<0) {
+		fprintf(stderr, "host_dir(\"%s\") failed: [%s]/%d\n", dir, g.errormsg, e);
+		abort();
+	}
 }
 
-void gig_init(void)
+void gig_testsetup(void) // XXX "getting started"-stuff, removeme?
 {
-	snapshot_init(&g.cool_snapshot);
-	snapshot_init(&g.hot_snapshot);
-	arrinit(g.mim_buffer_arr, &system_allocator);
-
-	//ringbuf_init(&g.command_ringbuf, 16);
-
-	// XXX "getting started"-stuff here:
 	g.my_artist_id = 1;
 	const int document_id = 1;
 	struct snapshot* ss = &g.cool_snapshot;
@@ -1381,22 +1491,32 @@ void gig_init(void)
 	arrinit(ms1.caret_arr, &system_allocator);
 	struct caret cr = {
 		.tag=0,
-		.caret_loc={.line=1,.column=1},
+		.caret_loc ={.line=1,.column=1},
 		.anchor_loc={.line=1,.column=1},
 	};
 	arrput(ms1.caret_arr, cr);
 	arrput(ss->mim_state_arr, ms1);
-
-	g.io = io_new(10, 128);
-
-	if (arg_dir) {
-		host_dir(arg_dir);
-	} else {
-		host_dir(".");
-	}
-
-	#if 0
-	gig_thread_tick();
-	gig_spool();
-	#endif
 }
+
+static void snapshot_init(struct snapshot* ss)
+{
+	memset(ss, 0, sizeof *ss);
+	arrinit(ss->book_arr, &system_allocator);
+	arrinit(ss->document_arr, &system_allocator);
+	arrinit(ss->mim_state_arr, &system_allocator);
+}
+
+void gig_init(void)
+{
+	g.io = io_new(10, 128);
+	snapshot_init(&g.cool_snapshot);
+	snapshot_init(&g.hot_snapshot);
+	arrinit(g.mim_buffer_arr, &system_allocator);
+	//ringbuf_init(&g.command_ringbuf, 16);
+}
+
+void gig_selftest(void)
+{
+	// TODO (used to be a mim test here)
+}
+

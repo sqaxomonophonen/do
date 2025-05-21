@@ -6,14 +6,18 @@
 #include <assert.h>
 #include <string.h>
 
+#include "binary.h"
+#include "leb128.h"
+
 struct io;
 
 typedef int32_t io_handle;
 typedef int32_t io_status;
 
 enum ioerr {
-	IOERR_ERROR = -30000,
+	IOERR_ERROR = -20000,
 	IOERR_NOT_FOUND,
+	IOERR_ALREADY_EXISTS,
 	IOERR_NOT_ALLOWED,
 	IOERR_TOO_MANY_FILES,
 };
@@ -87,6 +91,10 @@ struct io_event io_open_now(struct io*, struct iosub_open);
 
 void io_close(struct io*, struct iosub_close);
 io_status io_close_now(struct io*, struct iosub_close);
+static inline io_status ioi_close_now(struct io* io, io_handle h)
+{
+	return io_close_now(io, ((struct iosub_close){ .handle = h }));
+}
 // status is negative on error (IOERR_*), otherwise 0
 
 void io_pwrite(struct io*, struct iosub_pwrite);
@@ -152,23 +160,47 @@ int  io_appender_ack(struct io_appender*, struct io_event*);
 struct io_bufread {
 	struct io* io;
 	io_handle handle;
-	size_t file_cursor;
-	uint8_t* buf;
 	size_t bufsize;
+	uint8_t* buf;
+	size_t file_cursor;
+	// internal/feedback
 	io_status error;
 	unsigned end_of_file :1;
-	// derived
-	uint8_t *_bufcur, *_bufend;
+	uint8_t *bufcur, *bufend;
 };
 
-io_status io_bufread_read(struct io_bufread* b, void* dst, size_t sz);
+void io_bufread_init(struct io_bufread*, struct io*, size_t bufsize, io_handle);
 
-static inline uint8_t io_bufread_next(struct io_bufread* b)
+io_status io_bufread_raw(struct io_bufread* b, void* dst, size_t sz);
+
+static inline uint8_t io_bufread_u8(struct io_bufread* b)
 {
 	uint8_t v=0;
-	io_bufread_read(b, &v, 1);
+	io_bufread_raw(b, &v, 1);
 	return v;
 }
+
+static uint8_t io_bufread_u8_wrap(void* userdata)
+{
+	return io_bufread_u8((struct io_bufread*)userdata);
+}
+
+void io_bufread_seek(struct io_bufread*, int64_t pos);
+int64_t io_bufread_tell(struct io_bufread*);
+
+static inline int64_t io_bufread_leb128_i64(struct io_bufread* b)
+{
+	return leb128_decode_int64(io_bufread_u8_wrap, b);
+}
+
+static inline uint64_t io_bufread_leu64(struct io_bufread* b)
+{
+	uint8_t buf[8];
+	io_bufread_raw(b, buf, sizeof buf);
+	return leu64_decode(buf);
+}
+
+const char* ioerrstr(enum ioerr);
 
 #define IO_H
 #endif
