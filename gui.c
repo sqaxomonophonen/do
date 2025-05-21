@@ -1278,8 +1278,8 @@ static void draw_code_pane(struct pane* pane)
 		const unsigned cp = fc != NULL ? fc->thicchar.codepoint : 0;
 
 		if (fc != NULL) {
-			if (fc->is_insert) bg_color[1] += 0.2f;
-			if (fc->is_delete) bg_color[0] += 0.3f;
+			if (fc->flags & FC_IS_INSERT) bg_color[1] += 0.2f;
+			if (fc->flags & FC_IS_DELETE) bg_color[0] += 0.3f;
 		}
 
 		if (has_light(bg_color) && cp >= ' ') {

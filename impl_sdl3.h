@@ -11,6 +11,13 @@ int64_t get_nanoseconds(void)
 	return SDL_GetTicksNS();
 }
 
+int64_t get_nanoseconds_epoch(void)
+{
+	SDL_Time ticks;
+	assert(SDL_GetCurrentTime(&ticks));
+	return ticks;
+}
+
 void sleep_nanoseconds(int64_t ns)
 {
 	SDL_DelayNS(ns);

@@ -8,6 +8,7 @@
 #include <limits.h>
 
 #include "io.h"
+#include "binary.h"
 #include "leb128.h"
 #include "util.h"
 #include "main.h"
@@ -369,6 +370,13 @@ int io_appender_write_raw(struct io_appender* a, void* data, size_t size)
 	}
 	a->head = new_head;
 	return 1;
+}
+
+int io_appender_write_leu64(struct io_appender* a, uint64_t value)
+{
+	uint8_t data[8];
+	leu64_encode(data, value);
+	return io_appender_write_raw(a, data, sizeof data);
 }
 
 int io_appender_write_leb128(struct io_appender* a, int64_t value)

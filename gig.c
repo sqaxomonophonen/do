@@ -12,10 +12,17 @@
 #include "gig.h"
 #include "util.h"
 #include "leb128.h"
+#include "binary.h"
 #include "utf8.h"
 #include "path.h"
 #include "main.h"
 #include "args.h"
+
+#define JOURNAL_GROWTH_SNAPSHOT_THRESHOLD (300) // XXX
+// number of bytes the journal can grow before a snapshot is written to
+// snapshotcache.data/index
+// FIXME what's good order of magnitude? :) 1kB? 10kB? 100kB 1000kB?
+// FIXME should probably be configurable? it's "kinda heuristic"
 
 static void document_copy(struct document* dst, struct document* src)
 {
@@ -43,11 +50,6 @@ static int document_locate(struct document* doc, struct location* loc)
 	doc_iterator_locate(&it, loc);
 	return it.offset;
 }
-
-struct book {
-	int id;
-	int target; // TODO? should be language+backend? like mie+audiobackend(name?)
-};
 
 struct snapshot {
 	struct book* book_arr;
@@ -248,10 +250,12 @@ static struct {
 	int using_mim_session_id;
 	int in_mim;
 	struct io* io;
+	uint64_t journal_insignia;
+	uint64_t journal_offset_at_last_snapshotcache_push;
 	struct io_appender journal_appender;
 	struct io_bufread journal_bufread;
-	struct io_appender savestates_data_appender;
-	struct io_appender savestates_index_appender;
+	struct io_appender snapshotcache_data_appender;
+	struct io_appender snapshotcache_index_appender;
 	int64_t journal_timestamp_start;
 } g;
 
@@ -306,6 +310,8 @@ void mim8(uint8_t v)
 }
 
 #define DOJO_MAGIC ("DOJO0001")
+#define DOSI_MAGIC ("DOSI0001")
+#define DOSD_MAGIC ("DOSD0001")
 #define DO_FORMAT_VERSION (1)
 #define SYNC (0xfa)
 
@@ -345,8 +351,8 @@ void get_state_and_doc(int session_id, struct mim_state** out_mim_state, struct 
 			const int document_id = ms->document_id;
 			assert((document_id > 0) && "invalid document id in mim state");
 			struct document* doc = NULL;
-			const int num_docs = arrlen(ss->document_arr);
-			for (int i=0; i<num_docs; ++i) {
+			const int num_documents = arrlen(ss->document_arr);
+			for (int i=0; i<num_documents; ++i) {
 				struct document* d = arrchkptr(ss->document_arr, i);
 				if (d->id == document_id) {
 					doc = d;
@@ -404,12 +410,12 @@ static void mimop_delete(struct mimop* mo, struct location* loc0, struct locatio
 	int o1 = document_locate(doc, loc1);
 	for (int o=o0; o<o1; ++o) {
 		struct fat_char* fc = arrchkptr(doc->fat_char_arr, o);
-		if (fc->is_insert) {
+		if (fc->flags & FC_IS_INSERT) {
 			arrdel(doc->fat_char_arr, arrchk(doc->fat_char_arr, o));
 			--o;
 			--o1;
 		} else {
-			fc->is_delete = 1;
+			fc->flags |= FC_IS_DELETE;
 		}
 	}
 }
@@ -530,9 +536,9 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 								else assert(!"unreachable");
 								while ((0 <= o) && (o < num_chars)) {
 									struct fat_char* fc = arrchkptr(doc->fat_char_arr, o);
-									const int is_fillable = (fc->is_insert || fc->is_delete);
-									if (fc->_fill || fc->is_defer || !is_fillable) break;
-									if (is_fillable) fc->_fill = 1;
+									const int is_fillable = fc->flags & (FC_IS_INSERT | FC_IS_DELETE);
+									if ((fc->flags & (FC__FILL | FC_IS_DEFER)) || !is_fillable) break;
+									if (is_fillable) fc->flags |= FC__FILL;
 									o += d;
 								}
 							}
@@ -542,27 +548,25 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 
 					for (int i=0; i<num_chars; ++i) {
 						struct fat_char* fc = arrchkptr(doc->fat_char_arr, i);
-						if (!fc->_fill) continue;
+						if (!(fc->flags & FC__FILL)) continue;
 
 						if (chr=='!') {
-							if (fc->is_insert) { // commit
-								fc->_fill=0;
-								fc->is_insert=0;
+							if (fc->flags & FC_IS_INSERT) { // commit
+								fc->flags &= ~(FC__FILL | FC_IS_INSERT);
 							}
-							if (fc->is_delete) {
+							if (fc->flags & FC_IS_DELETE) {
 								arrdel(doc->fat_char_arr, arrchk(doc->fat_char_arr, i));
 								--i;
 								--num_chars;
 							}
 						} else if (chr=='/') { // cancel
-							if (fc->is_insert) {
+							if (fc->flags & FC_IS_INSERT) {
 								arrdel(doc->fat_char_arr, arrchk(doc->fat_char_arr, i));
 								--i;
 								--num_chars;
 							}
-							if (fc->is_delete) {
-								fc->_fill=0;
-								fc->is_delete=0;
+							if (fc->flags & FC_IS_DELETE) {
+								fc->flags &= ~(FC__FILL | FC_IS_DELETE);
 							}
 						} else {
 							assert(!"unhandled command");
@@ -659,18 +663,16 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 								int dc=0;
 								if ((0 <= od) && (od < num_chars)) {
 									struct fat_char* fc = arrchkptr(doc->fat_char_arr, od);
-									if (fc->is_insert) {
+									if (fc->flags & FC_IS_INSERT) {
 										arrdel(doc->fat_char_arr, od);
 										dc=m0;
-									} else if (fc->is_delete) {
+									} else if (fc->flags & FC_IS_DELETE) {
 										dc=m1;
 									} else {
-										assert((!fc->is_insert) && (!fc->is_delete));
-										if (fc->is_delete == 0) {
-											fc->is_delete = 1;
-											fc->flipped_delete = 1;
-											fc->timestamp = now;
-										}
+										assert(!(fc->flags & FC_IS_INSERT));
+										assert(!(fc->flags & FC_IS_DELETE));
+										fc->flags |= (FC_IS_DELETE | FC__FLIPPED_DELETE);
+										fc->timestamp = now;
 										dc=m1;
 									}
 								}
@@ -773,8 +775,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 						},
 						.timestamp = now,
 						//.artist_id = get_my_artist_id(),
-						.is_insert = 1,
-						.flipped_insert = 1,
+						.flags = (FC_IS_INSERT | FC__FLIPPED_INSERT),
 					}));
 					if (chr == '\n') {
 						++loc->line;
@@ -912,7 +913,7 @@ static void document_to_thicchar_da(struct thicchar** arr, struct document* doc)
 	arrreset(*arr);
 	for (int i=0; i<num_src; ++i) {
 		struct fat_char* fc = arrchkptr(doc->fat_char_arr, i);
-		if (fc->is_insert) continue; // not yet inserted
+		if (fc->flags & FC_IS_INSERT) continue; // not yet inserted
 		arrput(*arr, fc->thicchar);
 	}
 }
@@ -971,6 +972,106 @@ static void snapshot_spool_ex(struct snapshot* snapshot, uint8_t* data, int num_
 	mie_end_scrallox();
 }
 
+static int it_is_time_for_a_snapshotcache_push(uint64_t journal_offset)
+{
+	int64_t growth = (journal_offset - g.journal_offset_at_last_snapshotcache_push);
+	return growth > JOURNAL_GROWTH_SNAPSHOT_THRESHOLD;
+}
+
+static void snapshotcache_push(struct snapshot* snapshot, uint64_t journal_offset)
+{
+	struct io_appender* adat = &g.snapshotcache_data_appender;
+	struct io_appender* aidx = &g.snapshotcache_index_appender;
+	assert(io_appender_is_initialized(adat));
+	assert(io_appender_is_initialized(aidx));
+
+	// TODO push individual snapshot datas that have changed since last
+	// snapshot; books, documents and mim states
+
+	const int num_books = arrlen(snapshot->book_arr);
+	const int num_documents = arrlen(snapshot->document_arr);
+	const int num_mim_states = arrlen(snapshot->mim_state_arr);
+
+	for (int i=0; i<num_books; ++i) {
+		struct book* book = &snapshot->book_arr[i];
+		if (book->snapshotcache_offset) continue;
+		book->snapshotcache_offset = adat->head;
+		io_appender_write_u8(adat, SYNC);
+		io_appender_write_leb128(adat, book->id);
+	}
+
+	for (int i=0; i<num_documents; ++i) {
+		struct document* doc = &snapshot->document_arr[i];
+		if (doc->snapshotcache_offset) continue;
+		doc->snapshotcache_offset = adat->head;
+		io_appender_write_u8(adat, SYNC);
+		io_appender_write_leb128(adat, doc->id);
+		io_appender_write_leb128(adat, doc->book_id);
+		io_appender_write_leb128(adat, doc->order_key);
+		const int name_len = strlen(doc->name_arr);
+		io_appender_write_leb128(adat, name_len);
+		io_appender_write_raw(adat, doc->name_arr, name_len);
+		const int doc_len = arrlen(doc->fat_char_arr);
+		for (int ii=0; ii<doc_len; ++ii) {
+			struct fat_char* c = &doc->fat_char_arr[ii];
+			struct thicchar* tc = &c->thicchar;
+			io_appender_write_leb128(adat, tc->codepoint);
+			for (int iii=0; iii<4; ++iii) io_appender_write_u8(adat, tc->color[iii]);
+			io_appender_write_leb128(adat, c->flags);
+		}
+	}
+
+	for (int i=0; i<num_mim_states; ++i) {
+		struct mim_state* ms = &snapshot->mim_state_arr[i];
+		if (ms->snapshotcache_offset) continue;
+		ms->snapshotcache_offset = adat->head;
+		io_appender_write_u8(adat, SYNC);
+		io_appender_write_leb128(adat, ms->artist_id);
+		io_appender_write_leb128(adat, ms->session_id);
+		io_appender_write_leb128(adat, ms->document_id);
+		for (int ii=0; ii<4; ++ii) io_appender_write_u8(adat, ms->color[ii]);
+		const int num_carets = arrlen(ms->caret_arr);
+		io_appender_write_leb128(adat, num_carets);
+		for (int ii=0; ii<num_carets; ++ii) {
+			struct caret* cr = &ms->caret_arr[ii];
+			io_appender_write_leb128(adat, cr->tag);
+			io_appender_write_leb128(adat, cr->caret_loc.line);
+			io_appender_write_leb128(adat, cr->caret_loc.column);
+			io_appender_write_leb128(adat, cr->anchor_loc.line);
+			io_appender_write_leb128(adat, cr->anchor_loc.column);
+		}
+	}
+
+	const int64_t snapshot_offset = adat->head;
+	io_appender_write_u8(adat, SYNC);
+	io_appender_write_leb128(adat, num_books);
+	io_appender_write_leb128(adat, num_documents);
+	io_appender_write_leb128(adat, num_mim_states);
+	for (int i=0; i<num_books; ++i) {
+		struct book* book = &snapshot->book_arr[i];
+		io_appender_write_leb128(adat, book->snapshotcache_offset);
+	}
+	for (int i=0; i<num_documents; ++i) {
+		struct document* doc = &snapshot->document_arr[i];
+		io_appender_write_leb128(adat, doc->snapshotcache_offset);
+	}
+	for (int i=0; i<num_mim_states; ++i) {
+		struct mim_state* ms = &snapshot->mim_state_arr[i];
+		io_appender_write_leb128(adat, ms->snapshotcache_offset);
+	}
+
+	io_appender_flush(adat);
+
+	// write index triplet
+	io_appender_write_leu64(aidx, get_nanoseconds_epoch()); // XXX correct timestamp?
+	io_appender_write_leu64(aidx, snapshot_offset);
+	io_appender_write_leu64(aidx, journal_offset);
+	io_appender_flush(aidx);
+
+	g.journal_offset_at_last_snapshotcache_push = journal_offset;
+}
+
+
 void end_mim(void)
 {
 	assert(g.in_mim);
@@ -978,12 +1079,14 @@ void end_mim(void)
 	g.in_mim = 0;
 	if (num_bytes == 0) return;
 
+	struct snapshot* ss = &g.cool_snapshot;
+
 	uint8_t* data = g.mim_buffer_arr;
-	snapshot_spool_ex(&g.cool_snapshot, data, num_bytes, get_my_artist_id(), g.using_mim_session_id);
+	snapshot_spool_ex(ss, data, num_bytes, get_my_artist_id(), g.using_mim_session_id);
 
 	struct io_appender* a = &g.journal_appender;
 	if (io_appender_is_initialized(a)) {
-		io_appender_write_raw(a, "\xfa", 1);
+		io_appender_write_u8(a, SYNC);
 		const int64_t journal_timestamp = (get_nanoseconds() - g.journal_timestamp_start)/1000LL;
 		io_appender_write_leb128(a, journal_timestamp);
 		io_appender_write_leb128(a, get_my_artist_id());
@@ -991,6 +1094,10 @@ void end_mim(void)
 		io_appender_write_leb128(a, num_bytes);
 		io_appender_write_raw(a, data, num_bytes);
 		io_appender_flush(a);
+
+		if (it_is_time_for_a_snapshotcache_push(a->head)) {
+			snapshotcache_push(ss, a->head);
+		}
 	}
 
 	#if 0
@@ -1047,6 +1154,128 @@ int doc_iterator_next(struct doc_iterator* it)
 	return 1;
 }
 
+static uint64_t make_insignia(void)
+{
+	return get_nanoseconds_epoch(); // FIXME a random number might be slightly better here (no biggie)
+}
+
+static void savestatecache_stash_data(void)
+{
+	assert(!"TODO stash savestatecache.data (safely rename?)");
+}
+
+static void savestatecache_stash_index(void)
+{
+	assert(!"TODO stash savestatecache.index (safely rename?)");
+}
+
+static void snapshotcache_init(const char* dir, uint64_t journal_insignia)
+{
+	char pathbuf[1<<14];
+
+	path_join(pathbuf, sizeof pathbuf, dir, "savestatecache.data", NULL);
+	struct io_event evdat = io_open_now(g.io, ((struct iosub_open){
+		.path = pathbuf,
+		.read = 1,
+		.write = 1,
+		.create = 1,
+	}));
+	if (evdat.status < 0) assert(!"TODO handle open error");
+	const int64_t szdat = io_get_size(g.io, evdat.handle);
+
+	path_join(pathbuf, sizeof pathbuf, dir, "savestatecache.index", NULL);
+	struct io_event evidx = io_open_now(g.io, ((struct iosub_open){
+		.path = pathbuf,
+		.read = 1,
+		.write = 1,
+		.create = 1,
+	}));
+	if (evidx.status < 0) assert(!"TODO handle open error");
+	const int64_t szidx = io_get_size(g.io, evidx.handle);
+
+	const int is_new = ((szdat == 0) || (szidx == 0));
+
+	int stash_data=0, stash_index=0;
+	int do_init=0;
+	if (is_new) {
+		stash_data  = (szdat > 0);
+		stash_index = (szidx > 0);
+		do_init = 1;
+	} else {
+		// read&check snapshotcache headers and insignias
+
+		uint8_t idx_header[16];
+		assert("FIXME ERROR HANDLING" && (0 == io_pread_now(g.io, ((struct iosub_pread){
+			.handle = evidx.handle,
+			.data = idx_header,
+			.size = sizeof idx_header,
+			.offset = 0,
+		}))));
+
+		uint8_t dat_header[16];
+		assert("FIXME ERROR HANDLING" && (0 == io_pread_now(g.io, ((struct iosub_pread){
+			.handle = evdat.handle,
+			.data = dat_header,
+			.size = sizeof dat_header,
+			.offset = 0,
+		}))));
+
+		assert(strlen(DOSI_MAGIC) == 8);
+		stash_index = 1;
+		if (memcmp(idx_header, DOSI_MAGIC, 8) == 0) {
+			uint64_t insignia = leu64_decode(&idx_header[8]);
+			if (insignia == journal_insignia) {
+				stash_index = 0;
+			}
+		}
+
+		assert(strlen(DOSD_MAGIC) == 8);
+		stash_data = 1;
+		if (memcmp(dat_header, DOSD_MAGIC, 8) == 0) {
+			uint64_t insignia = leu64_decode(&dat_header[8]);
+			if (insignia == journal_insignia) {
+				stash_data = 0;
+			}
+		}
+
+		if (stash_index || stash_data) {
+			stash_index = (szidx > 0);
+			stash_data  = (szdat > 0);
+			do_init = 1;
+		}
+	}
+
+	if (stash_data) {
+		savestatecache_stash_data();
+		assert(!"TODO reopen?");
+	}
+
+	if (stash_index) {
+		savestatecache_stash_index();
+		assert(!"TODO reopen?");
+	}
+
+	struct io_appender* adat = &g.snapshotcache_data_appender;
+	struct io_appender* aidx = &g.snapshotcache_index_appender;
+	io_appender_init(adat, g.io, evdat.handle, /*ringbuf_cap_log2=*/16, /*inflight_cap=*/8);
+	io_appender_init(aidx, g.io, evidx.handle, /*ringbuf_cap_log2=*/16, /*inflight_cap=*/8);
+
+	if (do_init) {
+		adat->file_cursor = 0;
+		aidx->file_cursor = 0;
+
+		io_appender_write_raw(aidx, DOSI_MAGIC, strlen(DOSI_MAGIC));
+		io_appender_write_leu64(aidx, journal_insignia);
+		io_appender_flush_now(aidx);
+
+		io_appender_write_raw(adat, DOSD_MAGIC, strlen(DOSD_MAGIC));
+		io_appender_write_leu64(adat, journal_insignia);
+		io_appender_flush_now(adat);
+	} else {
+		assert(!"TODO?");
+	}
+}
+
 static void host_dir(const char* dir)
 {
 	char pathbuf[1<<14];
@@ -1060,14 +1289,18 @@ static void host_dir(const char* dir)
 	if (ev.status < 0) assert(!"TODO handle dir not found?");
 	struct io_appender* a = &g.journal_appender;
 	io_appender_init(&g.journal_appender, g.io, ev.handle, /*ringbuf_cap_log2=*/16, /*inflight_cap=*/8);
-	int64_t sz = io_get_size(g.io, ev.handle);
+	const int64_t sz = io_get_size(g.io, ev.handle);
 	if (sz == 0) {
 		io_appender_write_raw(a, DOJO_MAGIC, strlen(DOJO_MAGIC));
 		io_appender_write_leb128(a, DO_FORMAT_VERSION);
+		g.journal_insignia = make_insignia();
+		io_appender_write_leu64(a, g.journal_insignia);
 		// TODO epoch timestamp?
 		io_appender_flush_now(a);
 		g.journal_timestamp_start = get_nanoseconds();
+		snapshotcache_init(dir, g.journal_insignia);
 	} else {
+		assert(!"FIXME");//FIXME
 		uint8_t magic[8];
 		// XXX
 		assert("FIXME ERROR HANDLING" && (0 == io_pread_now(g.io, ((struct iosub_pread){
@@ -1158,6 +1391,8 @@ void gig_init(void)
 
 	if (arg_dir) {
 		host_dir(arg_dir);
+	} else {
+		host_dir(".");
 	}
 
 	#if 0

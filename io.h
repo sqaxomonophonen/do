@@ -136,11 +136,18 @@ void io_appender_init(struct io_appender*, struct io*, io_handle handle, int rin
 int  io_appender_flush_now(struct io_appender*);
 void io_appender_flush(struct io_appender*);
 int  io_appender_write_raw(struct io_appender*, void* data, size_t size);
+static inline int io_appender_write_u8(struct io_appender* a, uint8_t value)
+{
+	uint8_t data[1] = {value};
+	return io_appender_write_raw(a, data, sizeof data);
+}
+int  io_appender_write_leu64(struct io_appender*, uint64_t value);
 int  io_appender_write_leb128(struct io_appender*, int64_t value);
 int  io_appender_ack(struct io_appender*, struct io_event*);
 // returns 1 if event contained something acknowledgable (ia32==IO_IA32_APPENDER
 // for starters), otherwise 0 (suggesting you should handle the event
 // elsewhere)
+
 
 struct io_bufread {
 	struct io* io;

@@ -47,21 +47,22 @@ struct thicchar {
 	uint8_t color[4];
 };
 
+// these flags are persistent (written in snapshotcache):
+#define FC_IS_INSERT (1LL<<0)
+#define FC_IS_DELETE (1LL<<1)
+#define FC_IS_DEFER  (1LL<<2)
+#define FC_PERSISTENT_MASK ((1LL<<24)-1) // NOTE must mask out all FC__* flags (see below)
+// these flags are transient/ephemeral, not persisted; keep them in high bits
+// so persistent flags can be stored in fewer bytes (due to leb128):
+#define FC__FLIPPED_INSERT (1LL<<24)
+#define FC__FLIPPED_DELETE (1LL<<25)
+#define FC__FLIPPED_DEFER  (1LL<<26)
+#define FC__FILL           (1LL<<31)
+
 struct fat_char {
 	struct thicchar thicchar;
 	unsigned timestamp; // last change (or created)
-	//unsigned artist_id; 
-	// why do we want `artist_id`? I don't think "commit only my own stuff" is
-	// a thing, and the journal tells the story if you really want to know?
-	unsigned is_insert :1;
-	unsigned is_delete :1;
-	unsigned is_defer  :1;
-	// TODO these should be cleared after being "acknowledged"?
-	unsigned flipped_insert :1;
-	unsigned flipped_delete :1;
-	unsigned flipped_defer  :1;
-	// internal use:
-	unsigned _fill  :1;
+	uint32_t flags; // FC_*
 };
 
 struct caret {
@@ -79,8 +80,9 @@ struct mim_state {
 	int artist_id, session_id;
 	// mim state is keyed by [artist_id,session_id]
 	int document_id;
-	struct caret* caret_arr;
 	uint8_t color[4];
+	uint64_t snapshotcache_offset;
+	struct caret* caret_arr;
 	// (update mim_state_copy() when adding arr-fields here)
 };
 
@@ -117,10 +119,17 @@ enum document_flag {
 
 };
 
+struct book {
+	int id;
+	int target; // TODO? should be language+backend? like mie+audiobackend(name?)
+	uint64_t snapshotcache_offset;
+};
+
 struct document {
 	int id;
 	int book_id;
 	int order_key;
+	uint64_t snapshotcache_offset;
 	//enum document_type type;
 	char* name_arr;
 	struct fat_char* fat_char_arr;

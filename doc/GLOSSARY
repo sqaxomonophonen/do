@@ -1,0 +1,47 @@
+
+===============================================================================
+WORDS USED INTERNALLY
+===============================================================================
+
+: mim
+editor protocol used internally, in journals on disk, and over-the-wire.
+loosely inspired by, and named after "vim", but starting with "mi" as in
+"do-re-mi" or "minimal".
+
+: scrallox
+scratch allocator used in the compiler, VM (in mie.c), and also for temporary
+documents in gig.c.
+
+: journal
+a data structure, DO_JOURNAL on disk, that represents a Do-session as a series
+of mim-commands. this is the only "source of truth", and snapshots (see below)
+are derived from this.
+
+: snapshot
+a data structure containing a materialised point-in-time version of a
+Do-session. this is derived from the journal.
+
+: snapshotcache
+snapshotcache.data and snapshotcache.index collectively store snapshots on
+disk. these files can be regenerated from the DO_JOURNAL file.
+
+: insignia
+random-ish number that is used to quickly detect if a snapshotcache file
+belongs to the DO_JOURNAL.
+
+TODO
+: thicchar
+: fat_char
+
+===============================================================================
+
+rule of thumb when coming up with new words:
+if it's a unique concept to Do, that holds significant importance, and
+especially if you want to be able to easily "track" this concept across the
+source code, then choose a <word> that produces an empty or mostly empty
+git-grep result:
+  $ git grep -ni <word>
+example: incorrect scrallox-usage can lead to very ugly bugs, so it's
+convenient to easily be able to get a list of every mention by typing
+  $ git grep -ni scrallox
+

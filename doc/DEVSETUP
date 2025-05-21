@@ -1,0 +1,50 @@
+
+Makefile.* are "build scripts" that work with GNU Make.
+On Linux:
+  $ make -f MAKEFILE -j$(nproc)
+On BSDs:
+  $ gmake -f MAKEFILE -j$(nproc)
+Replace "MAKEFILE" with one of these:
+  Makefile.linux.sdl3gl     (Linux, SDL3, OpenGL)
+  Makefile.linux.headless   (Linux, headless host)
+  Makefile.bsd.sdl3gl       (BSD, SDL3, OpenGL)
+  Makefile.emscripten       (Emscripten, web)
+You can omit "-j$(nproc)" which just tells GNU Make to use all cores in your
+CPU instead of only 1.
+
+Assuming dependencies are met this should build Do.
+
+Dependencies:
+ - GNU Make (all builds)
+ - C Compiler (all builds, but Emscripten brings its own)
+ - SDL3 (only if "sdl3" is in the name)
+ - OpenGL (only if "gl" is in the name)
+ - Emscripten (only if "emscripten is in the name)
+
+
+Emscripten has its own "environment setup script". On Linux you can type:
+  $ . /path/to/emsccripten/emsdk_env.sh
+To set up the environment.
+On FreeBSD Emscripten doesn't work out of the box, but it can be run in a
+Linux-chroot (TODO describe how?)
+
+
+I also like to add my own cclean to the build process which makes incremental
+compilation less stressful; if you have foo.c which #includes foo.h which in
+turn #includes bar.h, then GNU Make only rebuilds foo.o when foo.c changes, but
+ugly bugs can happen if foo.h or bar.h changes and you build the entire program
+without recompiling foo.c => foo.o. cclean fixes this by understanding
+"dependencies of dependencies" and deletes .o-files when appropriate.
+You can get it here:
+  https://github.com/sqaxomonophonen/cclean
+I use it like this:
+  $ cclean -x && make -f Makefile.linux.sdl3gl -j$(nproc)
+
+
+TODO: Windows builds? How?
+ - clang + .bat?
+ - MSVC? (I fear I might have used a lot of gcc/clang specific C extensions
+   that MSVC might complain about? It's probably trivial to fix, but tedious?)
+ - WSL2?
+ - mingw? (I remember someone complaining mingw32/64 builds are poor?)
+ - Emscripten should work in Windows, but I haven't tried it

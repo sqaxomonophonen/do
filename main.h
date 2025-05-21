@@ -14,6 +14,8 @@
 int64_t get_nanoseconds(void);
 // returns number of nanoseconds since program started
 
+int64_t get_nanoseconds_epoch(void);
+
 void sleep_nanoseconds(int64_t);
 
 static inline void common_main_init(void)

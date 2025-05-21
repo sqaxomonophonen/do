@@ -1,0 +1,122 @@
+
+
+ DO_JOURNAL
+   Do journal: source of truth
+
+ README.txt
+   Friendly companion README
+
+ derived/...
+   All these files are derived and made automatically so you can just delete
+   them.
+
+ derived/savestatecache.data
+ derived/savestatecache.index
+   Savestate data and index. Allows you to quickly restore a point in time.
+
+ derived/aumio1/...
+   Files in the "aumio1" space (still "derived", so they're for your
+   convenience). Spaces may use number prefixes to specify the ordering of
+   files, so 00_foo comes before 10_bar.
+
+ derived/aumio1/00_stdlib.mie.c5t
+ derived/aumio1/00_stdlib.mie.html
+ derived/aumio1/00_stdlib.mie.txt
+   Various derived versions of the same "stdlib.mie" document. c5t is
+   "5-component text", html is a HTML version with colors, txt is a utf8 text
+   version without colors.
+
+ derived/aumio1/50_art.mie.c5t
+   "art" is typically the main file that artists edit, whereas all the other
+   file are support files.
+
+ derived/aumio1/99_post.mie.c5t
+   Last file. Might call some stdlib stuff that does "garbage collecting" and
+   more?
+
+ derived/.../...
+   Files in other spaces
+
+
+
+
+
+
+===
+DO_JOURNAL:
+header {
+  "DOJO0001"
+  leb128 do_format_version
+  leb128 epoch // 
+  u64 insignia
+}
+
+entry {
+  u8 0xfa // sync byte
+  leb128 timestamp_us // microseconds since beginning
+  leb128 artist_id
+  leb128 session_id
+  len128 num_mim_bytes
+  u8 mim_bytes[num_mim_bytes]
+}
+
+
+timestamp resolution?
+det er også lidt... uhmm...
+jeg er jo nødt til at ...
+være forankret til unix timestamp hvis det skal være distribueret?
+jah... jeg er nok nødt til at rette sample rate ind efter wall clock :)
+men jeg kan nok gøre det subtilt...
+
+
+
+
+===
+savestates.dat:
+header {
+  "DOSD0001"
+  u64 insignia
+}
+
+manifest {
+  leb128 num_books
+  leb128 num_docs
+  leb128 num_mim_states
+  leb128 book_offsets[num_books]
+  leb128 doc_offsets[num_docs]
+  leb128 mim_state_offsets[num_mim_states]
+}
+
+book {
+  int id
+}
+
+doc {
+  int space_id, doc_id ?
+}
+
+mim_state {
+  int artist_id, session_id;
+  int doc_id;
+  u8 color[4];
+  int num_carets;
+  {
+    int tag;
+    int caret_line, caret_column;
+    int anchor_line, anchor_column;
+  }[num_carets]
+}
+
+===
+savestates.idx:
+header {
+  "DOSI0001"
+  u64 insignia
+}
+
+entry {
+  u64 timestamp // XXX should this be sample? 1s/48000?
+  u64 savestate_manifest_offset // file offest to savestates.dat manifest record
+  u64 journal_offset // file offset in DO_JOURNAL
+}
+

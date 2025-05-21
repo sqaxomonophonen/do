@@ -16,3 +16,7 @@ echo -n "FIXMEs: "
 git grep -nw FIXME | filter | wc -l
 echo -n "TODOs: "
 git grep -nw TODO | filter | wc -l
+echo -n "sdl3/gl impl lines of code: "
+cat main_sdl3gl.c impl_gl.h impl_sdl3.h | wc -l
+echo -n "emscripten(web) impl lines of code: "
+cat main_emscripten.c main_emscripten_pre.js do.html impl_gl.h | wc -l
