@@ -1,11 +1,11 @@
-// cc -O0 -g -Wall stb_divide.c stb_ds.c stb_sprintf.c utf8.c path.c mie.c io.c args.c allocator.c gig.c test_gig.c -o _test_gig -lm
+// cc -O0 -g -Wall stb_divide.c stb_ds.c stb_sprintf.c utf8.c path.c mie.c io.c arg.c allocator.c gig.c test_gig.c -o _test_gig -lm
 #include <stdlib.h>
 #include <assert.h>
 #include <time.h>
 
 #include "main.h"
 #include "gig.h"
-#include "args.h"
+#include "arg.h"
 
 int64_t get_nanoseconds_epoch(void)
 {
@@ -35,10 +35,11 @@ int main(int argc, char** argv)
 	io_init(16);
 	mie_thread_init();
 	gig_init();
+
 	gig_host(argv[1]);
 
 	begin_mim(1);
-	mimf("blah blah blah");
+	mimf("0,5ihello");
 	// TODO
 	end_mim();
 

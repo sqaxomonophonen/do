@@ -15,7 +15,7 @@
 
 #include "stb_ds_sysalloc.h"
 #include "main.h"
-#include "args.h"
+#include "arg.h"
 #include "utf8.h"
 #include "impl_gl.h"
 

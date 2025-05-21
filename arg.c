@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <assert.h>
 
-#include "args.h"
+#include "arg.h"
 #include "util.h"
 #include "gig.h"
 

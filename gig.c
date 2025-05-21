@@ -16,7 +16,7 @@
 #include "utf8.h"
 #include "path.h"
 #include "main.h"
-#include "args.h"
+#include "arg.h"
 
 #define JOURNAL_GROWTH_SNAPSHOT_THRESHOLD (300) // XXX
 // number of bytes the journal can grow before a snapshot is written to
@@ -352,7 +352,7 @@ void get_state_and_doc(int session_id, struct mim_state** out_mim_state, struct 
 		struct mim_state* ms = arrchkptr(ss->mim_state_arr, i);
 		if ((ms->artist_id==artist_id) && (ms->session_id==session_id)) {
 			const int document_id = ms->document_id;
-			assert((document_id > 0) && "invalid document id in mim state");
+			assert((document_id > 0) && "invalid document id in mim state"); // XXX really?
 			struct document* doc = NULL;
 			const int num_documents = arrlen(ss->document_arr);
 			for (int i=0; i<num_documents; ++i) {
@@ -890,8 +890,17 @@ void begin_mim(int session_id)
 {
 	assert(!g.in_mim);
 	g.in_mim = 1;
-	g.using_mim_session_id = session_id;
 	arrreset(g.mim_buffer_arr);
+	g.using_mim_session_id = session_id;
+	struct snapshot* ss = &g.cool_snapshot;
+	if (NULL == snapshot_find_mim_state_by_ids(ss, get_my_artist_id(), session_id)) {
+		struct mim_state ms = {
+			.artist_id = get_my_artist_id(),
+			.session_id = session_id,
+		};
+		arrinit(ms.caret_arr, &system_allocator);
+		arrput(ss->mim_state_arr, ms);
+	}
 }
 
 #if 0
@@ -1512,7 +1521,6 @@ void gig_init(void)
 	snapshot_init(&g.cool_snapshot);
 	snapshot_init(&g.hot_snapshot);
 	arrinit(g.mim_buffer_arr, &system_allocator);
-	//ringbuf_init(&g.command_ringbuf, 16);
 }
 
 void gig_selftest(void)

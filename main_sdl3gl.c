@@ -7,7 +7,7 @@
 #include "stb_ds_sysalloc.h"
 
 #include "main.h"
-#include "args.h"
+#include "arg.h"
 
 #include "impl_sdl3.h"
 #define GL_GLEXT_PROTOTYPES

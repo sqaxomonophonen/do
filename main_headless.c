@@ -4,7 +4,7 @@
 #include <time.h>
 
 #include "main.h"
-#include "args.h"
+#include "arg.h"
 #include "gig.h"
 
 int64_t get_nanoseconds(void)

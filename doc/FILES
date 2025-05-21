@@ -7,10 +7,10 @@ Overview of source files
 is omitted)
 
 main logic code
-  gig.c  - collaboratively edited state
-  gui.c  - main GUI code (cross-platform)
-  mie.c  - mie-compiler, and vmie virtual machine
-  args.c - command-line args
+  gig.c - collaboratively edited state
+  gui.c - main GUI code (cross-platform)
+  mie.c - mie-compiler, and vmie virtual machine
+  arg.c - command-line args
 
 main_*.c - program entrypoints
   main_emscripten.c - web app, using emscripten/webgl
