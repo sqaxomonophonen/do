@@ -3,6 +3,11 @@
 WORDS USED INTERNALLY
 ===============================================================================
 
+: book and fundament
+the "book" is collection of documents, written against a "fundament" that tells
+Do how to interpret the documents. "mie-ordlyd" is the default sound/music
+fundament, which combines the "mie" language with the "ordlyd" audio engine.
+
 : mim
 editor protocol used internally, in journals on disk, and over-the-wire.
 loosely inspired by, and named after "vim", but starting with "mi" as in

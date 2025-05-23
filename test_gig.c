@@ -6,6 +6,7 @@
 #include "main.h"
 #include "gig.h"
 #include "arg.h"
+#include "stb_ds.h" // XXX?
 
 int64_t get_nanoseconds_epoch(void)
 {
@@ -40,15 +41,20 @@ int main(int argc, char** argv)
 	gig_host(argv[1]);
 
 	begin_mim(1);
-	mimex("newbook 1 mie-lydskal -");
-	//mimex("newbook 1 mie-lydskal");
-	//mimex("newbook 1 mie-lydskal -");
-	//mimf("0,5ihello");
-	//mimf("3:foo");
-	//mimex("foo 1 2 3");
-	//mimex("foo");
-	// TODO
+	mimex("newbook 1 mie-ordlyd -");
+	mimex("newdoc 1 50 art.mie");
+	mimex("setdoc 1 50");
+	// XXX der mangler noget med at lave en ny caret her.
+	mimi(0,"hello");
 	end_mim();
+
+	struct mim_state* ms = NULL;
+	struct document* doc = NULL;
+	get_state_and_doc(1, &ms, &doc);
+
+	printf("ms %d/%d\n", ms->book_id, ms->doc_id);
+	printf("doc %d/%d\n", doc->book_id, doc->doc_id);
+	printf("doc %zd\n", arrlen(doc->fat_char_arr));
 
 	return EXIT_SUCCESS;
 }

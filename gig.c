@@ -39,16 +39,6 @@ enum fmterr {
 	FMT_ERROR = -30000,
 };
 
-#define LIST_OF_FUNDAMENTS \
-	X( MIE_LYDSKAL, "mie-lydskal" )
-
-enum fundament {
-	_NO_FUNDAMENT_ = 0,
-	#define X(ENUM,_STR) ENUM,
-	LIST_OF_FUNDAMENTS
-	#undef X
-};
-
 static int match_fundament(const char* s)
 {
 	#define X(ENUM,STR) if (0 == strcmp(STR,s)) return ENUM;
@@ -100,22 +90,26 @@ static struct document* snapshot_get_document_by_index(struct snapshot* ss, int 
 	return arrchkptr(ss->document_arr, index);
 }
 
-static struct document* snapshot_lookup_document_by_id(struct snapshot* ss, int id)
+static struct document* snapshot_lookup_document_by_ids(struct snapshot* ss, int book_id, int doc_id)
 {
 	const int n = snapshot_get_num_documents(ss);
 	for (int i=0; i<n; ++i) {
 		struct document* doc = snapshot_get_document_by_index(ss, i);
-		if (doc->id == id) return doc;
+		if ((doc->book_id == book_id) && (doc->doc_id == doc_id)) {
+			return doc;
+		}
 	}
 	return NULL;
 }
 
-static struct document* snapshot_get_document_by_id(struct snapshot* ss, int id)
+#if 0
+static struct document* snapshot_get_document_by_ids(struct snapshot* ss, int book_id, int doc_id)
 {
-	struct document* doc = snapshot_lookup_document_by_id(ss, id);
+	struct document* doc = snapshot_lookup_document_by_ids(ss, book_id, doc_id);
 	assert((doc != NULL) && "document not found by id");
 	return doc;
 }
+#endif
 
 static struct mim_state* snapshot_lookup_mim_state_by_ids(struct snapshot* ss, int artist_id, int session_id)
 {
@@ -142,7 +136,9 @@ static struct mim_state* snapshot_get_mim_state_by_ids(struct snapshot* ss, int 
 struct cow_snapshot {
 	struct allocator* allocator;
 	struct snapshot* ref;
-	struct document*  cow_document_arr;
+	struct document* cow_document_arr;
+	struct book* new_book_arr;
+	int* delete_book_arr;
 	struct mim_state mim_state;
 };
 
@@ -152,41 +148,45 @@ static void init_cow_snapshot(struct cow_snapshot* cows, struct snapshot* ref, s
 	cows->allocator = a;
 	cows->ref = ref;
 	arrinit(cows->cow_document_arr, cows->allocator);
+	arrinit(cows->new_book_arr, cows->allocator);
+	arrinit(cows->delete_book_arr, cows->allocator);
 	struct mim_state* cms = &cows->mim_state;
 	arrinit(cms->caret_arr, cows->allocator);
 	mim_state_copy(cms, ms);
 }
 
-static struct document* cow_snapshot_lookup_cow_document_by_id(struct cow_snapshot* cows, int id)
+static struct document* cow_snapshot_lookup_cow_document_by_ids(struct cow_snapshot* cows, int book_id, int doc_id)
 {
 	const int n = arrlen(cows->cow_document_arr);
 	for (int i=0; i<n; ++i) {
 		struct document* doc = &cows->cow_document_arr[i];
-		if (doc->id == id) return doc;
+		if ((doc->book_id == book_id) && (doc->doc_id == doc_id)) {
+			return doc;
+		}
 	}
 	return NULL;
 }
 
-static struct document* cow_snapshot_lookup_readonly_document_by_id(struct cow_snapshot* cows, int id)
+static struct document* cow_snapshot_lookup_readonly_document_by_ids(struct cow_snapshot* cows, int book_id, int doc_id)
 {
-	struct document* doc = cow_snapshot_lookup_cow_document_by_id(cows, id);
+	struct document* doc = cow_snapshot_lookup_cow_document_by_ids(cows, book_id, doc_id);
 	if (doc != NULL) return doc;
-	return snapshot_lookup_document_by_id(cows->ref, id);
+	return snapshot_lookup_document_by_ids(cows->ref, book_id, doc_id);
 }
 
-static struct document* cow_snapshot_get_readonly_document_by_id(struct cow_snapshot* cows, int id)
+static struct document* cow_snapshot_get_readonly_document_by_ids(struct cow_snapshot* cows, int book_id, int doc_id)
 {
-	struct document* doc = cow_snapshot_lookup_readonly_document_by_id(cows, id);
+	struct document* doc = cow_snapshot_lookup_readonly_document_by_ids(cows, book_id, doc_id);
 	assert(doc != NULL);
 	return doc;
 }
 
-static struct document* cow_snapshot_lookup_readwrite_document_by_id(struct cow_snapshot* cows, int id)
+static struct document* cow_snapshot_lookup_readwrite_document_by_ids(struct cow_snapshot* cows, int book_id, int doc_id)
 {
-	struct document* doc = cow_snapshot_lookup_cow_document_by_id(cows, id);
+	struct document* doc = cow_snapshot_lookup_cow_document_by_ids(cows, book_id, doc_id);
 	if (doc != NULL) return doc;
 
-	struct document* src_doc = snapshot_lookup_document_by_id(cows->ref, id);
+	struct document* src_doc = snapshot_lookup_document_by_ids(cows->ref, book_id, doc_id);
 	if (src_doc == NULL) return NULL;
 
 	if (cows->cow_document_arr == NULL) arrinit(cows->cow_document_arr, cows->allocator);
@@ -205,20 +205,42 @@ static struct document* cow_snapshot_lookup_readwrite_document_by_id(struct cow_
 	return dst_doc;
 }
 
-static struct document* cow_snapshot_get_readwrite_document_by_id(struct cow_snapshot* cows, int id)
+static struct document* cow_snapshot_get_readwrite_document_by_ids(struct cow_snapshot* cows, int book_id, int doc_id)
 {
-	struct document* doc = cow_snapshot_lookup_readwrite_document_by_id(cows, id);
+	struct document* doc = cow_snapshot_lookup_readwrite_document_by_ids(cows, book_id, doc_id);
 	assert(doc != NULL);
 	return doc;
 }
 
 static void cow_snapshot_commit(struct cow_snapshot* cows)
 {
+	assert((arrlen(cows->delete_book_arr) == 0) && "TODO delete books");
+
+	const int num_new_books = arrlen(cows->new_book_arr);
+	for (int i=0; i<num_new_books; ++i) {
+		struct book* new_book = &cows->new_book_arr[i];
+		const int num_books = arrlen(cows->ref->book_arr);
+		for (int ii=0; ii<num_books; ++ii) {
+			struct book* book = &cows->ref->book_arr[ii];
+			assert((new_book->book_id != book->book_id) && "book id clash should've been resolved earlier");
+		}
+		arrput(cows->ref->book_arr, *new_book);
+	}
+
 	const int num_cow_doc = arrlen(cows->cow_document_arr);
 	for (int i=0; i<num_cow_doc; ++i) {
 		struct document* src_doc = &cows->cow_document_arr[i];
-		struct document* dst_doc = snapshot_get_document_by_id(cows->ref, src_doc->id);
-		document_copy(dst_doc, src_doc);
+		struct document* dst_doc = snapshot_lookup_document_by_ids(cows->ref, src_doc->book_id, src_doc->doc_id);
+		if (dst_doc) {
+			document_copy(dst_doc, src_doc);
+		} else {
+			assert((src_doc->fat_char_arr == NULL) && "new doc; didn't expect it to contain anything");
+			struct document new_doc = *src_doc;
+			new_doc.name_arr = NULL;
+			arrinit(new_doc.name_arr, &system_allocator);
+			arrcpy(new_doc.name_arr, src_doc->name_arr);
+			arrput(cows->ref->document_arr, new_doc);
+		}
 	}
 	if (num_cow_doc>0) arrsetlen(cows->cow_document_arr, 0);
 
@@ -313,6 +335,11 @@ void mimex(const char* ex)
 	mimf("%zd:%s", strlen(ex), ex);
 }
 
+void mimi(int tag, const char* text)
+{
+	mimf("%d,%zdi%s", tag, strlen(text), text);
+}
+
 int get_my_artist_id(void)
 {
 	return g.my_artist_id;
@@ -326,13 +353,15 @@ void get_state_and_doc(int session_id, struct mim_state** out_mim_state, struct 
 	for (int i=0; i<num_states; ++i) {
 		struct mim_state* ms = arrchkptr(ss->mim_state_arr, i);
 		if ((ms->artist_id==artist_id) && (ms->session_id==session_id)) {
-			const int document_id = ms->document_id;
-			assert((document_id > 0) && "invalid document id in mim state"); // XXX really?
+			const int book_id = ms->book_id;
+			assert((book_id > 0) && "invalid book id in mim state");
+			const int doc_id = ms->doc_id;
+			assert((doc_id > 0) && "invalid document id in mim state");
 			struct document* doc = NULL;
 			const int num_documents = arrlen(ss->document_arr);
 			for (int i=0; i<num_documents; ++i) {
 				struct document* d = arrchkptr(ss->document_arr, i);
-				if (d->id == document_id) {
+				if ((d->book_id == book_id) && (d->doc_id == doc_id)) {
 					doc = d;
 					break;
 				}
@@ -367,23 +396,38 @@ static void doc_location_constraint(struct document* doc, struct location* loc)
 
 struct mimop {
 	struct cow_snapshot* cows;
-	int document_id;
 };
+
+static int mimop_get_book_id(struct mimop* mo)
+{
+	return mo->cows->mim_state.book_id;
+}
+
+static int mimop_get_doc_id(struct mimop* mo)
+{
+	return mo->cows->mim_state.doc_id;
+}
 
 static int mimop_has_doc(struct mimop* mo)
 {
-	if (mo->document_id <= 0) return 0;
-	return (NULL != cow_snapshot_lookup_readonly_document_by_id(mo->cows, mo->document_id));
+	const int book_id = mimop_get_book_id(mo);
+	const int doc_id  = mimop_get_doc_id(mo);
+	if ((book_id <= 0) || (doc_id <= 0)) return 0;
+	return (NULL != cow_snapshot_lookup_readonly_document_by_ids(mo->cows, book_id, doc_id));
 }
 
 static struct document* mimop_get_readonly_doc(struct mimop* mo)
 {
-	return cow_snapshot_get_readonly_document_by_id(mo->cows, mo->document_id);
+	const int book_id = mimop_get_book_id(mo);
+	const int doc_id  = mimop_get_doc_id(mo);
+	return cow_snapshot_get_readonly_document_by_ids(mo->cows, book_id, doc_id);
 }
 
 static struct document* mimop_get_readwrite_doc(struct mimop* mo)
 {
-	return cow_snapshot_get_readwrite_document_by_id(mo->cows, mo->document_id);
+	const int book_id = mimop_get_book_id(mo);
+	const int doc_id  = mimop_get_doc_id(mo);
+	return cow_snapshot_get_readwrite_document_by_ids(mo->cows, book_id, doc_id);
 }
 
 static struct mim_state* mimop_ms(struct mimop* mo)
@@ -568,7 +612,6 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 	int number=0, number_sign=0;
 	int push_chr = -1;
 	int suffix_bytes_remaining = 0;
-	int expect_suffix_bytes = 0;
 	int arg_tag = -1;
 	int arg_num = -1;
 	int motion_cmd = -1;
@@ -578,6 +621,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 	const char* ex0 = NULL;
 
 	while ((push_chr>=0) || (remaining>0)) {
+		int expect_suffix_bytes = 0;
 		const char* p0 = input_cursor;
 		if (datamode == UTF8) {
 			chr = (push_chr>=0) ? push_chr : utf8_decode(&input_cursor, &remaining);
@@ -697,24 +741,6 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 					}
 
 				}	break;
-
-				#if 0
-				case 'c': {
-					if (num_args != 3) {
-						return mimerr("command 'c' expected 3 arguments; got %d", num_args);
-					}
-					assert(!"TODO c"); // TODO
-					arrreset(number_stack_arr);
-				}	break;
-
-				case 'C': {
-					if (num_args != 2) {
-						return mimerr("command 'C' expected 2 arguments; got %d", num_args);
-					}
-					assert(!"TODO C"); // TODO
-					arrreset(number_stack_arr);
-				}	break;
-				#endif
 
 				case 'S':
 				case 'M': {
@@ -1002,13 +1028,28 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 						const char* book_fundament;
 						const char* book_template;
 						if (mimex_matches(&s, "newbook", "iss", &book_id, &book_fundament, &book_template)) {
-							enum fundament f = match_fundament(book_fundament);
-							if (f == _NO_FUNDAMENT_) {
+							enum fundament fundament = match_fundament(book_fundament);
+							if (fundament == _NO_FUNDAMENT_) {
 								return mimerr(":newbook used with unsupported fundament \"%s\"", book_fundament);
 							} else {
 								const int is_nil_template = (0 == strcmp(book_template, "-"));
-								printf("TODO newbook [%d] [%s/%d] [%s/nil=%d]\n", book_id, book_fundament, f, book_template, is_nil_template);
-								assert(!"TODO newbook");
+								//printf("TODO newbook [%d] [%s/%d] [%s/nil=%d]\n", book_id, book_fundament, f, book_template, is_nil_template);
+								if (!is_nil_template) {
+									assert(!"TODO handle/import :newbook template");
+								}
+
+								const int num_books = arrlen(mo->cows->ref->book_arr);
+								for (int ii=0; ii<num_books; ++ii) {
+									struct book* book = &mo->cows->ref->book_arr[ii];
+									if (book_id == book->book_id) {
+										return mimerr("book id %d already exists", book_id);
+									}
+								}
+
+								arrput(mo->cows->new_book_arr, ((struct book){
+									.book_id   = book_id,
+									.fundament = fundament,
+								}));
 							}
 						}
 					}
@@ -1017,8 +1058,103 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 						int book_id, doc_id;
 						const char* name;
 						if (mimex_matches(&s, "newdoc", "iis", &book_id, &doc_id, &name)) {
-							printf("TODO newdoc [%d] [%d] [%s]\n", book_id, doc_id, name);
-							assert(!"TODO newdoc");
+							//printf("TODO newdoc [%d] [%d] [%s]\n", book_id, doc_id, name);
+							int book_id_exists = 0;
+
+							const int num_books = arrlen(mo->cows->ref->book_arr);
+							for (int i=0; i<num_books; ++i) {
+								struct book* book = &mo->cows->ref->book_arr[i];
+								if (book->book_id == book_id) {
+									book_id_exists = 1;
+									break;
+								}
+							}
+
+							const int num_new_books = arrlen(mo->cows->new_book_arr);
+							for (int i=0; i<num_new_books; ++i) {
+								struct book* book = &mo->cows->new_book_arr[i];
+								if (book->book_id == book_id) {
+									book_id_exists = 1;
+									break;
+								}
+							}
+
+							if (!book_id_exists) {
+								return mimerr("book id %d does not exist", book_id);
+							}
+
+							const int num_docs = arrlen(mo->cows->ref->document_arr);
+							for (int i=0; i<num_docs; ++i) {
+								struct document* doc = &mo->cows->ref->document_arr[i];
+								if ((doc->book_id == book_id) && (doc->doc_id == doc_id)) {
+									return mimerr(":newdoc %d %d collides with existing doc", book_id, doc_id);
+								}
+							}
+							struct document doc = {
+								.book_id = book_id,
+								.doc_id  = doc_id,
+							};
+							arrinit(doc.name_arr, mo->cows->allocator);
+							const size_t n = strlen(name);
+							arrsetlen(doc.name_arr, n+1);
+							memcpy(doc.name_arr, name, n);
+							doc.name_arr[n]=0;
+							arrput(mo->cows->cow_document_arr, doc);
+						}
+					}
+
+					{
+						int book_id, doc_id;
+						if (mimex_matches(&s, "setdoc", "ii", &book_id, &doc_id)) {
+
+							int book_id_exists = 0;
+							const int num_books = arrlen(mo->cows->ref->book_arr);
+							for (int i=0; i<num_books; ++i) {
+								struct book* book = &mo->cows->ref->book_arr[i];
+								if (book->book_id == book_id) {
+									book_id_exists = 1;
+									break;
+								}
+							}
+							if (!book_id_exists) {
+								const int num_new_books = arrlen(mo->cows->new_book_arr);
+								for (int i=0; i<num_new_books; ++i) {
+									struct book* book = &mo->cows->new_book_arr[i];
+									if (book->book_id == book_id) {
+										book_id_exists = 1;
+										break;
+									}
+								}
+							}
+							if (!book_id_exists) {
+								return mimerr("setdoc on book id %d, but it doesn't exist", book_id);
+							}
+
+							int doc_id_exists = 0;
+							const int num_docs = arrlen(mo->cows->ref->document_arr);
+							for (int i=0; i<num_docs; ++i) {
+								struct document* doc = &mo->cows->ref->document_arr[i];
+								if ((doc->book_id == book_id) && (doc->doc_id == doc_id)) {
+									doc_id_exists = 1;
+									break;
+								}
+							}
+							if (!doc_id_exists) {
+								const int num_cow_doc = arrlen(mo->cows->cow_document_arr);
+								for (int i=0; i<num_cow_doc; ++i) {
+									struct document* doc = &mo->cows->cow_document_arr[i];
+									if ((doc->book_id == book_id) && (doc->doc_id == doc_id)) {
+										doc_id_exists = 1;
+										break;
+									}
+								}
+							}
+							if (!doc_id_exists) {
+								return mimerr("setdoc on doc id %d, but it doesn't exist", doc_id);
+							}
+
+							mo->cows->mim_state.book_id = book_id;
+							mo->cows->mim_state.doc_id  = doc_id;
 						}
 					}
 
@@ -1096,13 +1232,12 @@ static void snapshot_spool_ex(struct snapshot* snapshot, uint8_t* data, int num_
 	mie_begin_scrallox();
 	if (0 == setjmp(*mie_prep_scrallox_jmp_buf_for_out_of_memory())) {
 		struct cow_snapshot cows = {0};
-
-		struct mim_state* ms = snapshot_get_mim_state_by_ids(snapshot, artist_id, session_id);
-		init_cow_snapshot(&cows, snapshot, ms, mie_borrow_scrallox());
-		struct mimop mo = {
-			.cows = &cows,
-			.document_id = ms->document_id,
-		};
+		init_cow_snapshot(
+			&cows,
+			snapshot,
+			snapshot_get_mim_state_by_ids(snapshot, artist_id, session_id),
+			mie_borrow_scrallox());
+		struct mimop mo = { .cows = &cows };
 
 		if (mim_spool(&mo, data, num_bytes) < 0) {
 			assert(!"TODO mim protocol error"); // XXX? should I have a "failable" flag? eg. for human input
@@ -1110,7 +1245,8 @@ static void snapshot_spool_ex(struct snapshot* snapshot, uint8_t* data, int num_
 
 		if (mimop_has_doc(&mo)) {
 			// XXX kinda want to run /all/ docs here... this code is not right
-			struct document* doc = cow_snapshot_get_readonly_document_by_id(&cows, ms->document_id);
+			struct mim_state* ms = &cows.mim_state;
+			struct document* doc = cow_snapshot_get_readonly_document_by_ids(&cows, ms->book_id, ms->doc_id);
 			static struct thicchar* dodoc_arr = NULL;
 			if (dodoc_arr == NULL) {
 				arrinit(dodoc_arr, &system_allocator);
@@ -1167,7 +1303,7 @@ static void snapshotcache_push(struct snapshot* snapshot, uint64_t journal_offse
 		if (book->snapshotcache_offset) continue;
 		book->snapshotcache_offset = adat->head;
 		io_appender_write_u8(adat, SYNC);
-		io_appender_write_leb128(adat, book->id);
+		io_appender_write_leb128(adat, book->book_id);
 	}
 
 	for (int i=0; i<num_documents; ++i) {
@@ -1175,9 +1311,8 @@ static void snapshotcache_push(struct snapshot* snapshot, uint64_t journal_offse
 		if (doc->snapshotcache_offset) continue;
 		doc->snapshotcache_offset = adat->head;
 		io_appender_write_u8(adat, SYNC);
-		io_appender_write_leb128(adat, doc->id);
 		io_appender_write_leb128(adat, doc->book_id);
-		io_appender_write_leb128(adat, doc->order_key);
+		io_appender_write_leb128(adat, doc->doc_id);
 		const int name_len = strlen(doc->name_arr);
 		io_appender_write_leb128(adat, name_len);
 		io_appender_write_raw(adat, doc->name_arr, name_len);
@@ -1198,7 +1333,8 @@ static void snapshotcache_push(struct snapshot* snapshot, uint64_t journal_offse
 		io_appender_write_u8(adat, SYNC);
 		io_appender_write_leb128(adat, ms->artist_id);
 		io_appender_write_leb128(adat, ms->session_id);
-		io_appender_write_leb128(adat, ms->document_id);
+		io_appender_write_leb128(adat, ms->book_id);
+		io_appender_write_leb128(adat, ms->doc_id);
 		for (int ii=0; ii<4; ++ii) io_appender_write_u8(adat, ms->color[ii]);
 		const int num_carets = arrlen(ms->caret_arr);
 		io_appender_write_leb128(adat, num_carets);
@@ -1645,18 +1781,21 @@ void gig_host(const char* dir)
 
 void gig_testsetup(void) // XXX "getting started"-stuff, removeme?
 {
+	assert(!"XXX broken?");
 	g.my_artist_id = 1;
-	const int document_id = 1;
+	const int book_id = 1;
+	const int doc_id = 1;
 	struct snapshot* ss = &g.cool_snapshot;
 	struct document* doc = arraddnptr(ss->document_arr, 1);
 	memset(doc, 0, sizeof *doc);
 	arrinit(doc->fat_char_arr, &system_allocator);
 	memset(doc, 0, sizeof *doc);
-	doc->id = document_id;
+	doc->doc_id = doc_id;
 	struct mim_state ms1 = {
 		.artist_id = get_my_artist_id(),
 		.session_id = 1,
-		.document_id = document_id,
+		.book_id = book_id,
+		.doc_id = doc_id,
 	};
 	arrinit(ms1.caret_arr, &system_allocator);
 	struct caret cr = {

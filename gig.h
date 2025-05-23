@@ -79,7 +79,7 @@ struct caret {
 struct mim_state {
 	int artist_id, session_id;
 	// mim state is keyed by [artist_id,session_id]
-	int document_id;
+	int book_id, doc_id;
 	uint8_t color[4];
 	uint64_t snapshotcache_offset;
 	struct caret* caret_arr;
@@ -119,16 +119,24 @@ enum document_flag {
 
 };
 
+#define LIST_OF_FUNDAMENTS \
+	X( MIE_ORDLYD, "mie-ordlyd" )
+
+enum fundament {
+	_NO_FUNDAMENT_ = 0,
+	#define X(ENUM,_STR) ENUM,
+	LIST_OF_FUNDAMENTS
+	#undef X
+};
+
 struct book {
-	int id;
-	int target; // TODO? should be language+backend? like mie+audiobackend(name?)
+	int book_id;
+	enum fundament fundament;
 	uint64_t snapshotcache_offset;
 };
 
 struct document {
-	int id;
-	int book_id;
-	int order_key;
+	int book_id, doc_id;
 	uint64_t snapshotcache_offset;
 	//enum document_type type;
 	char* name_arr;
@@ -205,7 +213,7 @@ FORMATPRINTF1
 void mimf(const char* fmt, ...);
 void mim8(uint8_t v);
 void mimex(const char*);
-//void mimi(const char*);
+void mimi(int tag, const char*);
 
 void get_state_and_doc(int session_id, struct mim_state** out_mim_state, struct document** out_doc);
 
