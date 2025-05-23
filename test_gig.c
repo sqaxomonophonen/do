@@ -41,6 +41,8 @@ int main(int argc, char** argv)
 
 	begin_mim(1);
 	mimex("newbook 1 mie-lydskal -");
+	//mimex("newbook 1 mie-lydskal");
+	//mimex("newbook 1 mie-lydskal -");
 	//mimf("0,5ihello");
 	//mimf("3:foo");
 	//mimex("foo 1 2 3");

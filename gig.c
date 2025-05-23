@@ -39,6 +39,24 @@ enum fmterr {
 	FMT_ERROR = -30000,
 };
 
+#define LIST_OF_FUNDAMENTS \
+	X( MIE_LYDSKAL, "mie-lydskal" )
+
+enum fundament {
+	_NO_FUNDAMENT_ = 0,
+	#define X(ENUM,_STR) ENUM,
+	LIST_OF_FUNDAMENTS
+	#undef X
+};
+
+static int match_fundament(const char* s)
+{
+	#define X(ENUM,STR) if (0 == strcmp(STR,s)) return ENUM;
+	LIST_OF_FUNDAMENTS
+	#undef X
+	return _NO_FUNDAMENT_;
+}
+
 static void document_copy(struct document* dst, struct document* src)
 {
 	struct document tmp = *dst;
@@ -447,10 +465,16 @@ static const char* mimexscanner_next_arg(struct mimexscanner* s)
 	const char* p0 = s->cur;
 	int num=0;
 	for (; s->cur < s->end; ++s->cur) {
-		if (*s->cur == ' ') break;
+		if (*s->cur == ' ') {
+			if (num == 0) continue;
+			break;
+		}
 		++num;
 	}
-	if (num==0) return NULL;
+	if (num==0) {
+		(void)mimexscanner_errorf(s, "expected more arguments");
+		return NULL;
+	}
 	*s->cur = 0;
 	++s->cur;
 	return p0;
@@ -472,41 +496,46 @@ static int parse_nonnegative_int(const char* s)
 	}
 }
 
-static int mimexscan(struct mimexscanner* s, const char* cmd, const char* fmt, ...)
+static int mimex_matches(struct mimexscanner* s, const char* cmd, const char* fmt, ...)
 {
 	// don't continue scanning if there's an error or we already found a match
 	if ((s->did_match) || (s->has_error)) return 0;
 	if (strcmp(cmd, s->cmd) != 0) return 0;
 
+	s->did_match = 1;
+
 	const int num_fmt = strlen(fmt);
 	va_list va;
 	va_start(va, fmt);
 	for (int i=0; i<num_fmt; ++i) {
-		const char c = fmt[i];
-		switch (c) {
+		if (s->has_error) break;
+		switch (fmt[i]) {
 
 		case 'i': {
 			const char* arg = mimexscanner_next_arg(s);
-			if (s->has_error) return -1;
+			if (s->has_error) break;
 			assert(arg != NULL);
 			int* p = va_arg(va, int*);
 			*p = parse_nonnegative_int(arg);
-			if (*p < 0) return mimexscanner_errorf(s, "invalid int arg [%s]", arg);
+			if (*p < 0) {
+				(void)mimexscanner_errorf(s, "invalid int arg [%s]", arg);
+				break;
+			}
 		}	break;
 
 		case 's': {
 			const char* arg = mimexscanner_next_arg(s);
-			if (s->has_error) return -1;
+			if (s->has_error) break;
 			assert(arg != NULL);
 			const char** p = va_arg(va, const char**);
 			*p = arg;
 		}	break;
 
-		default: assert(!"unhandled mimexscan fmt char");
+		default: assert(!"unhandled mimex_matches() fmt char");
 		}
 	}
 	va_end(va);
-	return 1;
+	return !s->has_error;
 }
 
 // parses a mim message, typically written by mimf()/mim8()
@@ -970,26 +999,33 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 
 					{
 						int book_id;
-						const char* book_platform;
+						const char* book_fundament;
 						const char* book_template;
-						if (mimexscan(&s, "newbook", "iss", &book_id, &book_platform, &book_template)) {
-							printf("TODO [%d] [%s] [%s]\n", book_id, book_platform, book_template);
-							assert(!"TODO newbook");
+						if (mimex_matches(&s, "newbook", "iss", &book_id, &book_fundament, &book_template)) {
+							enum fundament f = match_fundament(book_fundament);
+							if (f == _NO_FUNDAMENT_) {
+								return mimerr(":newbook used with unsupported fundament \"%s\"", book_fundament);
+							} else {
+								const int is_nil_template = (0 == strcmp(book_template, "-"));
+								printf("TODO newbook [%d] [%s/%d] [%s/nil=%d]\n", book_id, book_fundament, f, book_template, is_nil_template);
+								assert(!"TODO newbook");
+							}
 						}
 					}
 
 					{
 						int book_id, doc_id;
 						const char* name;
-						if (mimexscan(&s, "newdoc", "iis", &book_id, &doc_id, &name)) {
-							assert(!"TODO newbook");
+						if (mimex_matches(&s, "newdoc", "iis", &book_id, &doc_id, &name)) {
+							printf("TODO newdoc [%d] [%d] [%s]\n", book_id, doc_id, name);
+							assert(!"TODO newdoc");
 						}
 					}
 
 					if (s.has_error) {
-						return mimerr("error in mimex command"); // TODO
+						return mimerr("mimex error: %s", s.err);
 					} else if (!s.did_match) {
-						return mimerr("unhandled mimex command"); // TODO
+						return mimerr("unhandled mimex command");
 					}
 				}
 
@@ -1069,7 +1105,7 @@ static void snapshot_spool_ex(struct snapshot* snapshot, uint8_t* data, int num_
 		};
 
 		if (mim_spool(&mo, data, num_bytes) < 0) {
-			assert(!"mim protocol error"); // XXX? should I have a "failable" flag? eg. for human input
+			assert(!"TODO mim protocol error"); // XXX? should I have a "failable" flag? eg. for human input
 		}
 
 		if (mimop_has_doc(&mo)) {
