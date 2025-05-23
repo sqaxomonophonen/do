@@ -52,9 +52,11 @@ int main(int argc, char** argv)
 	struct document* doc = NULL;
 	get_state_and_doc(1, &ms, &doc);
 
-	printf("ms %d/%d\n", ms->book_id, ms->doc_id);
-	printf("doc %d/%d\n", doc->book_id, doc->doc_id);
-	printf("doc %zd\n", arrlen(doc->fat_char_arr));
+	assert(1 == ms->book_id);
+	assert(50 == ms->doc_id);
+	assert(1 == doc->book_id);
+	assert(50 == doc->doc_id);
+	assert(5 == arrlen(doc->fat_char_arr));
 
 	return EXIT_SUCCESS;
 }

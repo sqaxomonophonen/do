@@ -1800,30 +1800,13 @@ void gig_host(const char* dir)
 
 void gig_testsetup(void) // XXX "getting started"-stuff, removeme?
 {
-	assert(!"XXX broken?");
 	g.my_artist_id = 1;
-	const int book_id = 1;
-	const int doc_id = 1;
-	struct snapshot* ss = &g.cool_snapshot;
-	struct document* doc = arraddnptr(ss->document_arr, 1);
-	memset(doc, 0, sizeof *doc);
-	arrinit(doc->fat_char_arr, &system_allocator);
-	memset(doc, 0, sizeof *doc);
-	doc->doc_id = doc_id;
-	struct mim_state ms1 = {
-		.artist_id = get_my_artist_id(),
-		.session_id = 1,
-		.book_id = book_id,
-		.doc_id = doc_id,
-	};
-	arrinit(ms1.caret_arr, &system_allocator);
-	struct caret cr = {
-		.tag=0,
-		.caret_loc ={.line=1,.column=1},
-		.anchor_loc={.line=1,.column=1},
-	};
-	arrput(ms1.caret_arr, cr);
-	arrput(ss->mim_state_arr, ms1);
+	begin_mim(1);
+	mimex("newbook 1 mie-ordlyd -");
+	mimex("newdoc 1 50 art.mie");
+	mimex("setdoc 1 50");
+	mimf("0,1,1c");
+	end_mim();
 }
 
 static void snapshot_init(struct snapshot* ss)
