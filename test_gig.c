@@ -9,6 +9,7 @@
 
 int64_t get_nanoseconds_epoch(void)
 {
+	// XXX for testing purposes maybe make this "settable"?
 	struct timespec ts;
 	clock_gettime(CLOCK_REALTIME, &ts);
 	return (int64_t)ts.tv_sec * 1000000000LL + ts.tv_nsec;
@@ -39,7 +40,11 @@ int main(int argc, char** argv)
 	gig_host(argv[1]);
 
 	begin_mim(1);
-	mimf("0,5ihello");
+	mimex("newbook 1 mie-lydskal -");
+	//mimf("0,5ihello");
+	//mimf("3:foo");
+	//mimex("foo 1 2 3");
+	//mimex("foo");
 	// TODO
 	end_mim();
 

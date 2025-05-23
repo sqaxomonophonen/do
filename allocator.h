@@ -13,6 +13,17 @@ struct allocator {
 
 extern struct allocator system_allocator;
 
+static inline void* allocator_realloc(struct allocator* alloc, void* ptr, size_t size)
+{
+	return alloc->fn_realloc(alloc->allocator_context, ptr, size);
+}
+
+static inline void* allocator_malloc(struct allocator* alloc, size_t size)
+{
+	return allocator_realloc(alloc, NULL, size);
+}
+
+
 // scratch (aka arena) allocator: it doesn't support freeing individual
 // allocations (fn_free is a no-op); you can only free everything at once
 // (free_all_scratch_allocations()). this makes it really simple and fast, and

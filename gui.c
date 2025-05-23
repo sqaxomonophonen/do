@@ -352,6 +352,8 @@ static int build_atlas(void)
 	static int* glyph_index_arr = NULL;
 	arrreset(glyph_index_arr);
 
+	// gather rectangles for each glyph/codepoint/graphic, each y-stretch
+	// level, each blur level...
 	for (int fsi=0; fsi<fc->num_font_specs; ++fsi) {
 		struct font_spec* spec = &fc->font_specs[fsi];
 		struct font* font = get_font(spec->font_index);
@@ -457,6 +459,7 @@ static int build_atlas(void)
 		stbtt_GetFontVMetrics(fontinfo, &spec->_ascent, &spec->_descent, &spec->_line_gap);
 	}
 
+	// pack rectangles; give them positions in the atlas image
 	int atlas_width_log2  = ATLAS_MIN_SIZE_LOG2;
 	int atlas_height_log2 = ATLAS_MIN_SIZE_LOG2;
 	for (;;) {
@@ -486,6 +489,7 @@ static int build_atlas(void)
 	const int atlas_height = 1 << atlas_height_log2;
 	uint8_t* atlas_bitmap = calloc(atlas_width*atlas_height,1);
 
+	// render main glyphs/graphics
 	int gi=0;
 	for (int fsi=0; fsi<fc->num_font_specs; ++fsi) {
 		struct font_spec* spec = &fc->font_specs[fsi];
@@ -564,6 +568,7 @@ static int build_atlas(void)
 	static struct resize* resize_arr = NULL;
 	arrreset(resize_arr);
 
+	// prepare resizes
 	for (int fsi=0; fsi<fc->num_font_specs; ++fsi) {
 		struct font_spec* spec = &fc->font_specs[fsi];
 		for (int ci=0; ci<num_codepoint_ranges; ++ci) {
@@ -617,6 +622,7 @@ static int build_atlas(void)
 		}
 	}
 
+	// execute resizes
 	const int num_resizes = arrlen(resize_arr);
 	qsort(resize_arr, num_resizes, sizeof(*resize_arr), resize_compar);
 	STBIR_RESIZE re={0};
@@ -649,6 +655,7 @@ static int build_atlas(void)
 	}
 	stbir_free_samplers(&re);
 
+	// do gaussian blurs
 	static float* coefficient_arr;
 	for (int blur_index=1; blur_index<fc->num_blur_levels; ++blur_index) {
 		const struct blur_level* bl = &fc->blur_levels[blur_index];
@@ -1177,7 +1184,7 @@ static void handle_editor_input(struct pane* pane)
 	if (num_chars > 0) {
 		const int num_bytes = arrlen(g.text_buffer_arr) - 1;
 		mimf("0,%di", num_bytes);
-		for (int i=0; i<num_bytes; ++i) mim8(arrchkget(g.text_buffer_arr, i));
+		for (int i=0; i<num_bytes; ++i) mim8(g.text_buffer_arr[i]);
 	}
 	end_mim();
 }

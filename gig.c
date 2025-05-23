@@ -82,7 +82,7 @@ static struct document* snapshot_get_document_by_index(struct snapshot* ss, int 
 	return arrchkptr(ss->document_arr, index);
 }
 
-static struct document* snapshot_find_document_by_id(struct snapshot* ss, int id)
+static struct document* snapshot_lookup_document_by_id(struct snapshot* ss, int id)
 {
 	const int n = snapshot_get_num_documents(ss);
 	for (int i=0; i<n; ++i) {
@@ -94,12 +94,12 @@ static struct document* snapshot_find_document_by_id(struct snapshot* ss, int id
 
 static struct document* snapshot_get_document_by_id(struct snapshot* ss, int id)
 {
-	struct document* doc = snapshot_find_document_by_id(ss, id);
+	struct document* doc = snapshot_lookup_document_by_id(ss, id);
 	assert((doc != NULL) && "document not found by id");
 	return doc;
 }
 
-static struct mim_state* snapshot_find_mim_state_by_ids(struct snapshot* ss, int artist_id, int session_id)
+static struct mim_state* snapshot_lookup_mim_state_by_ids(struct snapshot* ss, int artist_id, int session_id)
 {
 	const int n = arrlen(ss->mim_state_arr);
 	for (int i=0; i<n; ++i) {
@@ -114,7 +114,7 @@ static struct mim_state* snapshot_find_mim_state_by_ids(struct snapshot* ss, int
 
 static struct mim_state* snapshot_get_mim_state_by_ids(struct snapshot* ss, int artist_id, int session_id)
 {
-	struct mim_state* ms = snapshot_find_mim_state_by_ids(ss, artist_id, session_id);
+	struct mim_state* ms = snapshot_lookup_mim_state_by_ids(ss, artist_id, session_id);
 	assert(ms != NULL);
 	return ms;
 }
@@ -125,19 +125,21 @@ struct cow_snapshot {
 	struct allocator* allocator;
 	struct snapshot* ref;
 	struct document*  cow_document_arr;
-	struct mim_state* cow_mim_state_arr;
+	struct mim_state mim_state;
 };
 
-static void init_cow_snapshot(struct cow_snapshot* cows, struct snapshot* ref, struct allocator* a)
+static void init_cow_snapshot(struct cow_snapshot* cows, struct snapshot* ref, struct mim_state* ms, struct allocator* a)
 {
 	memset(cows, 0, sizeof *cows);
 	cows->allocator = a;
 	cows->ref = ref;
-	arrinit(cows->cow_document_arr,  cows->allocator);
-	arrinit(cows->cow_mim_state_arr, cows->allocator);
+	arrinit(cows->cow_document_arr, cows->allocator);
+	struct mim_state* cms = &cows->mim_state;
+	arrinit(cms->caret_arr, cows->allocator);
+	mim_state_copy(cms, ms);
 }
 
-static struct document* cow_snapshot_find_cow_document_by_id(struct cow_snapshot* cows, int id)
+static struct document* cow_snapshot_lookup_cow_document_by_id(struct cow_snapshot* cows, int id)
 {
 	const int n = arrlen(cows->cow_document_arr);
 	for (int i=0; i<n; ++i) {
@@ -147,26 +149,26 @@ static struct document* cow_snapshot_find_cow_document_by_id(struct cow_snapshot
 	return NULL;
 }
 
-static struct document* cow_snapshot_find_readonly_document_by_id(struct cow_snapshot* cows, int id)
+static struct document* cow_snapshot_lookup_readonly_document_by_id(struct cow_snapshot* cows, int id)
 {
-	struct document* doc = cow_snapshot_find_cow_document_by_id(cows, id);
+	struct document* doc = cow_snapshot_lookup_cow_document_by_id(cows, id);
 	if (doc != NULL) return doc;
-	return snapshot_find_document_by_id(cows->ref, id);
+	return snapshot_lookup_document_by_id(cows->ref, id);
 }
 
 static struct document* cow_snapshot_get_readonly_document_by_id(struct cow_snapshot* cows, int id)
 {
-	struct document* doc = cow_snapshot_find_readonly_document_by_id(cows, id);
+	struct document* doc = cow_snapshot_lookup_readonly_document_by_id(cows, id);
 	assert(doc != NULL);
 	return doc;
 }
 
-static struct document* cow_snapshot_find_readwrite_document_by_id(struct cow_snapshot* cows, int id)
+static struct document* cow_snapshot_lookup_readwrite_document_by_id(struct cow_snapshot* cows, int id)
 {
-	struct document* doc = cow_snapshot_find_cow_document_by_id(cows, id);
+	struct document* doc = cow_snapshot_lookup_cow_document_by_id(cows, id);
 	if (doc != NULL) return doc;
 
-	struct document* src_doc = snapshot_find_document_by_id(cows->ref, id);
+	struct document* src_doc = snapshot_lookup_document_by_id(cows->ref, id);
 	if (src_doc == NULL) return NULL;
 
 	if (cows->cow_document_arr == NULL) arrinit(cows->cow_document_arr, cows->allocator);
@@ -187,74 +189,24 @@ static struct document* cow_snapshot_find_readwrite_document_by_id(struct cow_sn
 
 static struct document* cow_snapshot_get_readwrite_document_by_id(struct cow_snapshot* cows, int id)
 {
-	struct document* doc = cow_snapshot_find_readwrite_document_by_id(cows, id);
+	struct document* doc = cow_snapshot_lookup_readwrite_document_by_id(cows, id);
 	assert(doc != NULL);
 	return doc;
 }
 
-static struct mim_state* cow_snapshot_find_cow_mim_state_by_ids(struct cow_snapshot* cows, int artist_id, int session_id)
-{
-	const int n = arrlen(cows->cow_mim_state_arr);
-	for (int i=0; i<n; ++i) {
-		struct mim_state* ms = &cows->cow_mim_state_arr[i];
-		if ((ms->artist_id == artist_id) && (ms->session_id == session_id)) return ms;
-	}
-	return NULL;
-}
-
-static struct mim_state* cow_snapshot_find_readonly_mim_state_by_ids(struct cow_snapshot* cows, int artist_id, int session_id)
-{
-	struct mim_state* ms = cow_snapshot_find_cow_mim_state_by_ids(cows, artist_id, session_id);
-	if (ms != NULL) return ms;
-	return snapshot_find_mim_state_by_ids(cows->ref, artist_id, session_id);
-}
-
-static struct mim_state* cow_snapshot_find_readwrite_mim_state_by_ids(struct cow_snapshot* cows, int artist_id, int session_id)
-{
-	struct mim_state* ms = cow_snapshot_find_cow_mim_state_by_ids(cows, artist_id, session_id);
-	if (ms != NULL) return ms;
-
-	struct mim_state* src_ms = snapshot_find_mim_state_by_ids(cows->ref, artist_id, session_id);
-	if (src_ms == NULL) return NULL;
-
-	struct mim_state* dst_ms = arraddnptr(cows->cow_mim_state_arr, 1);
-	memset(dst_ms, 0, sizeof *dst_ms);
-	assert(dst_ms->caret_arr == NULL);
-	arrinit(dst_ms->caret_arr, cows->allocator);
-	assert(dst_ms->caret_arr != NULL);
-	mim_state_copy(dst_ms, src_ms);
-
-	return dst_ms;
-}
-
-static struct mim_state* cow_snapshot_get_readwrite_mim_state_by_ids(struct cow_snapshot* cows, int artist_id, int session_id)
-{
-	struct mim_state* ms = cow_snapshot_find_readwrite_mim_state_by_ids(cows, artist_id, session_id);
-	assert(ms != NULL);
-	return ms;
-}
-
 static void cow_snapshot_commit(struct cow_snapshot* cows)
 {
-	{
-		const int n = arrlen(cows->cow_document_arr);
-		for (int i=0; i<n; ++i) {
-			struct document* src_doc = &cows->cow_document_arr[i];
-			struct document* dst_doc = snapshot_get_document_by_id(cows->ref, src_doc->id);
-			document_copy(dst_doc, src_doc);
-		}
-		if (n>0) arrsetlen(cows->cow_document_arr, 0);
+	const int num_cow_doc = arrlen(cows->cow_document_arr);
+	for (int i=0; i<num_cow_doc; ++i) {
+		struct document* src_doc = &cows->cow_document_arr[i];
+		struct document* dst_doc = snapshot_get_document_by_id(cows->ref, src_doc->id);
+		document_copy(dst_doc, src_doc);
 	}
+	if (num_cow_doc>0) arrsetlen(cows->cow_document_arr, 0);
 
-	{
-		const int n = arrlen(cows->cow_mim_state_arr);
-		for (int i=0; i<n; ++i) {
-			struct mim_state* src_ms = &cows->cow_mim_state_arr[i];
-			struct mim_state* dst_ms = snapshot_get_mim_state_by_ids(cows->ref, src_ms->artist_id, src_ms->session_id);
-			mim_state_copy(dst_ms, src_ms);
-		}
-		if (n>0) arrsetlen(cows->cow_mim_state_arr, 0);
-	}
+	struct mim_state* src_ms = &cows->mim_state;
+	struct mim_state* dst_ms = snapshot_get_mim_state_by_ids(cows->ref, src_ms->artist_id, src_ms->session_id);
+	mim_state_copy(dst_ms, src_ms);
 }
 
 struct iofile {
@@ -338,6 +290,11 @@ void mim8(uint8_t v)
 	mimsrc(&v, 1);
 }
 
+void mimex(const char* ex)
+{
+	mimf("%zd:%s", strlen(ex), ex);
+}
+
 int get_my_artist_id(void)
 {
 	return g.my_artist_id;
@@ -372,7 +329,7 @@ void get_state_and_doc(int session_id, struct mim_state** out_mim_state, struct 
 }
 
 FORMATPRINTF1
-static void mimerr(const char* fmt, ...)
+static int mimerr(const char* fmt, ...)
 {
 	va_list va;
 	va_start(va, fmt);
@@ -380,6 +337,7 @@ static void mimerr(const char* fmt, ...)
 	stbsp_vsnprintf(msg, sizeof msg, fmt, va);
 	va_end(va);
 	fprintf(stderr, "MIMERR :: [%s]\n", msg);
+	return -1;
 }
 
 static void doc_location_constraint(struct document* doc, struct location* loc)
@@ -392,22 +350,32 @@ static void doc_location_constraint(struct document* doc, struct location* loc)
 struct mimop {
 	struct cow_snapshot* cows;
 	int document_id;
-	int artist_id, session_id;
 };
 
-static struct document* mimop_rw_doc(struct mimop* mo)
+static int mimop_has_doc(struct mimop* mo)
+{
+	if (mo->document_id <= 0) return 0;
+	return (NULL != cow_snapshot_lookup_readonly_document_by_id(mo->cows, mo->document_id));
+}
+
+static struct document* mimop_get_readonly_doc(struct mimop* mo)
+{
+	return cow_snapshot_get_readonly_document_by_id(mo->cows, mo->document_id);
+}
+
+static struct document* mimop_get_readwrite_doc(struct mimop* mo)
 {
 	return cow_snapshot_get_readwrite_document_by_id(mo->cows, mo->document_id);
 }
 
-static struct mim_state* mimop_rw_ms(struct mimop* mo)
+static struct mim_state* mimop_ms(struct mimop* mo)
 {
-	return cow_snapshot_get_readwrite_mim_state_by_ids(mo->cows, mo->artist_id, mo->session_id);
+	return &mo->cows->mim_state;
 }
 
 static void mimop_delete(struct mimop* mo, struct location* loc0, struct location* loc1)
 {
-	struct document* doc = mimop_rw_doc(mo);
+	struct document* doc = mimop_get_readwrite_doc(mo);
 	location_sort2(&loc0, &loc1);
 	const int o0 = document_locate(doc, loc0);
 	int o1 = document_locate(doc, loc1);
@@ -423,16 +391,132 @@ static void mimop_delete(struct mimop* mo, struct location* loc0, struct locatio
 	}
 }
 
-// parses a mim message, typically written by mimf()/mim8()
-static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
+struct mimexscanner {
+	struct allocator* alloc;
+	char* all;
+	const char* cmd;
+	const char* err;
+	char* cur;
+	const char* end;
+	int cmdlen;
+	unsigned did_match :1;
+	unsigned has_error :1;
+};
+
+static int mimexscanner_errorf(struct mimexscanner* s, const char* fmt, ...)
 {
-	const char* p = (const char*)input;
-	int remaining = num_bytes;
+	const size_t max = 1L<<12;
+	char* err = allocator_malloc(s->alloc, max);
+	va_list va;
+	va_start(va, fmt);
+	stbsp_vsnprintf(err, max, fmt, va);
+	va_end(va);
+	s->err = err;
+	s->has_error = 1;
+	return -1;
+}
+
+static int mimexscanner_init(struct mimexscanner* s, struct allocator* alloc, const char* c0, const char* c1)
+{
+	memset(s, 0, sizeof *s);
+	s->alloc = alloc;
+
+	const size_t num_bytes = (c1-c0);
+	s->all = allocator_malloc(alloc, num_bytes+1);
+	memcpy(s->all, c0, num_bytes);
+
+	// search for space in command if it exists, so whether
+	// input is ":foo" or ":foo 42" we want the "foo" part
+	// (which is the "ex" command, and the rest is arguments)
+	int cmdlen=0;
+	const char* p=c0;
+	for (p=c0; p<c1; ++cmdlen, ++p) {
+		if (*p == ' ') break;
+	}
+	if (cmdlen == 0) return mimexscanner_errorf(s, "empty command");
+	s->all[cmdlen] = 0;
+	s->cmd = s->all;
+	s->cmdlen = cmdlen;
+	s->cur = s->all + cmdlen + 1;
+	s->end = s->all + num_bytes;
+	return 0;
+}
+
+static const char* mimexscanner_next_arg(struct mimexscanner* s)
+{
+	const char* p0 = s->cur;
+	int num=0;
+	for (; s->cur < s->end; ++s->cur) {
+		if (*s->cur == ' ') break;
+		++num;
+	}
+	if (num==0) return NULL;
+	*s->cur = 0;
+	++s->cur;
+	return p0;
+}
+
+static int parse_nonnegative_int(const char* s)
+{
+	long i=0;
+	int n=0;
+	for (const char* p=s; *p && n<10; ++n,++p) {
+		const char c = *p;
+		if (!is_digit(c)) return -1;
+		i = (10*i) + (c-'0');
+	}
+	if ((INT_MIN <= i) && (i <= INT_MAX)) {
+		return (int)i;
+	} else {
+		return -1;
+	}
+}
+
+static int mimexscan(struct mimexscanner* s, const char* cmd, const char* fmt, ...)
+{
+	// don't continue scanning if there's an error or we already found a match
+	if ((s->did_match) || (s->has_error)) return 0;
+	if (strcmp(cmd, s->cmd) != 0) return 0;
+
+	const int num_fmt = strlen(fmt);
+	va_list va;
+	va_start(va, fmt);
+	for (int i=0; i<num_fmt; ++i) {
+		const char c = fmt[i];
+		switch (c) {
+
+		case 'i': {
+			const char* arg = mimexscanner_next_arg(s);
+			if (s->has_error) return -1;
+			assert(arg != NULL);
+			int* p = va_arg(va, int*);
+			*p = parse_nonnegative_int(arg);
+			if (*p < 0) return mimexscanner_errorf(s, "invalid int arg [%s]", arg);
+		}	break;
+
+		case 's': {
+			const char* arg = mimexscanner_next_arg(s);
+			if (s->has_error) return -1;
+			assert(arg != NULL);
+			const char** p = va_arg(va, const char**);
+			*p = arg;
+		}	break;
+
+		default: assert(!"unhandled mimexscan fmt char");
+		}
+	}
+	va_end(va);
+	return 1;
+}
+
+// parses a mim message, typically written by mimf()/mim8()
+static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes)
+{
+	const char* input_cursor = (const char*)input;
+	int remaining = num_input_bytes;
 
 	static int* number_stack_arr = NULL;
-	if (number_stack_arr == NULL) {
-		arrinit(number_stack_arr, &system_allocator);
-	}
+	if (number_stack_arr == NULL) arrinit(number_stack_arr, &system_allocator);
 	arrreset(number_stack_arr);
 
 	enum {
@@ -441,6 +525,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 		INSERT_STRING,
 		INSERT_COLOR_STRING,
 		MOTION,
+		EX,
 	};
 
 	enum {
@@ -453,37 +538,35 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 	int previous_mode = -1;
 	int number=0, number_sign=0;
 	int push_chr = -1;
-	int string_bytes_remaining = 0;
+	int suffix_bytes_remaining = 0;
+	int expect_suffix_bytes = 0;
 	int arg_tag = -1;
 	int arg_num = -1;
 	int motion_cmd = -1;
-
 	const int64_t now = get_nanoseconds();
-
 	int chr=0;
 	uint32_t u32val=0;
+	const char* ex0 = NULL;
+
 	while ((push_chr>=0) || (remaining>0)) {
-		const char* p0 = p;
+		const char* p0 = input_cursor;
 		if (datamode == UTF8) {
-			chr = (push_chr>=0) ? push_chr : utf8_decode(&p, &remaining);
+			chr = (push_chr>=0) ? push_chr : utf8_decode(&input_cursor, &remaining);
 		} else if (datamode == U32) {
 			assert(push_chr == -1);
 			assert(remaining >= 4);
-			const uint8_t* p8 = (const uint8_t*)p;
+			const uint8_t* p8 = (const uint8_t*)input_cursor;
 			u32val = decode_u32(&p8);
-			p = (const char*)p8;
+			input_cursor = (const char*)p8;
 			remaining -= 4;
 			assert(!"TODO");
 		} else {
 			assert(!"unhandled datamode");
 		}
-		const char* p1 = p;
+		const char* p1 = input_cursor;
 		const int num_bytes = (p1-p0);
 		push_chr = -1;
-		if (chr == -1) {
-			mimerr("invalid UTF-8 input");
-			return 0;
-		}
+		if (chr == -1) return mimerr("invalid UTF-8 input");
 		const int num_args = arrlen(number_stack_arr);
 
 		switch (mode) {
@@ -503,7 +586,14 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 				switch (chr) {
 
 				case ':': {
-					assert(!"TODO mim ex command");
+					if (num_args != 1) {
+						return mimerr("command '%c' expected 1 argument; got %d", chr, num_args);
+					}
+					suffix_bytes_remaining = arrchkget(number_stack_arr, 0);
+					if (suffix_bytes_remaining > 0) {
+						mode = EX;
+						ex0 = input_cursor; // NOTE points at /next/ character after ':'
+					}
 				}	break;
 
 				case '!': // commit
@@ -513,14 +603,15 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 				case '*': // toggle fer/defer..?
 				{
 					if (num_args != 1) {
-						mimerr("command '%c' expected 1 argument; got %d", chr, num_args);
-						return 0;
+						return mimerr("command '%c' expected 1 argument; got %d", chr, num_args);
 					}
 					arg_tag = arrchkget(number_stack_arr, 0);
 					arrreset(number_stack_arr);
 
-					struct document* doc = mimop_rw_doc(mo);
-					struct mim_state* ms = mimop_rw_ms(mo); // XXX could be readonly?
+					if (!mimop_has_doc(mo)) return mimerr("command '%c' requires doc; mim state has none", chr);
+
+					struct document* doc = mimop_get_readwrite_doc(mo);
+					struct mim_state* ms = mimop_ms(mo);
 					int num_chars = arrlen(doc->fat_char_arr);
 					const int num_carets = arrlen(ms->caret_arr);
 					for (int i=0; i<num_carets; ++i) {
@@ -581,8 +672,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 				#if 0
 				case 'c': {
 					if (num_args != 3) {
-						mimerr("command 'c' expected 3 arguments; got %d", num_args);
-						return 0;
+						return mimerr("command 'c' expected 3 arguments; got %d", num_args);
 					}
 					assert(!"TODO c"); // TODO
 					arrreset(number_stack_arr);
@@ -590,8 +680,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 
 				case 'C': {
 					if (num_args != 2) {
-						mimerr("command 'C' expected 2 arguments; got %d", num_args);
-						return 0;
+						return mimerr("command 'C' expected 2 arguments; got %d", num_args);
 					}
 					assert(!"TODO C"); // TODO
 					arrreset(number_stack_arr);
@@ -601,11 +690,11 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 				case 'S':
 				case 'M': {
 					if (num_args != 1) {
-						mimerr("command '%c' expected 1 argument; got %d", chr, num_args);
-						return 0;
+						return mimerr("command '%c' expected 1 argument; got %d", chr, num_args);
 					}
 					arg_tag = arrchkget(number_stack_arr, 0);
 					arrreset(number_stack_arr);
+					if (!mimop_has_doc(mo)) return mimerr("command '%c' requires doc; mim state has none", chr);
 					previous_mode = mode;
 					motion_cmd = chr;
 					mode = MOTION;
@@ -614,19 +703,20 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 				case 'i':
 				case 'I': {
 					if (num_args != 2) {
-						mimerr("command '%c' expected 2 arguments; got %d", chr, num_args);
-						return 0;
+						return mimerr("command '%c' expected 2 arguments; got %d", chr, num_args);
 					}
-					assert(string_bytes_remaining == 0);
-					string_bytes_remaining = arrchkget(number_stack_arr, 1);
+					assert(suffix_bytes_remaining == 0);
+					suffix_bytes_remaining = arrchkget(number_stack_arr, 1);
 					arg_tag = arrchkget(number_stack_arr, 0);
 					arrreset(number_stack_arr);
-
-					previous_mode = mode;
-					switch (chr) {
-					case 'i': mode = INSERT_STRING; break;
-					case 'I': mode = INSERT_COLOR_STRING; break;
-					default: assert(!"unexpected chr");
+					if (suffix_bytes_remaining > 0) {
+						if (!mimop_has_doc(mo)) return mimerr("command '%c' requires doc; mim state has none", chr);
+						previous_mode = mode;
+						switch (chr) {
+						case 'i': mode = INSERT_STRING; break;
+						case 'I': mode = INSERT_COLOR_STRING; break;
+						default: assert(!"unexpected chr");
+						}
 					}
 				}	break;
 
@@ -634,15 +724,16 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 				case 'x': // delete
 				{
 					if (num_args != 1) {
-						mimerr("command '%c' expected 1 argument; got %d", chr, num_args);
-						return 0;
+						return mimerr("command '%c' expected 1 argument; got %d", chr, num_args);
 					}
 					arg_tag = arrchkget(number_stack_arr, 0);
 					arg_num = 1; // XXX make it an optional arg?
 					arrreset(number_stack_arr);
 
-					struct document* doc = mimop_rw_doc(mo);
-					struct mim_state* ms = mimop_rw_ms(mo);
+					if (!mimop_has_doc(mo)) return mimerr("command '%c' requires doc; mim state has none", chr);
+
+					struct document* doc = mimop_get_readwrite_doc(mo);
+					struct mim_state* ms = mimop_ms(mo);
 					const int num_carets = arrlen(ms->caret_arr);
 					for (int i=0; i<num_carets; ++i) {
 						struct caret* car = arrchkptr(ms->caret_arr, i);
@@ -691,8 +782,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 				}	break;
 
 				default:
-					mimerr("invalid command '%c'/%d", chr, chr);
-					return 0;
+					return mimerr("invalid command '%c'/%d", chr, chr);
 
 				}
 			}
@@ -711,6 +801,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 
 		case INSERT_STRING:
 		case INSERT_COLOR_STRING: {
+			assert(mimop_has_doc(mo));
 			int do_insert = 0;
 			int next_datamode = datamode;
 			if (mode == INSERT_STRING) {
@@ -735,12 +826,11 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 						// accepted control codes
 						break;
 					default:
-						mimerr("invalid control code %d in string", chr);
-						return 0;
+						return mimerr("invalid control code %d in string", chr);
 					}
 				}
 
-				struct mim_state* ms = mimop_rw_ms(mo);
+				struct mim_state* ms = mimop_ms(mo);
 
 				uint8_t r,g,b,x;
 				if (mode == INSERT_STRING) {
@@ -759,7 +849,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 					assert(!"unreachable");
 				}
 
-				struct document* doc = mimop_rw_doc(mo);
+				struct document* doc = mimop_get_readwrite_doc(mo);
 				const int num_carets = arrlen(ms->caret_arr);
 				for (int i=0; i<num_carets; ++i) {
 					struct caret* car = arrchkptr(ms->caret_arr, i);
@@ -792,17 +882,11 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 			}
 
 			datamode = next_datamode;
+			expect_suffix_bytes = 1;
+		}	break;
 
-			assert(string_bytes_remaining > 0);
-			string_bytes_remaining -= num_bytes;
-			assert(string_bytes_remaining >= 0);
-			if (string_bytes_remaining == 0) {
-				assert(datamode == UTF8);
-				arrreset(number_stack_arr);
-				assert(previous_mode == COMMAND);
-				mode = previous_mode;
-			}
-
+		case EX: {
+			expect_suffix_bytes = 1;
 		}	break;
 
 		case MOTION: {
@@ -817,14 +901,16 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 			case 'k': // up
 			case 'j': // down
 			{
+				assert(mimop_has_doc(mo));
+
 				const int is_left  = (chr=='h');
 				const int is_right = (chr=='l');
 				const int is_up    = (chr=='k');
 				const int is_down  = (chr=='j');
 
-				struct mim_state* ms = mimop_rw_ms(mo);
+				struct mim_state* ms = mimop_ms(mo);
 				const int num_carets = arrlen(ms->caret_arr);
-				struct document* doc = mimop_rw_doc(mo);
+				struct document* readonly_doc = mimop_get_readonly_doc(mo);
 				for (int i=0; i<num_carets; ++i) {
 					struct caret* car = arrchkptr(ms->caret_arr, i);
 					if (car->tag != arg_tag) continue;
@@ -834,19 +920,19 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 					if (0 == location_compare(loc0,loc1)) {
 						if (is_left) {
 							--loc0->column;
-							doc_location_constraint(doc, loc0);
+							doc_location_constraint(readonly_doc, loc0);
 						}
 						if (is_right) {
 							++loc1->column;
-							doc_location_constraint(doc, loc1);
+							doc_location_constraint(readonly_doc, loc1);
 						}
 						if (is_up) {
 							--loc0->line;
-							doc_location_constraint(doc, loc0);
+							doc_location_constraint(readonly_doc, loc0);
 						}
 						if (is_down) {
 							++loc1->line;
-							doc_location_constraint(doc, loc1);
+							doc_location_constraint(readonly_doc, loc1);
 						}
 					}
 					if (is_left  || is_up  ) *loc1 = *loc0;
@@ -855,8 +941,6 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 			}	break;
 
 			default:
-				// XXX no: reject instead? otherwise untrusted input (mim in
-				// files, over network,...) crashes the program
 				assert(!"unhandled motion char");
 
 			}
@@ -870,20 +954,60 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_bytes)
 			assert(!"unhandled mim_spool()-mode");
 
 		}
+
+		if (expect_suffix_bytes) {
+			assert(suffix_bytes_remaining > 0);
+			suffix_bytes_remaining -= num_bytes;
+			assert(suffix_bytes_remaining >= 0);
+			if (suffix_bytes_remaining == 0) {
+				assert(datamode == UTF8);
+				arrreset(number_stack_arr);
+				assert(previous_mode == COMMAND);
+
+				if (mode == EX) {
+					struct mimexscanner s;
+					mimexscanner_init(&s, mo->cows->allocator, ex0, input_cursor);
+
+					{
+						int book_id;
+						const char* book_platform;
+						const char* book_template;
+						if (mimexscan(&s, "newbook", "iss", &book_id, &book_platform, &book_template)) {
+							printf("TODO [%d] [%s] [%s]\n", book_id, book_platform, book_template);
+							assert(!"TODO newbook");
+						}
+					}
+
+					{
+						int book_id, doc_id;
+						const char* name;
+						if (mimexscan(&s, "newdoc", "iis", &book_id, &doc_id, &name)) {
+							assert(!"TODO newbook");
+						}
+					}
+
+					if (s.has_error) {
+						return mimerr("error in mimex command"); // TODO
+					} else if (!s.did_match) {
+						return mimerr("unhandled mimex command"); // TODO
+					}
+				}
+
+				mode = previous_mode;
+			}
+		}
 	}
 
 	if (mode != COMMAND) {
-		mimerr("mode (%d) not terminated", mode);
-		return 0;
+		return mimerr("mode (%d) not terminated", mode);
 	}
 
 	const int num_args = arrlen(number_stack_arr);
 	if (num_args > 0) {
-		mimerr("non-empty number stack (n=%d) at end of mim-input", num_args);
-		return 0;
+		return mimerr("non-empty number stack (n=%d) at end of mim-input", num_args);
 	}
 
-	return 1;
+	return 0;
 }
 
 void begin_mim(int session_id)
@@ -893,7 +1017,7 @@ void begin_mim(int session_id)
 	arrreset(g.mim_buffer_arr);
 	g.using_mim_session_id = session_id;
 	struct snapshot* ss = &g.cool_snapshot;
-	if (NULL == snapshot_find_mim_state_by_ids(ss, get_my_artist_id(), session_id)) {
+	if (NULL == snapshot_lookup_mim_state_by_ids(ss, get_my_artist_id(), session_id)) {
 		struct mim_state ms = {
 			.artist_id = get_my_artist_id(),
 			.session_id = session_id,
@@ -936,34 +1060,35 @@ static void snapshot_spool_ex(struct snapshot* snapshot, uint8_t* data, int num_
 	mie_begin_scrallox();
 	if (0 == setjmp(*mie_prep_scrallox_jmp_buf_for_out_of_memory())) {
 		struct cow_snapshot cows = {0};
-		init_cow_snapshot(&cows, snapshot, mie_borrow_scrallox());
 
 		struct mim_state* ms = snapshot_get_mim_state_by_ids(snapshot, artist_id, session_id);
+		init_cow_snapshot(&cows, snapshot, ms, mie_borrow_scrallox());
 		struct mimop mo = {
 			.cows = &cows,
 			.document_id = ms->document_id,
-			.artist_id = artist_id,
-			.session_id = session_id,
 		};
 
-		if (!mim_spool(&mo, data, num_bytes)) {
+		if (mim_spool(&mo, data, num_bytes) < 0) {
 			assert(!"mim protocol error"); // XXX? should I have a "failable" flag? eg. for human input
 		}
 
-		struct document* doc = cow_snapshot_get_readonly_document_by_id(&cows, ms->document_id);
-		static struct thicchar* dodoc_arr = NULL;
-		if (dodoc_arr == NULL) {
-			arrinit(dodoc_arr, &system_allocator);
-		}
-		document_to_thicchar_da(&dodoc_arr, doc);
-		const int prg = mie_compile_thicc(dodoc_arr, arrlen(dodoc_arr));
-		//printf("prg=%d\n", prg);
-		if (prg == -1) {
-			printf("TODO compile error [%s]\n", mie_error());
-		} else {
-			vmie_reset(prg);
-			vmie_run();
-			mie_program_free(prg);
+		if (mimop_has_doc(&mo)) {
+			// XXX kinda want to run /all/ docs here... this code is not right
+			struct document* doc = cow_snapshot_get_readonly_document_by_id(&cows, ms->document_id);
+			static struct thicchar* dodoc_arr = NULL;
+			if (dodoc_arr == NULL) {
+				arrinit(dodoc_arr, &system_allocator);
+			}
+			document_to_thicchar_da(&dodoc_arr, doc);
+			const int prg = mie_compile_thicc(dodoc_arr, arrlen(dodoc_arr));
+			//printf("prg=%d\n", prg);
+			if (prg == -1) {
+				printf("TODO compile error [%s]\n", mie_error());
+			} else {
+				vmie_reset(prg);
+				vmie_run();
+				mie_program_free(prg);
+			}
 		}
 
 		cow_snapshot_commit(&cows);

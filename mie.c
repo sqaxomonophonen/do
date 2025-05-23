@@ -616,17 +616,16 @@ void vmie_errorf(struct vmie* vm, const char* fmt, ...)
 
 static void* scratch_alloc(size_t sz)
 {
-	struct allocator* a = scrallox();
-	return a->fn_realloc(a->allocator_context, NULL, sz);
+	return allocator_malloc(scrallox(), sz);
 }
 
 static void vmie_init(struct vmie* vm, struct program* program)
 {
 	memset(vm, 0, sizeof *vm);
-	struct allocator* a = scrallox();
-	arrinit(vm->stack_arr, a);
-	arrinit(vm->rstack_arr, a);
-	arrinit(vm->global_arr, a);
+	struct allocator* alloc = scrallox();
+	arrinit(vm->stack_arr, alloc);
+	arrinit(vm->rstack_arr, alloc);
+	arrinit(vm->global_arr, alloc);
 	vm->program = program;
 	vm->pc = program->entrypoint_address;
 	vm->error_message = scratch_alloc(MAX_ERROR_MESSAGE_SIZE);
@@ -742,9 +741,9 @@ static int32_t vmie_alloc_string(struct vmie* vm, size_t len, struct thicchar** 
 {
 	struct valstore* vals = &vm->vals;
 
-	struct allocator* a = scrallox();
-	if (vals->char_store_arr == NULL) arrinit(vals->char_store_arr, a);
-	if (vals->str_arr == NULL) arrinit(vals->str_arr, a);
+	struct allocator* alloc = scrallox();
+	if (vals->char_store_arr == NULL) arrinit(vals->char_store_arr, alloc);
+	if (vals->str_arr == NULL) arrinit(vals->str_arr, alloc);
 	assert(vals->char_store_arr != NULL);
 	assert(vals->str_arr != NULL);
 
@@ -786,7 +785,7 @@ int vmie_run2(struct vmie* vm)
 	uint32_t deferred_op = 0;
 	// TODO cycle limiting in while() condition?
 
-	struct allocator* a = scrallox();
+	struct allocator* alloc = scrallox();
 
 	while ((0 <= pc) && (pc < prg_len)) {
 		vm->pc = pc;
@@ -1224,12 +1223,12 @@ int vmie_run2(struct vmie* vm)
 			case OP_ARRNEW: {
 				struct valstore* vals = &vm->vals;
 				if (vals->arr_arr == NULL) {
-					arrinit(vals->arr_arr, a);
+					arrinit(vals->arr_arr, alloc);
 				}
 				assert(vals->arr_arr != NULL);
 				const int32_t id = (int32_t)arrlen(vals->arr_arr);
 				struct val_arr* arr = arraddnptr(vals->arr_arr, 1);
-				arrinit(arr->arr, a);
+				arrinit(arr->arr, alloc);
 				arrput(vm->stack_arr, typeval(VAL_ARR, id));
 			}	break;
 
@@ -1265,12 +1264,12 @@ int vmie_run2(struct vmie* vm)
 			case OP_MAPNEW: {
 				struct valstore* vals = &vm->vals;
 				if (vals->map_arr == NULL) {
-					arrinit(vals->map_arr, a);
+					arrinit(vals->map_arr, alloc);
 				}
 				assert(vals->map_arr != NULL);
 				const int32_t id = (int32_t)arrlen(vals->map_arr);
 				struct val_map* map = arraddnptr(vals->map_arr, 1);
-				hminit(map->map, a);
+				hminit(map->map, alloc);
 				arrput(vm->stack_arr, typeval(VAL_MAP, id));
 			}	break;
 
@@ -1947,15 +1946,15 @@ static void compiler_begin(struct compiler* cm, struct program* program)
 
 	cm->word_buf = scratch_alloc(sizeof(*cm->word_buf)*WORD_BUF_SIZE);
 
-	struct allocator* a = scrallox();
+	struct allocator* alloc = scrallox();
 	assert(cm->word_lut == NULL);
-	sh_new_strdup_with_context(cm->word_lut, a);
+	sh_new_strdup_with_context(cm->word_lut, alloc);
 	assert(cm->word_index_arr == NULL);
-	arrinit(cm->word_index_arr, a);
+	arrinit(cm->word_index_arr, alloc);
 	assert(cm->wordscope0_arr == NULL);
-	arrinit(cm->wordscope0_arr, a);
+	arrinit(cm->wordscope0_arr, alloc);
 	assert(cm->wordskip_addraddr_arr == NULL);
-	arrinit(cm->wordskip_addraddr_arr, a);
+	arrinit(cm->wordskip_addraddr_arr, alloc);
 
 	cm->program = program;
 	program_reset(cm->program);
@@ -2351,12 +2350,11 @@ void mie_selftest(void)
 	}
 
 	const char* programs_that_fail_at_runtime[] = {
-		"halt", // halt always fails
+		// halt always fails
+		"halt", "\"error message\" halt",
 
 		// a bunch of stack underflows
-		"drop",
-		"ROTATE",
-		"F*",
+		"drop", "ROTATE", "F*",
 	};
 
 	for (int i=0; i<ARRAY_LENGTH(programs_that_fail_at_runtime); ++i) {

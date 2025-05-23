@@ -204,6 +204,8 @@ void end_mim(void);
 FORMATPRINTF1
 void mimf(const char* fmt, ...);
 void mim8(uint8_t v);
+void mimex(const char*);
+//void mimi(const char*);
 
 void get_state_and_doc(int session_id, struct mim_state** out_mim_state, struct document** out_doc);
 

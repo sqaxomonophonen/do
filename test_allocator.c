@@ -61,7 +61,7 @@ static void validate_pattern(void* mem, size_t n, uint32_t seed)
 #ifdef USE_REAL_REALLOC
 #define REALLOC(PTR,SZ) realloc(PTR,SZ)
 #else
-#define REALLOC(PTR,SZ) (A.fn_realloc(A.allocator_context, (PTR), (SZ)))
+#define REALLOC(PTR,SZ) allocator_realloc(&A,PTR,SZ)
 #endif
 
 #define VERBOSE (1)

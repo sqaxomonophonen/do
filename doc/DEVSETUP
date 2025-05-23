@@ -48,3 +48,12 @@ TODO: Windows builds? How?
  - WSL2?
  - mingw? (I remember someone complaining mingw32/64 builds are poor?)
  - Emscripten should work in Windows, but I haven't tried it
+
+
+Suggested additional development tools:
+ - valgrind (Linux/BSD only): can find many memory corruption errors (and
+   leaks?)
+ - (nakst/)gf2 (Linux/BSD only): a good GDB frontend. You can also try gdb
+   itself but it has bad usability imo
+ - I've heard good things about RemedyBG (and maybe RAD Debugger?) for
+   debugging on Windows

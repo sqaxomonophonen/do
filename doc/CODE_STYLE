@@ -1,4 +1,3 @@
-
  - If you use the stb_ds.h dynamic array, please add an `_arr`-suffix to the
    field name; normally a declaration reveals what the type is, but with this
    it's "hidden" so I prefer "int* id_arr" instead of "int* ids"
@@ -10,9 +9,9 @@
  - Don't use `typedef` unless a type must be easily replaceable or
    configurable. In particular don't typedef structs, enums, etc.
 
- - For a function that "returns foo by id": if it crashes (e.g. by failed
-   assertion) when called with an id that doesn't exist, call it
-   get_foo_by_id(); if it instead returns a nil value, call it find_foo_by_id()
+ - For a function that "returns foo by id": if it panics when called with an id
+   that doesn't exist, call it get_foo_by_id(); if it instead returns a nil
+   value, call it lookup_foo_by_id()
 
  - It's hard to be 100% consistent with function argument ordering, but the
    rough guideline is:
@@ -25,5 +24,8 @@
      they're typically optional (although this is slightly inconsistent with
      the source/destination rule).
 
- - As for "visual style" in general, you can do what you like unless it's
-   "invasive" (like using spaces instead of tabs)
+ - Function names that don't sound like a yes/no question, but nevertheless
+   return "success" and "error" (integer) values should use >=0 for "success"
+   and <0 for "error". Function that sound like a question should use 0 for
+   false, and non-0 (typically 1) for true. E.g. read_from_file() doesn't sound
+   like yes/no question, but has_file_error() does.

@@ -9,11 +9,9 @@
 //    without thinking about it.
 
 //  - Self testing seems like the only way we can conveniently test a
-//    compilation unit that depends on other compilation units (looking at you,
-//    gig.c, for starters). I don't think dynamic dependency injection is a
-//    good solution; you end up mocking every single little thing just so you
-//    can write a test. TODO: should these tests have a different name? Like,
-//    "entangled tests"? :)
+//    compilation unit that depends on other compilation units (like gig.c). I
+//    don't think dynamic dependency injection is a good solution; you end up
+//    mocking every single little thing just so you can write a test.
 
 //  - These tests cannot be expensive. They probably shouldn't have significant
 //    static memory requirements, and no dynamic memory requirements (no
@@ -25,9 +23,8 @@
 //  - There can be some namespacing annoyances when writing tests. See e.g.
 //    `_g_l128u` in leb128.h which used to be just `g`.
 
-//  - Also, sometimes the compiler will notice that your program crashes early
-//    (failed test assertion) and produce a smaller binary. This is something
-//    you might notice even before running the build.
+//  - Sometimes the compiler will notice that your program crashes early
+//    (failed test assertion) and produce a smaller binary.
 
 //  - Maybe support a define that replaces run_selftest() with an empty
 //    function, just in case it makes a difference on constrained platforms.
@@ -48,8 +45,8 @@ void run_selftest(void)
 	const int64_t t0 = get_nanoseconds();
     utf8_unit_test();
     leb128_unit_test();
-	const int64_t dt = get_nanoseconds() - t0;
 	gig_selftest();
 	mie_selftest();
+	const int64_t dt = get_nanoseconds() - t0;
 	printf("selftest took %.5fs\n", (double)dt * 1e-9);
 }

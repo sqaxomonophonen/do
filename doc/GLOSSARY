@@ -29,6 +29,10 @@ disk. these files can be regenerated from the DO_JOURNAL file.
 random-ish number that is used to quickly detect if a snapshotcache file
 belongs to the DO_JOURNAL.
 
+: cursor vs caret
+"caret" is used for your "text editing caret" (also sometimes called a
+"cursor"), while "cursor" is used for the rest, like file/read/write cursors.
+
 TODO
 : thicchar
 : fat_char
