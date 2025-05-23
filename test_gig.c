@@ -44,7 +44,7 @@ int main(int argc, char** argv)
 	mimex("newbook 1 mie-ordlyd -");
 	mimex("newdoc 1 50 art.mie");
 	mimex("setdoc 1 50");
-	// XXX der mangler noget med at lave en ny caret her.
+	mimf("0,1,1c");
 	mimi(0,"hello");
 	end_mim();
 

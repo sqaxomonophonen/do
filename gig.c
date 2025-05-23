@@ -234,11 +234,12 @@ static void cow_snapshot_commit(struct cow_snapshot* cows)
 		if (dst_doc) {
 			document_copy(dst_doc, src_doc);
 		} else {
-			assert((src_doc->fat_char_arr == NULL) && "new doc; didn't expect it to contain anything");
 			struct document new_doc = *src_doc;
 			new_doc.name_arr = NULL;
 			arrinit(new_doc.name_arr, &system_allocator);
 			arrcpy(new_doc.name_arr, src_doc->name_arr);
+			arrinit(new_doc.fat_char_arr, &system_allocator);
+			arrcpy(new_doc.fat_char_arr, src_doc->fat_char_arr);
 			arrput(cows->ref->document_arr, new_doc);
 		}
 	}
@@ -658,7 +659,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 			} else {
 				switch (chr) {
 
-				case ':': {
+				case ':': { // mimex command
 					if (num_args != 1) {
 						return mimerr("command '%c' expected 1 argument; got %d", chr, num_args);
 					}
@@ -742,8 +743,8 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 
 				}	break;
 
-				case 'S':
-				case 'M': {
+				case 'S':   // caret movement
+				case 'M': { // anchor movement
 					if (num_args != 1) {
 						return mimerr("command '%c' expected 1 argument; got %d", chr, num_args);
 					}
@@ -755,8 +756,25 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 					mode = MOTION;
 				}	break;
 
-				case 'i':
-				case 'I': {
+				case 'c': { // add caret
+					if (num_args != 3) {
+						return mimerr("command '%c' expected 3 arguments; got %d", chr, num_args);
+					}
+					arg_tag = arrchkget(number_stack_arr, 0);
+					const int line   = arrchkget(number_stack_arr, 1);
+					const int column = arrchkget(number_stack_arr, 2);
+					arrreset(number_stack_arr);
+					struct mim_state* ms = mimop_ms(mo);
+					assert(ms->caret_arr != NULL);
+					arrput(ms->caret_arr, ((struct caret) {
+						.tag = arg_tag,
+						.caret_loc  = { .line=line, .column=column },
+						.anchor_loc = { .line=line, .column=column },
+					}));
+				}	break;
+
+				case 'i':   // text insert
+				case 'I': { // color text insert
 					if (num_args != 2) {
 						return mimerr("command '%c' expected 2 arguments; got %d", chr, num_args);
 					}
@@ -916,6 +934,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 					*anchor = *loc;
 
 					const int off = document_locate(doc, loc);
+					assert(doc->fat_char_arr != NULL);
 					arrins(doc->fat_char_arr, off, ((struct fat_char){
 						.thicchar = {
 							.codepoint = chr,
@@ -1058,7 +1077,6 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 						int book_id, doc_id;
 						const char* name;
 						if (mimex_matches(&s, "newdoc", "iis", &book_id, &doc_id, &name)) {
-							//printf("TODO newdoc [%d] [%d] [%s]\n", book_id, doc_id, name);
 							int book_id_exists = 0;
 
 							const int num_books = arrlen(mo->cows->ref->book_arr);
@@ -1095,6 +1113,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 								.doc_id  = doc_id,
 							};
 							arrinit(doc.name_arr, mo->cows->allocator);
+							arrinit(doc.fat_char_arr, mo->cows->allocator);
 							const size_t n = strlen(name);
 							arrsetlen(doc.name_arr, n+1);
 							memcpy(doc.name_arr, name, n);
