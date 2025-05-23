@@ -1281,8 +1281,8 @@ static void draw_code_pane(struct pane* pane)
 			restore();
 		}
 
-		struct fat_char* fc = it.fat_char;
-		const unsigned cp = fc != NULL ? fc->thicchar.codepoint : 0;
+		struct docchar* fc = it.docchar;
+		const unsigned cp = fc != NULL ? fc->colorchar.codepoint : 0;
 
 		if (fc != NULL) {
 			if (fc->flags & FC_IS_INSERT) bg_color[1] += 0.2f;

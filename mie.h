@@ -69,7 +69,7 @@ static inline struct val floatval(float f) {
 
 void mie_thread_init(void);
 
-int mie_compile_thicc(const struct thicchar*, int num_chars);
+int mie_compile_colorcode(const struct colorchar*, int num_chars);
 int mie_compile_graycode(const char* utf8src, int num_bytes);
 // these return program id, or -1 on failure (see mie_error())
 

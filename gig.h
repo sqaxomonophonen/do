@@ -42,7 +42,7 @@ struct c5char {
 };
 static_assert(sizeof(struct c5char)==(2*sizeof(uint32_t)),"");
 
-struct thicchar {
+struct colorchar {
 	int32_t codepoint;
 	uint8_t color[4];
 };
@@ -59,8 +59,8 @@ struct thicchar {
 #define FC__FLIPPED_DEFER  (1LL<<26)
 #define FC__FILL           (1LL<<31)
 
-struct fat_char {
-	struct thicchar thicchar;
+struct docchar {
+	struct colorchar colorchar;
 	unsigned timestamp; // last change (or created)
 	uint32_t flags; // FC_*
 };
@@ -93,7 +93,7 @@ enum document_type {
 	DOCUMENT_TYPE_VIDEO,
 	//DOCUMENT_TYPE_SCRATCHPAD // XXX do I want/need this?
 	DOCUMENT_TYPE_PRESENTATION_SHADER,
-	// XXX re:DOCUMENT_TYPE_PRESENTATION_SHADER: code that translates "fat_chars"
+	// XXX re:DOCUMENT_TYPE_PRESENTATION_SHADER: code that translates "docchars"
 	// into "render_chars". but do I need a type per "presentation backend"?
 	// would a "braille backend" need another doc type?
 };
@@ -140,14 +140,14 @@ struct document {
 	uint64_t snapshotcache_offset;
 	//enum document_type type;
 	char* name_arr;
-	struct fat_char* fat_char_arr;
+	struct docchar* docchar_arr;
 	// (update document_copy() when adding arr-fields here)
 };
 
 struct doc_iterator {
 	struct document* doc;
 	int offset;
-	struct fat_char* fat_char;
+	struct docchar* docchar;
 	struct location location;
 	unsigned new_line :1;
 	unsigned done :1;

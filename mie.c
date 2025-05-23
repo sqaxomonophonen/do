@@ -373,7 +373,7 @@ struct valstore {
 	// arr arr!
 	struct val_arr*    arr_arr;
 	struct val_map*    map_arr;
-	struct thicchar*   char_store_arr;
+	struct colorchar*  char_store_arr; // XXX wrong char type?
 	struct val_str*    str_arr;
 	struct val_i32arr* i32arr_arr;
 	struct val_f32arr* f32arr_arr;
@@ -389,7 +389,7 @@ struct program {
 	// writing another part? feels "a bit fucked" but it should work as long as
 	// you don't grab references?)
 	struct location* pc_to_location_arr;
-	struct thicchar* static_string_store_arr;
+	struct colorchar* static_string_store_arr;
 	struct val_str* static_string_arr;
 	// TODO: compile error?
 	// NOTE if you add any _arr fields, please update program_copy()
@@ -638,10 +638,10 @@ static void vmie_init(struct vmie* vm, struct program* program)
 		return -1; \
 	}
 
-static struct thicchar* resolve_string(struct vmie* vm, int id, int* out_length)
+static struct colorchar* resolve_string(struct vmie* vm, int id, int* out_length)
 {
 	struct val_str vs = {0};
-	struct thicchar* tc = NULL;
+	struct colorchar* tc = NULL;
 	if (id < 0) {
 		const int index = -1-id;
 		struct program* prg = vm->program;
@@ -662,7 +662,7 @@ static struct thicchar* resolve_string(struct vmie* vm, int id, int* out_length)
 	return tc;
 }
 
-static int vmie_pop_str(struct vmie* vm, struct thicchar** out_str, int* out_length)
+static int vmie_pop_str(struct vmie* vm, struct colorchar** out_str, int* out_length)
 {
 	const struct val v = arrpop(vm->stack_arr);
 	if (v.type != VAL_STR) {
@@ -670,7 +670,7 @@ static int vmie_pop_str(struct vmie* vm, struct thicchar** out_str, int* out_len
 		return 0;
 	}
 	const int id = v.i32;
-	struct thicchar* s = resolve_string(vm, id, out_length);
+	struct colorchar* s = resolve_string(vm, id, out_length);
 	if (s && out_str) *out_str = s;
 	return 1;
 }
@@ -737,7 +737,7 @@ static void vmie_dup(struct vmie* vm)
 	arrput(vm->stack_arr, v);
 }
 
-static int32_t vmie_alloc_string(struct vmie* vm, size_t len, struct thicchar** out_str)
+static int32_t vmie_alloc_string(struct vmie* vm, size_t len, struct colorchar** out_str)
 {
 	struct valstore* vals = &vm->vals;
 
@@ -748,7 +748,7 @@ static int32_t vmie_alloc_string(struct vmie* vm, size_t len, struct thicchar** 
 	assert(vals->str_arr != NULL);
 
 	const int off = arrlen(vals->char_store_arr);
-	struct thicchar* str = arraddnptr(vals->char_store_arr, len);
+	struct colorchar* str = arraddnptr(vals->char_store_arr, len);
 	if (out_str) *out_str = str;
 
 	const int32_t id = arrlen(vals->str_arr);
@@ -760,14 +760,14 @@ static int32_t vmie_alloc_string(struct vmie* vm, size_t len, struct thicchar** 
 	return id;
 }
 
-static inline int32_t thicchar_rgbx_to_i32(struct thicchar tc)
+static inline int32_t colorchar_rgbx_to_i32(struct colorchar tc)
 {
 	uint32_t e = 0;
 	for (int i=0; i<4; ++i) e |= ((uint32_t)(tc.color[i]) << (i*8));
 	return (int32_t)e; // XXX unsafe in theory?
 }
 
-static inline void thicchar_set_rgbx(struct thicchar* tc, int32_t rgbx)
+static inline void colorchar_set_rgbx(struct colorchar* tc, int32_t rgbx)
 {
 	uint32_t e = rgbx; // XXX unsafe in theory?
 	for (int i=0; i<4; ++i) tc->color[i] = ((e >> (i*8)) & 0xff);
@@ -882,7 +882,7 @@ int vmie_run2(struct vmie* vm)
 					const struct val top = vmie_top(vm);
 					if (top.type == VAL_STR) {
 						int len=0;
-						struct thicchar* s = resolve_string(vm, top.i32, &len);
+						struct colorchar* s = resolve_string(vm, top.i32, &len);
 						int num_bytes=0;
 						for (int i=0; i<len; ++i) num_bytes += utf8_num_bytes_for_codepoint(s[i].codepoint);
 						++num_bytes; // space for NUL-terminator
@@ -1141,16 +1141,16 @@ int vmie_run2(struct vmie* vm)
 
 			case OP_STRCOMPS: {
 				const int index = arrpop(vm->stack_arr).i32;
-				struct thicchar* str=NULL;
+				struct colorchar* str=NULL;
 				int len=0;
 				if (!vmie_pop_str(vm, &str, &len)) return -1;
 				if (!((0 <= index) && (index < len))) {
 					vmie_errorf(vm, "STRCOMPS index %d outside valid range [0:%d]", index, len-1);
 					return -1;
 				}
-				struct thicchar tc = str[index];
+				struct colorchar tc = str[index];
 				arrput(vm->stack_arr, intval(tc.codepoint));
-				arrput(vm->stack_arr, intval(thicchar_rgbx_to_i32(tc)));
+				arrput(vm->stack_arr, intval(colorchar_rgbx_to_i32(tc)));
 			}	break;
 
 			case OP_STRNEW: {
@@ -1164,12 +1164,12 @@ int vmie_run2(struct vmie* vm)
 					vmie_errorf(vm, "%di STRNEW expected at least %d elements on stack", n, n2);
 					return -1;
 				}
-				struct thicchar* str=NULL;
+				struct colorchar* str=NULL;
 				const int32_t id = vmie_alloc_string(vm, n, &str);
 				for (int i=(n-1); i>=0; --i) {
 					const int rgbx = arrpop(vm->stack_arr).i32;
 					str[i].codepoint = arrpop(vm->stack_arr).i32;
-					thicchar_set_rgbx(&str[i], rgbx);
+					colorchar_set_rgbx(&str[i], rgbx);
 				}
 				arrput(vm->stack_arr, typeval(VAL_STR, id));
 			}	break;
@@ -1197,16 +1197,16 @@ int vmie_run2(struct vmie* vm)
 					len_total += len;
 				}
 
-				struct thicchar* str=NULL;
+				struct colorchar* str=NULL;
 				const int32_t id = vmie_alloc_string(vm, len_total, &str);
 				assert(str != NULL);
-				struct thicchar* wp = str;
+				struct colorchar* wp = str;
 				assert(id >= 0);
 				for (int i=(n-1); i>=0; --i) {
 					struct val v = vmie_peek(vm, i);
 					assert(v.type == VAL_STR);
 					int len=0;
-					struct thicchar* src = resolve_string(vm, v.i32, &len);
+					struct colorchar* src = resolve_string(vm, v.i32, &len);
 					if (len > 0) {
 						memcpy(wp, src, len*sizeof(*wp));
 						wp += len;
@@ -1793,7 +1793,7 @@ static void compiler_push_word(struct compiler* cm, const char* word)
 	}
 }
 
-static void compiler_push_char(struct compiler* cm, struct thicchar ch)
+static void compiler_push_char(struct compiler* cm, struct colorchar ch)
 {
 	if (cm->has_error) return;
 
@@ -1910,7 +1910,7 @@ static int compiler_process_utf8src(struct compiler* cm, const char* utf8src, in
 	while (remaining > 0) {
 		unsigned codepoint = utf8_decode(&p, &remaining);
 		if (codepoint == -1) continue;
-		compiler_push_char(cm, ((struct thicchar){
+		compiler_push_char(cm, ((struct colorchar){
 			.codepoint = codepoint,
 			.color = {0x40,0x40,0x40,0},
 		}));
@@ -1978,7 +1978,7 @@ static void compiler_end(struct compiler* cm)
 	tlg.currently_compiling = 0;
 	if (cm->has_error) return;
 
-	compiler_push_char(cm, ((struct thicchar){.codepoint = 0}));
+	compiler_push_char(cm, ((struct colorchar){.codepoint = 0}));
 
 	switch (cm->tokenizer_state) {
 	case WORD: /* OK */ break;
@@ -2071,7 +2071,7 @@ static struct program* get_program(int index)
 	return arrchkptr(g.program_arr, index);
 }
 
-int mie_compile_thicc(const struct thicchar* src, int num_chars)
+int mie_compile_colorcode(const struct colorchar* src, int num_chars)
 {
 	const int program_index = alloc_program_index();
 	struct compiler* cm = &tlg.compiler;
@@ -2192,7 +2192,7 @@ void vmie_dump_val(struct val v)
 	case VAL_STR:
 		fprintf(out, "\"");
 		int n;
-		struct thicchar* tc = resolve_string(&tlg.vmie, v.i32, &n);
+		struct colorchar* tc = resolve_string(&tlg.vmie, v.i32, &n);
 		for (int i=0; i<n; ++i) fprintf(out, "%c", tc[i].codepoint); // XXX no utf8 support
 		fprintf(out, "\" (%d)", n);
 		break;

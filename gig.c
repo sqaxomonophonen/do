@@ -51,9 +51,9 @@ static void document_copy(struct document* dst, struct document* src)
 {
 	struct document tmp = *dst;
 	*dst = *src;
-	dst->fat_char_arr = tmp.fat_char_arr;
-	if (dst->fat_char_arr == NULL) arrinit(dst->fat_char_arr, &system_allocator);
-	arrcpy(dst->fat_char_arr, src->fat_char_arr);
+	dst->docchar_arr = tmp.docchar_arr;
+	if (dst->docchar_arr == NULL) arrinit(dst->docchar_arr, &system_allocator);
+	arrcpy(dst->docchar_arr, src->docchar_arr);
 	dst->name_arr = tmp.name_arr;
 	if (dst->name_arr == NULL) arrinit(dst->name_arr, &system_allocator);
 	arrcpy(dst->name_arr, src->name_arr);
@@ -198,9 +198,9 @@ static struct document* cow_snapshot_lookup_readwrite_document_by_ids(struct cow
 	arrinit(dst_doc->name_arr, cows->allocator);
 	arrcpy(dst_doc->name_arr, src_doc->name_arr);
 
-	dst_doc->fat_char_arr = NULL;
-	arrinit(dst_doc->fat_char_arr, cows->allocator);
-	arrcpy(dst_doc->fat_char_arr, src_doc->fat_char_arr);
+	dst_doc->docchar_arr = NULL;
+	arrinit(dst_doc->docchar_arr, cows->allocator);
+	arrcpy(dst_doc->docchar_arr, src_doc->docchar_arr);
 
 	return dst_doc;
 }
@@ -238,8 +238,8 @@ static void cow_snapshot_commit(struct cow_snapshot* cows)
 			new_doc.name_arr = NULL;
 			arrinit(new_doc.name_arr, &system_allocator);
 			arrcpy(new_doc.name_arr, src_doc->name_arr);
-			arrinit(new_doc.fat_char_arr, &system_allocator);
-			arrcpy(new_doc.fat_char_arr, src_doc->fat_char_arr);
+			arrinit(new_doc.docchar_arr, &system_allocator);
+			arrcpy(new_doc.docchar_arr, src_doc->docchar_arr);
 			arrput(cows->ref->document_arr, new_doc);
 		}
 	}
@@ -443,9 +443,9 @@ static void mimop_delete(struct mimop* mo, struct location* loc0, struct locatio
 	const int o0 = document_locate(doc, loc0);
 	int o1 = document_locate(doc, loc1);
 	for (int o=o0; o<o1; ++o) {
-		struct fat_char* fc = arrchkptr(doc->fat_char_arr, o);
+		struct docchar* fc = arrchkptr(doc->docchar_arr, o);
 		if (fc->flags & FC_IS_INSERT) {
-			arrdel(doc->fat_char_arr, arrchk(doc->fat_char_arr, o));
+			arrdel(doc->docchar_arr, arrchk(doc->docchar_arr, o));
 			--o;
 			--o1;
 		} else {
@@ -686,7 +686,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 
 					struct document* doc = mimop_get_readwrite_doc(mo);
 					struct mim_state* ms = mimop_ms(mo);
-					int num_chars = arrlen(doc->fat_char_arr);
+					int num_chars = arrlen(doc->docchar_arr);
 					const int num_carets = arrlen(ms->caret_arr);
 					for (int i=0; i<num_carets; ++i) {
 						struct caret* car = arrchkptr(ms->caret_arr, i);
@@ -703,7 +703,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 								else if (dir==1) { d=-1; o=off-1; }
 								else assert(!"unreachable");
 								while ((0 <= o) && (o < num_chars)) {
-									struct fat_char* fc = arrchkptr(doc->fat_char_arr, o);
+									struct docchar* fc = arrchkptr(doc->docchar_arr, o);
 									const int is_fillable = fc->flags & (FC_IS_INSERT | FC_IS_DELETE);
 									if ((fc->flags & (FC__FILL | FC_IS_DEFER)) || !is_fillable) break;
 									if (is_fillable) fc->flags |= FC__FILL;
@@ -715,7 +715,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 					}
 
 					for (int i=0; i<num_chars; ++i) {
-						struct fat_char* fc = arrchkptr(doc->fat_char_arr, i);
+						struct docchar* fc = arrchkptr(doc->docchar_arr, i);
 						if (!(fc->flags & FC__FILL)) continue;
 
 						if (chr=='!') {
@@ -723,13 +723,13 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 								fc->flags &= ~(FC__FILL | FC_IS_INSERT);
 							}
 							if (fc->flags & FC_IS_DELETE) {
-								arrdel(doc->fat_char_arr, arrchk(doc->fat_char_arr, i));
+								arrdel(doc->docchar_arr, arrchk(doc->docchar_arr, i));
 								--i;
 								--num_chars;
 							}
 						} else if (chr=='/') { // cancel
 							if (fc->flags & FC_IS_INSERT) {
-								arrdel(doc->fat_char_arr, arrchk(doc->fat_char_arr, i));
+								arrdel(doc->docchar_arr, arrchk(doc->docchar_arr, i));
 								--i;
 								--num_chars;
 							}
@@ -825,13 +825,13 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 							}
 
 							for (int i=0; i<arg_num; ++i) {
-								const int num_chars = arrlen(doc->fat_char_arr);
+								const int num_chars = arrlen(doc->docchar_arr);
 								const int od = o+d;
 								int dc=0;
 								if ((0 <= od) && (od < num_chars)) {
-									struct fat_char* fc = arrchkptr(doc->fat_char_arr, od);
+									struct docchar* fc = arrchkptr(doc->docchar_arr, od);
 									if (fc->flags & FC_IS_INSERT) {
-										arrdel(doc->fat_char_arr, od);
+										arrdel(doc->docchar_arr, od);
 										dc=m0;
 									} else if (fc->flags & FC_IS_DELETE) {
 										dc=m1;
@@ -934,9 +934,9 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 					*anchor = *loc;
 
 					const int off = document_locate(doc, loc);
-					assert(doc->fat_char_arr != NULL);
-					arrins(doc->fat_char_arr, off, ((struct fat_char){
-						.thicchar = {
+					assert(doc->docchar_arr != NULL);
+					arrins(doc->docchar_arr, off, ((struct docchar){
+						.colorchar = {
 							.codepoint = chr,
 							.color = {r,g,b,x},
 						},
@@ -1113,7 +1113,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 								.doc_id  = doc_id,
 							};
 							arrinit(doc.name_arr, mo->cows->allocator);
-							arrinit(doc.fat_char_arr, mo->cows->allocator);
+							arrinit(doc.docchar_arr, mo->cows->allocator);
 							const size_t n = strlen(name);
 							arrsetlen(doc.name_arr, n+1);
 							memcpy(doc.name_arr, name, n);
@@ -1233,15 +1233,15 @@ static void write_varint64(uint8_t** pp, uint8_t* end, int64_t value)
 }
 #endif
 
-static void document_to_thicchar_da(struct thicchar** arr, struct document* doc)
+static void document_to_colorchar_da(struct colorchar** arr, struct document* doc)
 {
-	const int num_src = arrlen(doc->fat_char_arr);
+	const int num_src = arrlen(doc->docchar_arr);
 	arrsetmincap(*arr, num_src);
 	arrreset(*arr);
 	for (int i=0; i<num_src; ++i) {
-		struct fat_char* fc = arrchkptr(doc->fat_char_arr, i);
+		struct docchar* fc = arrchkptr(doc->docchar_arr, i);
 		if (fc->flags & FC_IS_INSERT) continue; // not yet inserted
-		arrput(*arr, fc->thicchar);
+		arrput(*arr, fc->colorchar);
 	}
 }
 
@@ -1266,12 +1266,12 @@ static void snapshot_spool_ex(struct snapshot* snapshot, uint8_t* data, int num_
 			// XXX kinda want to run /all/ docs here... this code is not right
 			struct mim_state* ms = &cows.mim_state;
 			struct document* doc = cow_snapshot_get_readonly_document_by_ids(&cows, ms->book_id, ms->doc_id);
-			static struct thicchar* dodoc_arr = NULL;
+			static struct colorchar* dodoc_arr = NULL;
 			if (dodoc_arr == NULL) {
 				arrinit(dodoc_arr, &system_allocator);
 			}
-			document_to_thicchar_da(&dodoc_arr, doc);
-			const int prg = mie_compile_thicc(dodoc_arr, arrlen(dodoc_arr));
+			document_to_colorchar_da(&dodoc_arr, doc);
+			const int prg = mie_compile_colorcode(dodoc_arr, arrlen(dodoc_arr));
 			//printf("prg=%d\n", prg);
 			if (prg == -1) {
 				printf("TODO compile error [%s]\n", mie_error());
@@ -1335,10 +1335,10 @@ static void snapshotcache_push(struct snapshot* snapshot, uint64_t journal_offse
 		const int name_len = strlen(doc->name_arr);
 		io_appender_write_leb128(adat, name_len);
 		io_appender_write_raw(adat, doc->name_arr, name_len);
-		const int doc_len = arrlen(doc->fat_char_arr);
+		const int doc_len = arrlen(doc->docchar_arr);
 		for (int ii=0; ii<doc_len; ++ii) {
-			struct fat_char* c = &doc->fat_char_arr[ii];
-			struct thicchar* tc = &c->thicchar;
+			struct docchar* c = &doc->docchar_arr[ii];
+			struct colorchar* tc = &c->colorchar;
 			io_appender_write_leb128(adat, tc->codepoint);
 			for (int iii=0; iii<4; ++iii) io_appender_write_u8(adat, tc->color[iii]);
 			io_appender_write_leb128(adat, c->flags);
@@ -1443,7 +1443,7 @@ int doc_iterator_next(struct doc_iterator* it)
 {
 	assert((!it->done) && "you cannot call this function after it has returned 0");
 	struct document* d = it->doc;
-	const int num_chars = arrlen(d->fat_char_arr);
+	const int num_chars = arrlen(d->docchar_arr);
 	if (it->last) {
 		it->done = 1;
 		assert(it->offset == num_chars);
@@ -1461,13 +1461,13 @@ int doc_iterator_next(struct doc_iterator* it)
 	++it->offset;
 	const int off = it->offset;
 	if (off < num_chars) {
-		it->fat_char = arrchkptr(d->fat_char_arr, off);
-		if (it->fat_char->thicchar.codepoint == '\n') {
+		it->docchar = arrchkptr(d->docchar_arr, off);
+		if (it->docchar->colorchar.codepoint == '\n') {
 			it->new_line = 1;
 		}
 	} else {
 		assert(off == num_chars);
-		it->fat_char = NULL;
+		it->docchar = NULL;
 		it->last = 1;
 	}
 

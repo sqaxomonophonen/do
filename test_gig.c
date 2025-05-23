@@ -56,7 +56,7 @@ int main(int argc, char** argv)
 	assert(50 == ms->doc_id);
 	assert(1 == doc->book_id);
 	assert(50 == doc->doc_id);
-	assert(5 == arrlen(doc->fat_char_arr));
+	assert(5 == arrlen(doc->docchar_arr));
 
 	return EXIT_SUCCESS;
 }

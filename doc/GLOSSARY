@@ -38,9 +38,14 @@ belongs to the DO_JOURNAL.
 "caret" is used for your "text editing caret" (also sometimes called a
 "cursor"), while "cursor" is used for the rest, like file/read/write cursors.
 
-TODO
-: thicchar
-: fat_char
+: colorchar
+character consisting of a codepoint and a 4-component color.
+
+: docchar
+document char consisting of a colorchar, flags and timestamp.
+
+TODO : strchar? (mie string char, like colorchar but also contains source
+location)
 
 ===============================================================================
 
