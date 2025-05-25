@@ -13,6 +13,8 @@ DIR=__gigtestdir
 rm -rf $DIR
 mkdir $DIR
 $RUNNER ./_test_gig $DIR
-# to run with gdb or gf2:
+ls -l $DIR
+# to run with gdb/gf2 or valgrind:
 # $ RUNNER="gdb --args" ./test_gig.sh
 # $ RUNNER="gf2 --args" ./test_gig.sh
+# $ RUNNER="valgrind" ./test_gig.sh

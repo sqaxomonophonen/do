@@ -131,6 +131,18 @@ static struct mim_state* snapshot_get_mim_state_by_ids(struct snapshot* ss, int 
 	return ms;
 }
 
+static struct mim_state* snapshot_get_or_create_mim_state_by_ids(struct snapshot* ss, int artist_id, int session_id)
+{
+	struct mim_state* ms = snapshot_lookup_mim_state_by_ids(ss, artist_id, session_id);
+	if (ms != NULL) return ms;
+	ms = arraddnptr(ss->mim_state_arr, 1);
+	memset(ms, 0, sizeof *ms);
+	ms->artist_id  = artist_id,
+	ms->session_id = session_id,
+	arrinit(ms->caret_arr, &system_allocator);
+	return ms;
+}
+
 // "cow" stands for "copy-on-write". moo! it represents pending changes to a
 // snapshot, and only contains the changed documents and mim states
 struct cow_snapshot {
@@ -250,19 +262,21 @@ static void cow_snapshot_commit(struct cow_snapshot* cows)
 	mim_state_copy(dst_ms, src_ms);
 }
 
-static struct {
-	int document_id_sequence;
+static struct state {
 	struct snapshot cool_snapshot, hot_snapshot;
 	int my_artist_id;
-	uint8_t* mim_buffer_arr;
-	int using_mim_session_id;
-	int in_mim;
 	uint64_t journal_insignia;
-	uint64_t journal_offset_at_last_snapshotcache_push;
+	int64_t journal_offset_at_last_snapshotcache_push;
 	struct jio* jio_journal;
 	struct jio* jio_snapshotcache_data;
 	struct jio* jio_snapshotcache_index;
 	int64_t journal_timestamp_start;
+} gst;
+
+static struct {
+	uint8_t* mim_buffer_arr;
+	int using_mim_session_id;
+	int in_mim;
 	char errormsg[1<<14];
 } g;
 
@@ -321,12 +335,13 @@ void mimi(int tag, const char* text)
 
 int get_my_artist_id(void)
 {
-	return g.my_artist_id;
+	assert((gst.my_artist_id>0) && "artist id not initialized");
+	return gst.my_artist_id;
 }
 
 void get_state_and_doc(int session_id, struct mim_state** out_mim_state, struct document** out_doc)
 {
-	struct snapshot* ss = &g.cool_snapshot;
+	struct snapshot* ss = &gst.cool_snapshot;
 	const int artist_id = get_my_artist_id();
 	const int num_states = arrlen(ss->mim_state_arr);
 	for (int i=0; i<num_states; ++i) {
@@ -1190,15 +1205,8 @@ void begin_mim(int session_id)
 	g.in_mim = 1;
 	arrreset(g.mim_buffer_arr);
 	g.using_mim_session_id = session_id;
-	struct snapshot* ss = &g.cool_snapshot;
-	if (NULL == snapshot_lookup_mim_state_by_ids(ss, get_my_artist_id(), session_id)) {
-		struct mim_state ms = {
-			.artist_id = get_my_artist_id(),
-			.session_id = session_id,
-		};
-		arrinit(ms.caret_arr, &system_allocator);
-		arrput(ss->mim_state_arr, ms);
-	}
+	struct snapshot* ss = &gst.cool_snapshot;
+	(void)snapshot_get_or_create_mim_state_by_ids(ss, get_my_artist_id(), session_id);
 }
 
 #if 0
@@ -1237,7 +1245,7 @@ static void snapshot_spool_ex(struct snapshot* snapshot, uint8_t* data, int num_
 		init_cow_snapshot(
 			&cows,
 			snapshot,
-			snapshot_get_mim_state_by_ids(snapshot, artist_id, session_id),
+			snapshot_get_or_create_mim_state_by_ids(snapshot, artist_id, session_id),
 			mie_borrow_scrallox());
 		struct mimop mo = { .cows = &cows };
 
@@ -1285,14 +1293,14 @@ static void snapshot_spool_ex(struct snapshot* snapshot, uint8_t* data, int num_
 
 static int it_is_time_for_a_snapshotcache_push(uint64_t journal_offset)
 {
-	int64_t growth = (journal_offset - g.journal_offset_at_last_snapshotcache_push);
+	int64_t growth = (journal_offset - gst.journal_offset_at_last_snapshotcache_push);
 	return growth > JOURNAL_GROWTH_SNAPSHOT_THRESHOLD;
 }
 
 static void snapshotcache_push(struct snapshot* snapshot, uint64_t journal_offset)
 {
-	struct jio* jdat = g.jio_snapshotcache_data;
-	struct jio* jidx = g.jio_snapshotcache_index;
+	struct jio* jdat = gst.jio_snapshotcache_data;
+	struct jio* jidx = gst.jio_snapshotcache_index;
 
 	const int num_books = arrlen(snapshot->book_arr);
 	const int num_documents = arrlen(snapshot->document_arr);
@@ -1372,7 +1380,7 @@ static void snapshotcache_push(struct snapshot* snapshot, uint64_t journal_offse
 	jio_append_leu64(jidx, snapshot_manifest_offset);
 	jio_append_leu64(jidx, journal_offset);
 
-	g.journal_offset_at_last_snapshotcache_push = journal_offset;
+	gst.journal_offset_at_last_snapshotcache_push = journal_offset;
 }
 
 void end_mim(void)
@@ -1382,15 +1390,15 @@ void end_mim(void)
 	g.in_mim = 0;
 	if (num_bytes == 0) return;
 
-	struct snapshot* ss = &g.cool_snapshot;
+	struct snapshot* ss = &gst.cool_snapshot;
 
 	uint8_t* data = g.mim_buffer_arr;
 	snapshot_spool_ex(ss, data, num_bytes, get_my_artist_id(), g.using_mim_session_id);
 
-	struct jio* jj = g.jio_journal;
+	struct jio* jj = gst.jio_journal;
 	if (jj != NULL) {
 		jio_append_u8(jj, SYNC);
-		const int64_t journal_timestamp = (get_nanoseconds() - g.journal_timestamp_start)/1000LL;
+		const int64_t journal_timestamp = (get_nanoseconds() - gst.journal_timestamp_start)/1000LL;
 		jio_append_leb128(jj, journal_timestamp);
 		jio_append_leb128(jj, get_my_artist_id());
 		jio_append_leb128(jj, g.using_mim_session_id);
@@ -1469,6 +1477,17 @@ static int errf(const char* fmt, ...)
 #define FMTERR(PATH,MSG)     errf("%s (format error): %s (at %s:%d)", (PATH), (MSG), __FILE__, __LINE__)
 #define JIOERR(PATH,ERRCODE) errf("%s (jio error): %s (at %s:%d)", (PATH), jio_error_to_string_safe(ERRCODE), __FILE__, __LINE__)
 
+static int is_snapshotcache_index_size_valid(int64_t sz)
+{
+	return ((sz-16L) % 24L) == 0L;
+}
+
+static int get_num_snapshotcache_index_entries_from_size(int64_t sz)
+{
+	assert(is_snapshotcache_index_size_valid(sz));
+	return (sz-16L) / 24L;
+}
+
 static int snapshotcache_open(const char* dir, uint64_t journal_insignia)
 {
 	char pathbuf[1<<14];
@@ -1477,7 +1496,7 @@ static int snapshotcache_open(const char* dir, uint64_t journal_insignia)
 	STATIC_PATH_JOIN(pathbuf, dir, FILENAME_SNAPSHOTCACHE_DATA);
 	struct jio* jdat = jio_open(pathbuf, JIO_OPEN, 10, &err);
 	if (jdat == NULL) return JIOERR(pathbuf, err);
-	g.jio_snapshotcache_data = jdat;
+	gst.jio_snapshotcache_data = jdat;
 	const int64_t szdat = jio_get_size(jdat);
 	if (szdat == 0) {
 		jio_close(jdat);
@@ -1487,17 +1506,17 @@ static int snapshotcache_open(const char* dir, uint64_t journal_insignia)
 	STATIC_PATH_JOIN(pathbuf, dir, FILENAME_SNAPSHOTCACHE_INDEX);
 	struct jio* jidx = jio_open(pathbuf, JIO_OPEN, 10, &err);
 	if (jidx == NULL) return JIOERR(pathbuf, err);
-	g.jio_snapshotcache_index = jidx;
+	gst.jio_snapshotcache_index = jidx;
 	const int64_t szidx = jio_get_size(jidx);
 	if (szidx < 16) {
 		jio_close(jidx);
 		jio_close(jdat);
 		return FMTERR(pathbuf, "incomplete header");
 	}
-	if (((szidx-16L) % 24L) != 0L) {
+	if (!is_snapshotcache_index_size_valid(szidx)) {
 		jio_close(jidx);
 		jio_close(jdat);
-		return FMTERR(pathbuf, "post-header not a multiple of 24");
+		return FMTERR(pathbuf, "invalid index size");
 	}
 
 	// read&check snapshotcache headers and insignias
@@ -1551,9 +1570,6 @@ static int snapshotcache_open(const char* dir, uint64_t journal_insignia)
 
 static int snapshotcache_create(const char* dir, uint64_t journal_insignia)
 {
-	#if 0
-	printf("creating snapshots with insignia %ld\n", journal_insignia);
-	#endif
 	char pathbuf[1<<14];
 
 	STATIC_PATH_JOIN(pathbuf, dir, FILENAME_SNAPSHOTCACHE_DATA);
@@ -1562,7 +1578,7 @@ static int snapshotcache_create(const char* dir, uint64_t journal_insignia)
 	if (jdat == NULL) {
 		return JIOERR(FILENAME_SNAPSHOTCACHE_DATA, err);
 	}
-	g.jio_snapshotcache_data = jdat;
+	gst.jio_snapshotcache_data = jdat;
 	jio_append(jdat, DOSD_MAGIC, strlen(DOSD_MAGIC));
 	jio_append_leu64(jdat, journal_insignia);
 
@@ -1572,7 +1588,7 @@ static int snapshotcache_create(const char* dir, uint64_t journal_insignia)
 		jio_close(jdat);
 		return JIOERR(FILENAME_SNAPSHOTCACHE_INDEX, err);
 	}
-	g.jio_snapshotcache_index = jidx;
+	gst.jio_snapshotcache_index = jidx;
 	jio_append(jidx, DOSI_MAGIC, strlen(DOSI_MAGIC));
 	jio_append_leu64(jidx, journal_insignia);
 
@@ -1586,14 +1602,12 @@ static int restore_snapshot(struct snapshot* ss, uint64_t snapshot_manifest_offs
 	arrinit(ss->document_arr, &system_allocator);
 	arrinit(ss->mim_state_arr, &system_allocator);
 
-	struct jio* jdat = g.jio_snapshotcache_data;
+	struct jio* jdat = gst.jio_snapshotcache_data;
 
 	int64_t o0 = snapshot_manifest_offset;
 	uint8_t sync = jio_ppread_u8(jdat, &o0);
 	const char* path = FILENAME_SNAPSHOTCACHE_DATA;
-	if (sync != SYNC) {
-		return FMTERR(path, "expected SYNC");
-	}
+	if (sync != SYNC) return FMTERR(path, "expected SYNC");
 
 	const int64_t num_books      = jio_ppread_leb128(jdat, &o0);
 	const int64_t num_documents  = jio_ppread_leb128(jdat, &o0);
@@ -1603,9 +1617,7 @@ static int restore_snapshot(struct snapshot* ss, uint64_t snapshot_manifest_offs
 		const int64_t oo1 = jio_ppread_leb128(jdat, &o0);
 		int64_t o1 = oo1;
 		uint8_t sync = jio_ppread_u8(jdat, &o1);
-		if (sync != SYNC) {
-			return FMTERR(path, "expected SYNC");
-		}
+		if (sync != SYNC) return FMTERR(path, "expected SYNC");
 		struct book book = { .snapshotcache_offset = oo1 };
 		book.book_id = jio_ppread_leb128(jdat, &o1);
 		if (jio_get_error(jdat) < 0) {
@@ -1618,9 +1630,7 @@ static int restore_snapshot(struct snapshot* ss, uint64_t snapshot_manifest_offs
 		const int64_t oo1 = jio_ppread_leb128(jdat, &o0);
 		int64_t o1 = oo1;
 		uint8_t sync = jio_ppread_u8(jdat, &o1);
-		if (sync != SYNC) {
-			return FMTERR(path, "expected SYNC");
-		}
+		if (sync != SYNC) return FMTERR(path, "expected SYNC");
 		struct document doc = { .snapshotcache_offset = oo1 };
 		doc.book_id = jio_ppread_leb128(jdat, &o1);
 		doc.doc_id = jio_ppread_leb128(jdat, &o1);
@@ -1651,9 +1661,7 @@ static int restore_snapshot(struct snapshot* ss, uint64_t snapshot_manifest_offs
 		int64_t o1 = oo1;
 		//printf("mim %ld => %ld\n", i, o1);
 		uint8_t sync = jio_ppread_u8(jdat, &o1);
-		if (sync != SYNC) {
-			return FMTERR(path, "expected SYNC");
-		}
+		if (sync != SYNC) return FMTERR(path, "expected SYNC");
 		struct mim_state ms = { .snapshotcache_offset = oo1 };
 		ms.artist_id  = jio_ppread_leb128(jdat, &o1);
 		ms.session_id = jio_ppread_leb128(jdat, &o1);
@@ -1680,15 +1688,43 @@ static int restore_snapshot(struct snapshot* ss, uint64_t snapshot_manifest_offs
 	return 0;
 }
 
+static int can_restore_latest_snapshot(void)
+{
+	struct jio* jidx = gst.jio_snapshotcache_index;
+	int64_t sz = jio_get_size(jidx);
+	if (!is_snapshotcache_index_size_valid(sz)) return 0;
+	return get_num_snapshotcache_index_entries_from_size(sz) > 0;
+}
+
 static int restore_latest_snapshot(struct snapshot* ss, int64_t* out_journal_offset)
 {
-	struct jio* jidx = g.jio_snapshotcache_index;
-	uint64_t sz = jio_get_size(jidx);
+	if (!can_restore_latest_snapshot()) {
+		return FMTERR(FILENAME_SNAPSHOTCACHE_INDEX, "bad index file");
+	}
+	struct jio* jidx = gst.jio_snapshotcache_index;
+	const int64_t sz = jio_get_size(jidx);
 	int64_t o = (sz - 2*sizeof(uint64_t));
 	const uint64_t snapshot_manifest_offset = jio_ppread_leu64(jidx, &o);
 	const uint64_t journal_offset = jio_ppread_leu64(jidx, &o);
+	int err = jio_get_error(jidx);
+	if (err<0) {
+		return JIOERR(FILENAME_SNAPSHOTCACHE_INDEX, err);
+	} else {
+		assert(o == sz);
+	}
 	if (out_journal_offset) *out_journal_offset = journal_offset;
 	return restore_snapshot(ss, snapshot_manifest_offset);
+}
+
+static void snapshot_init(struct snapshot* ss)
+{
+	assert(ss->book_arr == NULL);
+	assert(ss->document_arr == NULL);
+	assert(ss->mim_state_arr == NULL);
+	memset(ss, 0, sizeof *ss);
+	arrinit(ss->book_arr, &system_allocator);
+	arrinit(ss->document_arr, &system_allocator);
+	arrinit(ss->mim_state_arr, &system_allocator);
 }
 
 static int host_dir(const char* dir)
@@ -1697,22 +1733,27 @@ static int host_dir(const char* dir)
 	STATIC_PATH_JOIN(pathbuf, dir, FILENAME_JOURNAL);
 	int err;
 	struct jio* jj = jio_open(pathbuf, JIO_OPEN_OR_CREATE, 10, &err);
-	g.jio_journal = jj;
+	gst.jio_journal = jj;
 	if (jj == NULL) return JIOERR(FILENAME_JOURNAL, err);
 
 	// TODO setup journal jio for fdatasync?
+
+	struct snapshot* ss = &gst.cool_snapshot; // XXX
+	snapshot_init(ss);
 
 	const int64_t sz = jio_get_size(jj);
 	if (sz == 0) {
 		jio_append(jj, DOJO_MAGIC, strlen(DOJO_MAGIC));
 		jio_append_leb128(jj, DO_FORMAT_VERSION);
-		g.journal_insignia = make_insignia();
-		jio_append_leu64(jj, g.journal_insignia);
+		gst.journal_insignia = make_insignia();
+		jio_append_leu64(jj, gst.journal_insignia);
 		// TODO epoch timestamp?
 		err = jio_get_error(jj);
 		if (err<0) return JIOERR(FILENAME_JOURNAL, err);
-		g.journal_timestamp_start = get_nanoseconds();
-		return snapshotcache_create(dir, g.journal_insignia);
+		gst.journal_timestamp_start = get_nanoseconds();
+
+		err = snapshotcache_create(dir, gst.journal_insignia);
+		if (err<0) return JIOERR(FILENAME_JOURNAL, err);
 	} else {
 		uint8_t magic[8];
 		int64_t o = 0;
@@ -1723,29 +1764,36 @@ static int host_dir(const char* dir)
 		}
 
 		const int64_t do_format_version = jio_ppread_leb128(jj, &o);
-		assert((do_format_version == DO_FORMAT_VERSION) && "XXX error handling");
-		g.journal_insignia = jio_ppread_leu64(jj, &o);
+		if (do_format_version != DO_FORMAT_VERSION) {
+			return FMTERR(pathbuf, "unknown do-format-version");
+		}
+		gst.journal_insignia = jio_ppread_leu64(jj, &o);
 
-		const int64_t jjsz = jio_get_size(jj);
-		int64_t journal_spool_offset = (o + jjsz);
+		int64_t journal_spool_offset = o;
 
-		err = snapshotcache_open(dir, g.journal_insignia);
+		err = snapshotcache_open(dir, gst.journal_insignia);
 		if (err == JIO_NOT_FOUND) {
 			// OK just spool journal from beginning
 		} else {
-			journal_spool_offset = 0;
-			err = restore_latest_snapshot(&g.cool_snapshot, &journal_spool_offset);
-			assert(journal_spool_offset > 0);
-			if (err<0) return err;
+			if (can_restore_latest_snapshot()) {
+				journal_spool_offset = 0;
+				err = restore_latest_snapshot(ss, &journal_spool_offset);
+				if (err<0) return err;
+				assert(journal_spool_offset > 0);
+			} else {
+				// spool from beginning
+			}
 		}
 
 		static uint8_t* mimbuf_arr = NULL;
 		if (mimbuf_arr == NULL) arrinit(mimbuf_arr, &system_allocator);
 
 		o = journal_spool_offset;
+		const int64_t jjsz = jio_get_size(jj);
+		if (o > jjsz) return FMTERR(FILENAME_JOURNAL, "journal spool offset past end-of-file");
 		while (o < jjsz) {
 			const uint8_t sync = jio_ppread_u8(jj, &o);
-			assert((sync == SYNC) && "XXX error handling");
+			if (sync != SYNC) return FMTERR(FILENAME_JOURNAL, "expected SYNC");
 			const int64_t timestamp_us = jio_ppread_leb128(jj, &o);
 			(void)timestamp_us; // XXX? remove?
 			const int64_t artist_id = jio_ppread_leb128(jj, &o);
@@ -1753,18 +1801,26 @@ static int host_dir(const char* dir)
 			const int64_t num_bytes = jio_ppread_leb128(jj, &o);
 			arrsetlen(mimbuf_arr, num_bytes);
 			jio_ppread(jj, mimbuf_arr, num_bytes, &o);
-			snapshot_spool_ex(&g.cool_snapshot, mimbuf_arr, num_bytes, artist_id, session_id);
+			//printf("going to spool [");for(int i=0;i<num_bytes;++i)printf("%c",mimbuf_arr[i]);printf("]\n");
+			snapshot_spool_ex(ss, mimbuf_arr, num_bytes, artist_id, session_id);
 		}
+		if (o != jjsz) return FMTERR(FILENAME_JOURNAL, "expected to spool journal until end-of-file");
 
 		err = jio_get_error(jj);
 		if (err<0) return JIOERR(FILENAME_JOURNAL, err);
 	}
+
+	assert(ss->book_arr != NULL);
+	assert(ss->document_arr != NULL);
+	assert(ss->mim_state_arr != NULL);
 
 	return 0;
 }
 
 void gig_host(const char* dir)
 {
+	memset(&gst, 0, sizeof gst);
+	gst.my_artist_id = 1; // XXX?
 	const int err = host_dir(dir);
 	if (err<0) {
 		fprintf(stderr, "host_dir(\"%s\") failed: [%s]/%d\n", dir, g.errormsg, err);
@@ -1774,14 +1830,21 @@ void gig_host(const char* dir)
 
 void gig_unhost(void)
 {
-	jio_close(g.jio_journal);
-	jio_close(g.jio_snapshotcache_data);
-	jio_close(g.jio_snapshotcache_index);
+	jio_close(gst.jio_journal);
+	jio_close(gst.jio_snapshotcache_data);
+	jio_close(gst.jio_snapshotcache_index);
+	// XXX hmmm... is this all? or even right?
+	struct snapshot* ss = &gst.cool_snapshot;
+	arrfree(ss->book_arr);
+	arrfree(ss->document_arr);
+	arrfree(ss->mim_state_arr);
 }
 
-void gig_testsetup(void) // XXX "getting started"-stuff, removeme?
+void gig_maybe_setup_stub(void)
 {
-	g.my_artist_id = 1;
+	// XXX doesn't work too well
+	struct snapshot* ss = &gst.cool_snapshot;
+	if (arrlen(ss->book_arr) > 0) return;
 	begin_mim(1);
 	mimex("newbook 1 mie-urlyd -");
 	mimex("newdoc 1 50 art.mie");
@@ -1790,18 +1853,8 @@ void gig_testsetup(void) // XXX "getting started"-stuff, removeme?
 	end_mim();
 }
 
-static void snapshot_init(struct snapshot* ss)
-{
-	memset(ss, 0, sizeof *ss);
-	arrinit(ss->book_arr, &system_allocator);
-	arrinit(ss->document_arr, &system_allocator);
-	arrinit(ss->mim_state_arr, &system_allocator);
-}
-
 void gig_init(void)
 {
-	snapshot_init(&g.cool_snapshot);
-	snapshot_init(&g.hot_snapshot);
 	arrinit(g.mim_buffer_arr, &system_allocator);
 }
 

@@ -22,6 +22,11 @@ a data structure, DO_JAM_JOURNAL on disk, that represents a Do-session as a
 series of mim-commands. this is the only "source of truth", and snapshots (see
 below) are derived from this.
 
+: spool / spooling
+processing a sequence of journal entries and applying them to the internal
+snapshot state. this happens during startup, during time travel and upon user
+input.
+
 : snapshot
 a data structure containing a materialised point-in-time version of a
 Do-session. this is derived from the journal.

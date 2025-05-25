@@ -23,8 +23,6 @@ static inline void common_main_init(void)
 	run_selftest();
 	mie_thread_init();
 	gig_init();
-	gig_testsetup();
-	gig_host(arg_dir ? arg_dir : ".");
 }
 
 #define MAIN_H

@@ -3,11 +3,13 @@
 #include <assert.h>
 #include <time.h>
 #include <threads.h>
+#include <unistd.h>
 
 #include "main.h"
 #include "jio.h"
 #include "gig.h"
 #include "arg.h"
+#include "path.h"
 #include "stb_ds.h" // XXX?
 
 int64_t get_nanoseconds_epoch(void)
@@ -39,25 +41,29 @@ static int io_thread(void* usr)
 	return 0;
 }
 
-int main(int argc, char** argv)
+const static int VERBOSE = 0;
+
+static void clean(void)
 {
-	if (argc != 2) {
-		fprintf(stderr, "usage: %s <dir>\n", argv[0]);
-		fprintf(stderr, "(it creates test files inside that dir)\n");
-		exit(EXIT_FAILURE);
+	// XXX this probably won't work on windows?
+	#define DEL(NAME) { \
+		char buf[1<<10]; \
+		STATIC_PATH_JOIN(buf, arg_dir, (NAME)); \
+		assert(0 == unlink(buf)); \
 	}
-	arg_dir = argv[1];
+	DEL("DO_JAM_JOURNAL")
+	DEL("snapshotcache.data")
+	DEL("snapshotcache.index")
+	#undef DEL
+}
 
-	jio_init();
-	thrd_t t = {0};
-	assert(0 == thrd_create(&t, io_thread, NULL));
+static void testN(int N)
+{
+	if (VERBOSE) printf("N=%d\n", N);
 
-	mie_thread_init();
-	gig_init();
-
-	const int N=100;
 	for (int pass=0; pass<3; ++pass) {
-		gig_host(argv[1]);
+		if (VERBOSE) printf("  pass %d\n", pass);
+		gig_host(arg_dir);
 
 		if (pass == 0) {
 			begin_mim(1);
@@ -78,9 +84,32 @@ int main(int argc, char** argv)
 		assert(1 == doc->book_id);
 		assert(50 == doc->doc_id);
 		assert(N*5 == arrlen(doc->docchar_arr));
+		// TODO verify doc contents
 
 		gig_unhost();
 	}
+}
+
+int main(int argc, char** argv)
+{
+	if (argc != 2) {
+		fprintf(stderr, "usage: %s <dir>\n", argv[0]);
+		fprintf(stderr, "(it creates test files inside that dir)\n");
+		exit(EXIT_FAILURE);
+	}
+	arg_dir = argv[1];
+
+	jio_init();
+	thrd_t t = {0};
+	assert(0 == thrd_create(&t, io_thread, NULL));
+
+	mie_thread_init();
+	gig_init();
+
+	testN(100); clean();
+	testN(100); clean();
+	testN(50); clean();
+	testN(5); clean();
 
 	return EXIT_SUCCESS;
 }

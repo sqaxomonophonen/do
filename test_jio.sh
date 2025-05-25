@@ -7,6 +7,7 @@ mkdir $DIR
 $RUNNER ./_test_jio $DIR
 echo OK
 ls -l $DIR
-# to run with gdb or gf2:
+# to run with gdb/gf2 or valgrind:
 # $ RUNNER="gdb --args" ./test_jio.sh
 # $ RUNNER="gf2 --args" ./test_jio.sh
+# $ RUNNER="valgrind" ./test_jio.sh
