@@ -5,8 +5,8 @@ WORDS USED INTERNALLY
 
 : book and fundament
 the "book" is collection of documents, written against a "fundament" that tells
-Do how to interpret the documents. "mie-ordlyd" is the default sound/music
-fundament, which combines the "mie" language with the "ordlyd" audio engine.
+Do how to interpret the documents. "mie-urlyd" is the default sound/music
+fundament, which combines the "mie" language with the "urlyd" audio engine.
 
 : mim
 editor protocol used internally, in journals on disk, and over-the-wire.
@@ -18,9 +18,9 @@ scratch allocator used in the compiler, VM (in mie.c), and also for temporary
 documents in gig.c.
 
 : journal
-a data structure, DO_JOURNAL on disk, that represents a Do-session as a series
-of mim-commands. this is the only "source of truth", and snapshots (see below)
-are derived from this.
+a data structure, DO_JAM_JOURNAL on disk, that represents a Do-session as a
+series of mim-commands. this is the only "source of truth", and snapshots (see
+below) are derived from this.
 
 : snapshot
 a data structure containing a materialised point-in-time version of a
@@ -28,11 +28,11 @@ Do-session. this is derived from the journal.
 
 : snapshotcache
 snapshotcache.data and snapshotcache.index collectively store snapshots on
-disk. these files can be regenerated from the DO_JOURNAL file.
+disk. these files can be regenerated from the DO_JAM_JOURNAL file.
 
 : insignia
 random-ish number that is used to quickly detect if a snapshotcache file
-belongs to the DO_JOURNAL.
+belongs to the DO_JAM_JOURNAL.
 
 : cursor vs caret
 "caret" is used for your "text editing caret" (also sometimes called a

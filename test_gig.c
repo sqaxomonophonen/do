@@ -1,9 +1,11 @@
-// cc -O0 -g -Wall stb_divide.c stb_ds.c stb_sprintf.c utf8.c path.c mie.c io.c arg.c allocator.c gig.c test_gig.c -o _test_gig -lm
+// cc -O0 -g -Wall stb_divide.c stb_ds.c stb_sprintf.c utf8.c path.c mie.c jio.c arg.c allocator.c gig.c test_gig.c -o _test_gig -lm
 #include <stdlib.h>
 #include <assert.h>
 #include <time.h>
+#include <threads.h>
 
 #include "main.h"
+#include "jio.h"
 #include "gig.h"
 #include "arg.h"
 #include "stb_ds.h" // XXX?
@@ -23,7 +25,18 @@ int64_t get_nanoseconds(void)
 
 void sleep_nanoseconds(int64_t ns)
 {
-	assert(!"TODO");
+	const int64_t one_billion = 1000000000LL;
+	const struct timespec ts = {
+		.tv_nsec = ns % one_billion,
+		.tv_sec  = ns / one_billion,
+	};
+	nanosleep(&ts, NULL);
+}
+
+static int io_thread(void* usr)
+{
+	jio_thread_run();
+	return 0;
 }
 
 int main(int argc, char** argv)
@@ -34,29 +47,40 @@ int main(int argc, char** argv)
 		exit(EXIT_FAILURE);
 	}
 	arg_dir = argv[1];
-	io_init(16);
+
+	jio_init();
+	thrd_t t = {0};
+	assert(0 == thrd_create(&t, io_thread, NULL));
+
 	mie_thread_init();
 	gig_init();
 
-	gig_host(argv[1]);
+	const int N=100;
+	for (int pass=0; pass<3; ++pass) {
+		gig_host(argv[1]);
 
-	begin_mim(1);
-	mimex("newbook 1 mie-ordlyd -");
-	mimex("newdoc 1 50 art.mie");
-	mimex("setdoc 1 50");
-	mimf("0,1,1c");
-	mimi(0,"hello");
-	end_mim();
+		if (pass == 0) {
+			begin_mim(1);
+			mimex("newbook 1 mie-urlyd -");
+			mimex("newdoc 1 50 art.mie");
+			mimex("setdoc 1 50");
+			mimf("0,1,1c");
+			for (int i=0; i<N; ++i) mimi(0,"hello");
+			end_mim();
+		}
 
-	struct mim_state* ms = NULL;
-	struct document* doc = NULL;
-	get_state_and_doc(1, &ms, &doc);
+		struct mim_state* ms = NULL;
+		struct document* doc = NULL;
+		get_state_and_doc(1, &ms, &doc);
 
-	assert(1 == ms->book_id);
-	assert(50 == ms->doc_id);
-	assert(1 == doc->book_id);
-	assert(50 == doc->doc_id);
-	assert(5 == arrlen(doc->docchar_arr));
+		assert(1 == ms->book_id);
+		assert(50 == ms->doc_id);
+		assert(1 == doc->book_id);
+		assert(50 == doc->doc_id);
+		assert(N*5 == arrlen(doc->docchar_arr));
+
+		gig_unhost();
+	}
 
 	return EXIT_SUCCESS;
 }

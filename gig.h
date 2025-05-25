@@ -120,7 +120,7 @@ enum document_flag {
 };
 
 #define LIST_OF_FUNDAMENTS \
-	X( MIE_ORDLYD, "mie-ordlyd" )
+	X( MIE_ORDLYD , "mie-urlyd" )
 
 enum fundament {
 	_NO_FUNDAMENT_ = 0,
@@ -175,6 +175,7 @@ static inline void doc_iterator_locate(struct doc_iterator* it, struct location*
 }
 
 void gig_host(const char* dir);
+void gig_unhost(void);
 void gig_testsetup(void);
 void gig_init(void);
 void gig_spool(void);

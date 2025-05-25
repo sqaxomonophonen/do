@@ -38,6 +38,9 @@
 #define LEB128_UNIT_TEST
 #include "leb128.h"
 
+#define PATH_UNIT_TEST
+#include "path.h"
+
 #include "gig.h"
 
 void run_selftest(void)
@@ -45,6 +48,7 @@ void run_selftest(void)
 	const int64_t t0 = get_nanoseconds();
     utf8_unit_test();
     leb128_unit_test();
+	path_unit_test();
 	gig_selftest();
 	mie_selftest();
 	const int64_t dt = get_nanoseconds() - t0;

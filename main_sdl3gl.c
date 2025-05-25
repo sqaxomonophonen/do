@@ -7,6 +7,7 @@
 #include "stb_ds_sysalloc.h"
 
 #include "main.h"
+#include "jio.h"
 #include "arg.h"
 
 #include "impl_sdl3.h"
@@ -61,7 +62,7 @@ static void housekeep_our_windows(void)
 static int io_thread_run(void* usr)
 {
 	(void)usr;
-	io_run();
+	jio_thread_run();
 	return 0;
 }
 

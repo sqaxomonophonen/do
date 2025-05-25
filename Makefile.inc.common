@@ -12,7 +12,7 @@ CFLAGS+=-Wall
 all: $(ARTIFACT)
 
 OBJS+=stb_divide.o stb_ds.o stb_sprintf.o # stb deps
-OBJS+=utf8.o allocator.o arg.o io.o path.o gig.o mie.o selftest.o # common deps
+OBJS+=utf8.o allocator.o arg.o jio.o path.o gig.o mie.o selftest.o # common deps
 
 LDFLAGS+=-lm
 

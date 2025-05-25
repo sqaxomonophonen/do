@@ -1,6 +1,6 @@
 
 
- DO_JOURNAL
+ DO_JAM_JOURNAL
    Do journal: source of truth
 
  README.txt
@@ -43,7 +43,7 @@
 
 
 ===
-DO_JOURNAL:
+DO_JAM_JOURNAL:
 header {
   "DOJO0001"
   leb128 do_format_version
@@ -118,6 +118,6 @@ header {
 entry {
   u64 timestamp // XXX should this be sample? 1s/48000?
   u64 savestate_manifest_offset // file offest to savestates.dat manifest record
-  u64 journal_offset // file offset in DO_JOURNAL
+  u64 journal_offset // file offset in DO_JAM_JOURNAL
 }
 

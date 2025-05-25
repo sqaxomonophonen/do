@@ -4,7 +4,6 @@
 
 #include <stdint.h>
 
-#include "io.h"
 #include "gig.h"
 #include "util.h"
 #include "mie.h"
@@ -22,7 +21,6 @@ void sleep_nanoseconds(int64_t);
 static inline void common_main_init(void)
 {
 	run_selftest();
-	io_init(16);
 	mie_thread_init();
 	gig_init();
 	gig_testsetup();

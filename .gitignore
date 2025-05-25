@@ -1,5 +1,4 @@
-
-# artifacts
+# build artifacts
 *.o
 /do.js
 /do.aw.js
@@ -7,7 +6,9 @@
 /do.ww.js
 /do
 /temporary_httpd
-/_test*
+
+# test artifacts
+/_*
 
 # vim
 .*swp

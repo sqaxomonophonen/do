@@ -360,7 +360,7 @@ more time travel ideas:
    source of truth and everything else is derived, but being able to hear the
    past too with scrubbing seems like a good idea...
 so the source of truth is:
- - DO_JOURNAL
+ - DO_JAM_JOURNAL
 and derived files could be:
  - snapshots
  - wav
