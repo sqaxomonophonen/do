@@ -928,6 +928,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 
 					const int off = document_locate(doc, loc);
 					assert(doc->docchar_arr != NULL);
+					const int n0 = arrlen(doc->docchar_arr);
 					arrins(doc->docchar_arr, off, ((struct docchar){
 						.colorchar = {
 							.codepoint = chr,
@@ -937,6 +938,9 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 						//.artist_id = get_my_artist_id(),
 						.flags = (FC_IS_INSERT | FC__FLIPPED_INSERT),
 					}));
+					const int n1 = arrlen(doc->docchar_arr);
+					assert(n1==(n0+1));
+					//printf("%d => INS [%c] => %d\n", n0, chr, n1);
 					if (chr == '\n') {
 						++loc->line;
 						loc->column = 1;
