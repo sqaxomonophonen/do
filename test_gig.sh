@@ -14,7 +14,7 @@ rm -rf $DIR
 mkdir $DIR
 $RUNNER ./_test_gig $DIR
 #ls -lR $DIR
-ls -l $(find $DIR -type f)
+#ls -l $(find $DIR -type f)
 # to run with gdb/gf2 or valgrind:
 # $ RUNNER="gdb --args" ./test_gig.sh
 # $ RUNNER="gf2 --args" ./test_gig.sh

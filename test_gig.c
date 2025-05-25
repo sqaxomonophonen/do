@@ -11,6 +11,7 @@
 #include "gig.h"
 #include "arg.h"
 #include "path.h"
+#include "util.h"
 #include "stb_ds.h" // XXX?
 
 int64_t get_nanoseconds_epoch(void)
@@ -43,6 +44,7 @@ static int io_thread(void* usr)
 }
 
 const static int VERBOSE = 0;
+static int growth_threshold;
 
 const char* base_dir;
 char* test_dir;
@@ -59,7 +61,7 @@ static void new_test(const char* name)
 	memset(&g, 0, sizeof g);
 	char buf[1<<10];
 	++test_sequence;
-	snprintf(buf, sizeof buf, "%s/test-%.4d-%s", base_dir, test_sequence, name);
+	snprintf(buf, sizeof buf, "%s/test-%.4d-gt%d-%s", base_dir, test_sequence, growth_threshold, name);
 	if (test_dir) {
 		free(test_dir);
 		test_dir = NULL;
@@ -166,6 +168,10 @@ static void test_regress_0a(void)
 	expect_col_and_doc(4,"a12bc");
 
 	gig_unhost();
+
+	gig_host(test_dir);
+	expect_col_and_doc(4,"a12bc");
+	gig_unhost();
 }
 
 static void test_regress_0b(void)
@@ -202,6 +208,10 @@ static void test_regress_0b(void)
 	expect_col_and_doc(3,"12abc");
 
 	gig_unhost();
+
+	gig_host(test_dir);
+	expect_col_and_doc(3,"12abc");
+	gig_unhost();
 }
 
 static void test_regress_0c(void)
@@ -224,6 +234,10 @@ static void test_regress_0c(void)
 	end_mim();
 	expect_col_and_doc(4,"123abc");
 
+	gig_unhost();
+
+	gig_host(test_dir);
+	expect_col_and_doc(4,"123abc");
 	gig_unhost();
 }
 
@@ -286,6 +300,25 @@ static void test_regress_0d(void)
 	expect_col_and_doc(8,"123xxxyabc");
 
 	gig_unhost();
+
+	gig_host(test_dir);
+	expect_col_and_doc(8,"123xxxyabc");
+
+	begin_mim(1);
+	mimf("0Mh0Mh0Mh0Mh");
+	end_mim();
+	expect_col_and_doc(4,"123xxxyabc");
+
+	begin_mim(1);
+	mimi(0,"---");
+	end_mim();
+	expect_col_and_doc(7,"123---xxxyabc");
+
+	gig_unhost();
+
+	gig_host(test_dir);
+	expect_col_and_doc(7,"123---xxxyabc");
+	gig_unhost();
 }
 
 int main(int argc, char** argv)
@@ -304,16 +337,24 @@ int main(int argc, char** argv)
 	mie_thread_init();
 	gig_init();
 
-	test_readwrite(100);
-	test_readwrite(1);
-	test_readwrite(5);
-	test_readwrite(50);
-	test_readwrite(100);
+	const int ts[] = {1000,100,10};
+	for (int i=0; i<ARRAY_LENGTH(ts); ++i) {
+		growth_threshold = ts[i];
+		gig_set_journal_snapshot_growth_threshold(growth_threshold);
 
-	test_regress_0a();
-	test_regress_0b();
-	test_regress_0c();
-	test_regress_0d();
+		test_readwrite(100);
+		test_readwrite(1);
+		test_readwrite(5);
+		test_readwrite(50);
+		test_readwrite(100);
+
+		test_regress_0a();
+		test_regress_0b();
+		test_regress_0c();
+		test_regress_0d();
+
+		printf("OK (gt=%d)\n", growth_threshold);
+	}
 
 	return EXIT_SUCCESS;
 }

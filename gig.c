@@ -18,12 +18,6 @@
 #include "main.h"
 #include "arg.h"
 
-#define JOURNAL_GROWTH_SNAPSHOT_THRESHOLD (300) // XXX
-// number of bytes the journal can grow before a snapshot is written to
-// snapshotcache.data/index
-// FIXME what's good order of magnitude? :) 1kB? 10kB? 100kB 1000kB?
-// FIXME should probably be configurable? it's "kinda heuristic"
-
 #define DOJO_MAGIC ("DOJO0001")
 #define DOSI_MAGIC ("DOSI0001")
 #define DOSD_MAGIC ("DOSD0001")
@@ -47,12 +41,44 @@ static int match_fundament(const char* s)
 	return _NO_FUNDAMENT_;
 }
 
+#define ARRINIT0(P,A) { assert((P)==NULL && "bad scrallox memory corruption bugs may happen if P is not NULL"); arrinit(P,A); }
+
+static int document_equal(struct document* a, struct document* b)
+{
+	if (a->book_id != b->book_id) return 0;
+	if (a->doc_id != b->doc_id) return 0;
+	const int nna = arrlen(a->name_arr);
+	const int nnb = arrlen(b->name_arr);
+	if (nna != nnb) return 0;
+	if (0 != memcmp(a->name_arr, b->name_arr, nna)) return 0;
+	const int nda = arrlen(a->docchar_arr);
+	const int ndb = arrlen(b->docchar_arr);
+	if (nda != ndb) return 0;
+	if (0 != memcmp(a->docchar_arr, b->docchar_arr, nda*sizeof(a->docchar_arr[0]))) return 0;
+	return 1;
+}
+
+static int mim_state_equal(struct mim_state* a, struct mim_state* b)
+{
+	if (a->artist_id != b->artist_id) return 0;
+	if (a->session_id != b->session_id) return 0;
+	if (a->book_id != b->book_id) return 0;
+	if (a->doc_id != b->doc_id) return 0;
+	if (memcmp(a->color,b->color,4) != 0) return 0;
+	const int na = arrlen(a->caret_arr);
+	const int nb = arrlen(b->caret_arr);
+	if (na != nb) return 0;
+	if (0 != memcmp(a->caret_arr, b->caret_arr, na*sizeof(a->caret_arr[0]))) return 0;
+	return 1;
+}
+
 static void document_copy(struct document* dst, struct document* src)
 {
 	struct document tmp = *dst;
 	*dst = *src;
 	dst->docchar_arr = tmp.docchar_arr;
 	if (dst->docchar_arr == NULL) arrinit(dst->docchar_arr, &system_allocator);
+	///printf("%zd / %zd\n", arrlen(dst->docchar_arr), arrlen(src->docchar_arr));
 	arrcpy(dst->docchar_arr, src->docchar_arr);
 	dst->name_arr = tmp.name_arr;
 	if (dst->name_arr == NULL) arrinit(dst->name_arr, &system_allocator);
@@ -159,11 +185,11 @@ static void init_cow_snapshot(struct cow_snapshot* cows, struct snapshot* ref, s
 	memset(cows, 0, sizeof *cows);
 	cows->allocator = a;
 	cows->ref = ref;
-	arrinit(cows->cow_document_arr, cows->allocator);
-	arrinit(cows->new_book_arr, cows->allocator);
-	arrinit(cows->delete_book_arr, cows->allocator);
+	ARRINIT0(cows->cow_document_arr , cows->allocator);
+	ARRINIT0(cows->new_book_arr     , cows->allocator);
+	ARRINIT0(cows->delete_book_arr  , cows->allocator);
 	struct mim_state* cms = &cows->mim_state;
-	arrinit(cms->caret_arr, cows->allocator);
+	ARRINIT0(cms->caret_arr, cows->allocator);
 	mim_state_copy(cms, ms);
 }
 
@@ -201,17 +227,19 @@ static struct document* cow_snapshot_lookup_readwrite_document_by_ids(struct cow
 	struct document* src_doc = snapshot_lookup_document_by_ids(cows->ref, book_id, doc_id);
 	if (src_doc == NULL) return NULL;
 
-	if (cows->cow_document_arr == NULL) arrinit(cows->cow_document_arr, cows->allocator);
+	if (cows->cow_document_arr == NULL) {
+		ARRINIT0(cows->cow_document_arr, cows->allocator);
+	}
 
 	struct document* dst_doc = arraddnptr(cows->cow_document_arr, 1);
 	memcpy(dst_doc, src_doc, sizeof *dst_doc);
 
 	dst_doc->name_arr = NULL;
-	arrinit(dst_doc->name_arr, cows->allocator);
+	ARRINIT0(dst_doc->name_arr, cows->allocator);
 	arrcpy(dst_doc->name_arr, src_doc->name_arr);
 
 	dst_doc->docchar_arr = NULL;
-	arrinit(dst_doc->docchar_arr, cows->allocator);
+	ARRINIT0(dst_doc->docchar_arr, cows->allocator);
 	arrcpy(dst_doc->docchar_arr, src_doc->docchar_arr);
 
 	return dst_doc;
@@ -244,7 +272,10 @@ static void cow_snapshot_commit(struct cow_snapshot* cows)
 		struct document* src_doc = &cows->cow_document_arr[i];
 		struct document* dst_doc = snapshot_lookup_document_by_ids(cows->ref, src_doc->book_id, src_doc->doc_id);
 		if (dst_doc) {
-			document_copy(dst_doc, src_doc);
+			if (!document_equal(dst_doc, src_doc)) {
+				document_copy(dst_doc, src_doc);
+				dst_doc->snapshotcache_offset = 0;
+			}
 		} else {
 			struct document new_doc = *src_doc;
 			new_doc.name_arr = NULL;
@@ -260,7 +291,10 @@ static void cow_snapshot_commit(struct cow_snapshot* cows)
 
 	struct mim_state* src_ms = &cows->mim_state;
 	struct mim_state* dst_ms = snapshot_get_mim_state_by_ids(cows->ref, src_ms->artist_id, src_ms->session_id);
-	mim_state_copy(dst_ms, src_ms);
+	if (!mim_state_equal(dst_ms, src_ms)) {
+		mim_state_copy(dst_ms, src_ms);
+		dst_ms->snapshotcache_offset = 0;
+	}
 }
 
 static struct state {
@@ -275,6 +309,7 @@ static struct state {
 } gst;
 
 static struct {
+	int journal_snapshot_growth_threshold;
 	uint8_t* mim_buffer_arr;
 	int using_mim_session_id;
 	int in_mim;
@@ -1115,8 +1150,8 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 								.book_id = book_id,
 								.doc_id  = doc_id,
 							};
-							arrinit(doc.name_arr, mo->cows->allocator);
-							arrinit(doc.docchar_arr, mo->cows->allocator);
+							ARRINIT0(doc.name_arr, mo->cows->allocator);
+							ARRINIT0(doc.docchar_arr, mo->cows->allocator);
 							const size_t n = strlen(name);
 							arrsetlen(doc.name_arr, n+1);
 							memcpy(doc.name_arr, name, n);
@@ -1252,7 +1287,7 @@ static void snapshot_spool_ex(struct snapshot* snapshot, uint8_t* data, int num_
 			snapshot,
 			snapshot_get_or_create_mim_state_by_ids(snapshot, artist_id, session_id),
 			mie_borrow_scrallox());
-		struct mimop mo = { .cows = &cows };
+		struct mimop mo/*o*/ = { .cows = &cows };
 
 		if (mim_spool(&mo, data, num_bytes) < 0) {
 			assert(!"TODO mim protocol error"); // XXX? should I have a "failable" flag? eg. for human input
@@ -1270,7 +1305,7 @@ static void snapshot_spool_ex(struct snapshot* snapshot, uint8_t* data, int num_
 			const int prg = mie_compile_colorcode(dodoc_arr, arrlen(dodoc_arr));
 			//printf("prg=%d\n", prg);
 			if (prg == -1) {
-				printf("TODO compile error [%s]\n", mie_error());
+				//printf("TODO compile error [%s]\n", mie_error());
 			} else {
 				vmie_reset(prg);
 				vmie_run();
@@ -1283,7 +1318,7 @@ static void snapshot_spool_ex(struct snapshot* snapshot, uint8_t* data, int num_
 		printf("ERROR out of scratch memory!\n"); // XXX?
 	}
 
-	#if 1
+	#if 0
 	{
 		size_t allocated, capacity;
 		mie_scrallox_stats(&allocated, &capacity);
@@ -1299,7 +1334,7 @@ static void snapshot_spool_ex(struct snapshot* snapshot, uint8_t* data, int num_
 static int it_is_time_for_a_snapshotcache_push(uint64_t journal_offset)
 {
 	int64_t growth = (journal_offset - gst.journal_offset_at_last_snapshotcache_push);
-	return growth > JOURNAL_GROWTH_SNAPSHOT_THRESHOLD;
+	return growth > g.journal_snapshot_growth_threshold;
 }
 
 static void snapshotcache_push(struct snapshot* snapshot, uint64_t journal_offset)
@@ -1603,9 +1638,9 @@ static int snapshotcache_create(const char* dir, uint64_t journal_insignia)
 static int restore_snapshot(struct snapshot* ss, uint64_t snapshot_manifest_offset)
 {
 	memset(ss, 0, sizeof *ss);
-	arrinit(ss->book_arr, &system_allocator);
-	arrinit(ss->document_arr, &system_allocator);
-	arrinit(ss->mim_state_arr, &system_allocator);
+	arrinit(ss->book_arr      , &system_allocator);
+	arrinit(ss->document_arr  , &system_allocator);
+	arrinit(ss->mim_state_arr , &system_allocator);
 
 	struct jio* jdat = gst.jio_snapshotcache_data;
 
@@ -1727,9 +1762,9 @@ static void snapshot_init(struct snapshot* ss)
 	assert(ss->document_arr == NULL);
 	assert(ss->mim_state_arr == NULL);
 	memset(ss, 0, sizeof *ss);
-	arrinit(ss->book_arr, &system_allocator);
-	arrinit(ss->document_arr, &system_allocator);
-	arrinit(ss->mim_state_arr, &system_allocator);
+	arrinit(ss->book_arr      , &system_allocator);
+	arrinit(ss->document_arr  , &system_allocator);
+	arrinit(ss->mim_state_arr , &system_allocator);
 }
 
 static int host_dir(const char* dir)
@@ -1858,8 +1893,15 @@ void gig_maybe_setup_stub(void)
 	end_mim();
 }
 
+void gig_set_journal_snapshot_growth_threshold(int t)
+{
+	assert(t > 0);
+	g.journal_snapshot_growth_threshold = t;
+}
+
 void gig_init(void)
 {
+	gig_set_journal_snapshot_growth_threshold(5000);
 	arrinit(g.mim_buffer_arr, &system_allocator);
 }
 
