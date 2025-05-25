@@ -116,8 +116,8 @@ static void expect_col_and_doc(int expected_col, const char* expected_doc)
 		fprintf(stderr, "expected caret column to be %d, but it was %d\n", expected_col, g.cr->caret_loc.column);
 		fail=1;
 	}
-	//assert(g.cr->anchor_loc.line == g.cr->caret_loc.line);
-	//assert(g.cr->anchor_loc.column == g.cr->caret_loc.column);
+	assert(g.cr->anchor_loc.line == g.cr->caret_loc.line);
+	assert(g.cr->anchor_loc.column == g.cr->caret_loc.column);
 	const int num_actual   = arrlen(g.doc->docchar_arr);
 	const int num_expected = strlen(expected_doc);
 	int match = (num_actual == num_expected);

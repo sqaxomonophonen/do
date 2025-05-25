@@ -250,6 +250,7 @@ static void cow_snapshot_commit(struct cow_snapshot* cows)
 			new_doc.name_arr = NULL;
 			arrinit(new_doc.name_arr, &system_allocator);
 			arrcpy(new_doc.name_arr, src_doc->name_arr);
+			new_doc.docchar_arr = NULL;
 			arrinit(new_doc.docchar_arr, &system_allocator);
 			arrcpy(new_doc.docchar_arr, src_doc->docchar_arr);
 			arrput(cows->ref->document_arr, new_doc);
