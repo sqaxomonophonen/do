@@ -4,6 +4,7 @@
 #include <time.h>
 #include <threads.h>
 #include <unistd.h>
+#include <sys/stat.h>
 
 #include "main.h"
 #include "jio.h"
@@ -43,27 +44,32 @@ static int io_thread(void* usr)
 
 const static int VERBOSE = 0;
 
-static void clean(void)
+const char* base_dir;
+const char* test_dir;
+int test_sequence;
+
+static void new_test_dir(const char* name)
 {
-	// XXX this probably won't work on windows?
-	#define DEL(NAME) { \
-		char buf[1<<10]; \
-		STATIC_PATH_JOIN(buf, arg_dir, (NAME)); \
-		assert(0 == unlink(buf)); \
+	char buf[1<<10];
+	++test_sequence;
+	snprintf(buf, sizeof buf, "%s/test-%.4d-%s", base_dir, test_sequence, name);
+	if (test_dir) {
+		free(test_dir);
+		test_dir = NULL;
 	}
-	DEL("DO_JAM_JOURNAL")
-	DEL("snapshotcache.data")
-	DEL("snapshotcache.index")
-	#undef DEL
+	test_dir = strdup(buf);
+	assert(0 == mkdir(test_dir, 0777));
 }
 
-static void testN(int N)
+static void test_readwrite(int N)
 {
+	new_test_dir("readwrite");
+
 	if (VERBOSE) printf("N=%d\n", N);
 
 	for (int pass=0; pass<3; ++pass) {
 		if (VERBOSE) printf("  pass %d\n", pass);
-		gig_host(arg_dir);
+		gig_host(test_dir);
 
 		if (pass == 0) {
 			begin_mim(1);
@@ -83,8 +89,11 @@ static void testN(int N)
 		assert(50 == ms->doc_id);
 		assert(1 == doc->book_id);
 		assert(50 == doc->doc_id);
-		assert(N*5 == arrlen(doc->docchar_arr));
-		// TODO verify doc contents
+		const int nc = arrlen(doc->docchar_arr);
+		assert(N*5 == nc);
+		for (int i=0; i<nc; ++i) {
+			assert(doc->docchar_arr[i].colorchar.codepoint == ("hello"[i%5]));
+		}
 
 		gig_unhost();
 	}
@@ -97,7 +106,7 @@ int main(int argc, char** argv)
 		fprintf(stderr, "(it creates test files inside that dir)\n");
 		exit(EXIT_FAILURE);
 	}
-	arg_dir = argv[1];
+	base_dir = argv[1];
 
 	jio_init();
 	thrd_t t = {0};
@@ -106,10 +115,11 @@ int main(int argc, char** argv)
 	mie_thread_init();
 	gig_init();
 
-	testN(100); clean();
-	testN(100); clean();
-	testN(50); clean();
-	testN(5); clean();
+	test_readwrite(100);
+	test_readwrite(1);
+	test_readwrite(5);
+	test_readwrite(50);
+	test_readwrite(100);
 
 	return EXIT_SUCCESS;
 }

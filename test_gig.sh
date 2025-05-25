@@ -9,11 +9,12 @@ cc -O0 -g -Wall \
 	test_gig.c \
 	-o _test_gig \
 	-lm
-DIR=__gigtestdir
+DIR=__gigtestbasedir
 rm -rf $DIR
 mkdir $DIR
 $RUNNER ./_test_gig $DIR
-ls -l $DIR
+#ls -lR $DIR
+ls -l $(find $DIR -type f)
 # to run with gdb/gf2 or valgrind:
 # $ RUNNER="gdb --args" ./test_gig.sh
 # $ RUNNER="gf2 --args" ./test_gig.sh
