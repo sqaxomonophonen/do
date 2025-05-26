@@ -45,6 +45,8 @@ struct pane {
 		struct {
 			int session_id;
 			int focus_id;
+			int splash4_comp, splash4_cache;
+			int cpick_on;
 			// TODO presentation shader id? (can be built-in, or user-defined?)
 		} code;
 		struct {
@@ -1100,6 +1102,47 @@ static void set_color3f(float red, float green, float blue)
 	set_colorv((float[]){red,green,blue});
 }
 
+static inline void splash4_explode(int splash4, int* out_red, int* out_green, int* out_blue, int* out_shake)
+{
+	const int red   = (splash4 / 1000) % 10;
+	const int green = (splash4 / 100 ) % 10;
+	const int blue  = (splash4 / 10  ) % 10;
+	const int shake = (splash4       ) % 10;
+	if (out_red)   *out_red   = red;
+	if (out_green) *out_green = green;
+	if (out_blue)  *out_blue  = blue;
+	if (out_shake) *out_shake = shake;
+}
+
+static inline int splash_constrain(int c)
+{
+	if (c<0) return 0;
+	if (c>9) return 9;
+	return c;
+}
+
+static inline int splash4_implode(int red, int green, int blue, int shake)
+{
+	red   = splash_constrain(red);
+	green = splash_constrain(green);
+	blue  = splash_constrain(blue);
+	shake = splash_constrain(shake);
+	return (red*1000) + (green*100) + (blue*10) + shake;
+}
+
+static inline int splash4_comp_delta(int splash4, int comp, int delta)
+{
+	int red,green,blue,shake;
+	splash4_explode(splash4, &red, &green, &blue, &shake);
+	switch (comp) {
+	case 0: red   += delta; break;
+	case 1: green += delta; break;
+	case 2: blue  += delta; break;
+	case 3: shake += delta; break;
+	}
+	return splash4_implode(red, green, blue, shake);
+}
+
 static float splashc2f(int c)
 {
 	// XXX is f1 "correct"? and: do I want non-linearity / exponent?
@@ -1110,11 +1153,8 @@ static float splashc2f(int c)
 
 static void set_color_splash4(uint16_t splash4)
 {
-	int red   = (splash4 / 1000) % 10;
-	int green = (splash4 / 100 ) % 10;
-	int blue  = (splash4 / 10  ) % 10;
-	int shake = (splash4       ) % 10;
-	(void)shake;
+	int red,green,blue;
+	splash4_explode(splash4, &red, &green, &blue, NULL);
 	set_color3f(splashc2f(red), splashc2f(green), splashc2f(blue));
 }
 
@@ -1162,6 +1202,44 @@ void gui_begin_frame(void)
 	arrput(g.text_buffer_arr, 0); // terminate cstr
 }
 
+static void cpick_on(struct pane* p, int on)
+{
+	assert(p->type == CODE);
+	p->code.cpick_on = on;
+}
+
+static void cpick_select(struct pane* p, int d)
+{
+	assert(p->type == CODE);
+	int c = p->code.splash4_comp;
+	c += d;
+	while (c <  0) c += 4;
+	while (c >= 4) c -= 4;
+	assert((0 <= c) && (c < 4));
+	p->code.splash4_comp = c;
+}
+
+static void cpick_add_comp(struct pane* p, int comp, int d)
+{
+	assert(p->type == CODE);
+	p->code.splash4_cache = splash4_comp_delta(p->code.splash4_cache, comp, d);
+	mimf("%d~", p->code.splash4_cache);
+}
+
+static void cpick_add(struct pane* p, int delta)
+{
+	assert(p->type == CODE);
+	cpick_add_comp(p, p->code.splash4_comp, delta);
+}
+
+static void cpick_add_rgb(struct pane* p, int delta)
+{
+	assert(p->type == CODE);
+	cpick_add_comp(p, 0, delta);
+	cpick_add_comp(p, 1, delta);
+	cpick_add_comp(p, 2, delta);
+}
+
 static void handle_editor_input(struct pane* pane)
 {
 	assert(pane->type == CODE);
@@ -1178,7 +1256,7 @@ static void handle_editor_input(struct pane* pane)
 			case KEY_ARROW_RIGHT : mimf("0Ml"); break;
 			case KEY_ARROW_UP    : mimf("0Mk"); break;
 			case KEY_ARROW_DOWN  : mimf("0Mj"); break;
-			case KEY_ENTER       : mimf("0,1i\n"); break;
+			case KEY_ENTER       : mimi(0,"\n"); break;
 			case KEY_BACKSPACE   : mimf("0X"); break;
 			case KEY_DELETE      : mimf("0x"); break;
 			//case KEY_ESCAPE       mimf("\033"); break;
@@ -1191,6 +1269,19 @@ static void handle_editor_input(struct pane* pane)
 			case KEY_ARROW_RIGHT : mimf("0Sl"); break;
 			case KEY_ARROW_UP    : mimf("0Sk"); break;
 			case KEY_ARROW_DOWN  : mimf("0Sj"); break;
+			}
+		}
+
+		const int is_cpick_mod = (mod == (MOD_CONTROL | MOD_ALT));
+		cpick_on(pane, is_cpick_mod);
+		if (down && is_cpick_mod) {
+			switch (code) {
+			case KEY_ARROW_LEFT : cpick_select(pane  , -1); break;
+			case KEY_ARROW_RIGHT: cpick_select(pane  ,  1); break;
+			case KEY_ARROW_UP   : cpick_add(pane     ,  1); break;
+			case KEY_ARROW_DOWN : cpick_add(pane     , -1); break;
+			case KEY_PAGE_UP    : cpick_add_rgb(pane ,  1); break;
+			case KEY_PAGE_DOWN  : cpick_add_rgb(pane , -1); break;
 			}
 		}
 
@@ -1256,6 +1347,7 @@ static void draw_code_pane(struct pane* pane)
 	struct mim_state* ms;
 	struct document* doc;
 	get_state_and_doc(pane->code.session_id, &ms, &doc);
+	pane->code.splash4_cache = ms->splash4;
 
 	const int num_carets = arrlen(ms->caret_arr);
 
@@ -1339,24 +1431,30 @@ static void draw_code_pane(struct pane* pane)
 
 		// XXX ostensibly I also need to subtract "ascent" from y? but it looks
 		// wrong... text formatting is hard!
-		{
-			if (shake > 0) {
-				// XXX this code might be a little bad
-				save();
-				const float m = (float)shake;
-				g.state.cursor_x += randf(-m,m);
-				g.state.cursor_y += randf(-m,m);
-				const float x0 = g.state.cursor_x;
-				const float y0 = g.state.cursor_y;
-				put_char(cp);
-				const float dx = g.state.cursor_x - x0;
-				const float dy = g.state.cursor_y - y0;
-				restore();
-				g.state.cursor_x += dx;
-				g.state.cursor_y += dy;
-			} else {
-				put_char(cp);
-			}
+		if (shake > 0) {
+			// FIXME quick'n'dirty shake viz that ought to be improved:
+			//  - render multiple chars to make "motion blur", especially
+			//    for higher shake levels?
+			//  - shake radius should probably not be a quad like it is
+			//    here, and should also be proportional to text size
+			//    (currently it's 0-9 pixels)
+			//  - kinda want to do rotational transforms too (currently not
+			//    supported by push_mesh_quad())
+			//  - maybe even spark particles at high shake levels? :D
+			save();
+			const float m = (float)shake;
+			g.state.cursor_x += randf(-m,m);
+			g.state.cursor_y += randf(-m,m);
+			const float x0 = g.state.cursor_x;
+			const float y0 = g.state.cursor_y;
+			put_char(cp);
+			const float dx = g.state.cursor_x - x0;
+			const float dy = g.state.cursor_y - y0;
+			restore();
+			g.state.cursor_x += dx;
+			g.state.cursor_y += dy;
+		} else {
+			put_char(cp);
 		}
 	}
 
@@ -1381,13 +1479,36 @@ static void draw_code_pane(struct pane* pane)
 		for (int i=0;i<4;++i) put_char(SPECIAL_CODEPOINT_BLOCK);
 	}
 	#endif
+
+	if (pane->code.cpick_on) {
+		const int x0 = 40;
+		const int y0 = 40;
+		g.state.cursor_x = x0;
+		g.state.cursor_y = y0;
+		set_y_stretch_index(2);
+		set_color3f(1,1,1);
+		int red,green,blue,shake;
+		splash4_explode(pane->code.splash4_cache,&red,&green,&blue,&shake);
+		set_color_splash4(splash4_implode(red,0,0,0));
+		put_char('0'+red);
+		set_color_splash4(splash4_implode(0,green,0,0));
+		put_char('0'+green);
+		set_color_splash4(splash4_implode(0,0,blue,0));
+		put_char('0'+blue);
+		set_color_splash4(splash4_implode(3,3,3,shake));
+		put_char('0'+shake);
+		g.state.cursor_x = x0;
+		g.state.cursor_y = y0+30;
+		set_color_splash4(splash4_implode(red,green,blue,shake));
+		const int comp = pane->code.splash4_comp;
+		for (int i=0; i<4; ++i) {
+			put_char(i==comp?'^':' ');
+		}
+	}
 }
 
 static void gui_draw1(void)
 {
-
-	// TODO render video synth background if configured?
-
 	for (int i=0; i<arrlen(g.pane_arr); ++i) {
 		struct pane* pane = arrchkptr(g.pane_arr, i);
 

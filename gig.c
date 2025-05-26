@@ -798,6 +798,20 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 					}));
 				}	break;
 
+
+				case '~': { // set color
+					if (num_args != 1) {
+						return mimerr("command '%c' expected 1 argument; got %d", chr, num_args);
+					}
+					const int splash4 = arrchkget(number_stack_arr, 0);
+					arrreset(number_stack_arr);
+					if (!is_valid_splash4(splash4)) {
+						return mimerr("invalid splash4 color %d", splash4);
+					}
+					struct mim_state* ms = mimop_ms(mo);
+					ms->splash4 = splash4;
+				}	break;
+
 				case 'i':   // text insert
 				case 'I': { // color text insert
 					if (num_args != 2) {
