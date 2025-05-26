@@ -68,6 +68,15 @@ static inline void jio_append_u8(struct jio* jio, uint8_t v)
 	jio_append(jio, &v, 1);
 }
 
+static inline void jio_append_leu16(struct jio* jio, uint16_t v)
+{
+	uint8_t e[2];
+	uint8_t* p = e;
+	leu16_pencode(&p, v);
+	assert(p == (e+2));
+	jio_append(jio, e, 2);
+}
+
 static inline void jio_append_leu64(struct jio* jio, int64_t v)
 {
 	uint8_t buf[8];
@@ -148,6 +157,15 @@ static inline uint8_t jio_pread_u8(struct jio* jio, int64_t offset)
 	return jio_ppread_u8(jio, &offset);
 }
 
+static inline uint16_t jio_ppread_leu16(struct jio* jio, int64_t* offset)
+{
+	if (jio_get_error(jio) < 0) return 0;
+	uint8_t b[2];
+	jio_pread(jio, b, 2, *offset);
+	(*offset) += 2;
+	const uint8_t* p = b;
+	return leu16_pdecode(&p);
+}
 
 void jio_init(void);
 void jio_thread_run(void);

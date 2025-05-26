@@ -64,7 +64,7 @@ static int mim_state_equal(struct mim_state* a, struct mim_state* b)
 	if (a->session_id != b->session_id) return 0;
 	if (a->book_id != b->book_id) return 0;
 	if (a->doc_id != b->doc_id) return 0;
-	if (memcmp(a->color,b->color,4) != 0) return 0;
+	if (a->splash4 != b->splash4) return 0;
 	const int na = arrlen(a->caret_arr);
 	const int nb = arrlen(b->caret_arr);
 	if (na != nb) return 0;
@@ -631,10 +631,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 		EX,
 	};
 
-	enum {
-		UTF8,
-		U32,
-	};
+	enum { UTF8, U16 };
 
 	int mode = COMMAND;
 	int datamode = UTF8;
@@ -647,7 +644,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 	int motion_cmd = -1;
 	const int64_t now = get_nanoseconds();
 	int chr=0;
-	uint32_t u32val=0;
+	uint16_t u16val=0;
 	const char* ex0 = NULL;
 
 	while ((push_chr>=0) || (remaining>0)) {
@@ -655,14 +652,13 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 		const char* p0 = input_cursor;
 		if (datamode == UTF8) {
 			chr = (push_chr>=0) ? push_chr : utf8_decode(&input_cursor, &remaining);
-		} else if (datamode == U32) {
+		} else if (datamode == U16) {
 			assert(push_chr == -1);
-			assert(remaining >= 4);
+			assert(remaining >= 2);
 			const uint8_t* p8 = (const uint8_t*)input_cursor;
-			u32val = decode_u32(&p8);
+			u16val = leu16_pdecode(&p8);
 			input_cursor = (const char*)p8;
-			remaining -= 4;
-			assert(!"TODO");
+			remaining -= 2;
 		} else {
 			assert(!"unhandled datamode");
 		}
@@ -910,11 +906,11 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 				assert(datamode == UTF8);
 				do_insert = 1;
 			} else if (mode == INSERT_COLOR_STRING) {
-				if (datamode == U32) {
+				if (datamode == U16) {
 					do_insert = 1;
 					next_datamode = UTF8;
 				} else {
-					next_datamode = U32;
+					next_datamode = U16;
 				}
 			} else {
 				assert(!"unreachable");
@@ -934,21 +930,19 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 
 				struct mim_state* ms = mimop_ms(mo);
 
-				uint8_t r,g,b,x;
+				uint16_t splash4=0;
 				if (mode == INSERT_STRING) {
 					// insert with artist mim state color
-					r=ms->color[0];
-					g=ms->color[1];
-					b=ms->color[2];
-					x=ms->color[3];
+					splash4 = ms->splash4;
 				} else if (mode == INSERT_COLOR_STRING) {
 					// insert with encoded color
-					r=(u32val    ) & 0xff,
-					g=(u32val>>8 ) & 0xff,
-					b=(u32val>>16) & 0xff,
-					x=(u32val>>24) & 0xff;
+					splash4 = u16val;
 				} else {
 					assert(!"unreachable");
+				}
+
+				if (!is_valid_splash4(splash4)) {
+					return mimerr("invalid splash4 value (%d)", splash4);
 				}
 
 				struct document* doc = mimop_get_readwrite_doc(mo);
@@ -968,7 +962,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 					arrins(doc->docchar_arr, off, ((struct docchar){
 						.colorchar = {
 							.codepoint = chr,
-							.color = {r,g,b,x},
+							.splash4 = splash4,
 						},
 						.timestamp = now,
 						//.artist_id = get_my_artist_id(),
@@ -1370,7 +1364,8 @@ static void snapshotcache_push(struct snapshot* snapshot, uint64_t journal_offse
 			struct docchar* c = &doc->docchar_arr[ii];
 			struct colorchar* tc = &c->colorchar;
 			jio_append_leb128(jdat, tc->codepoint);
-			for (int iii=0; iii<4; ++iii) jio_append_u8(jdat, tc->color[iii]);
+			assert((is_valid_splash4(tc->splash4)) && "did not expect bad splash4; don't want to write it");
+			jio_append_leu16(jdat, tc->splash4);
 			jio_append_leb128(jdat, c->flags);
 		}
 	}
@@ -1384,7 +1379,8 @@ static void snapshotcache_push(struct snapshot* snapshot, uint64_t journal_offse
 		jio_append_leb128(jdat, ms->session_id);
 		jio_append_leb128(jdat, ms->book_id);
 		jio_append_leb128(jdat, ms->doc_id);
-		for (int ii=0; ii<4; ++ii) jio_append_u8(jdat, ms->color[ii]);
+		assert((is_valid_splash4(ms->splash4)) && "did not expect bad splash4; don't want to write it");
+		jio_append_leu16(jdat, ms->splash4);
 		const int num_carets = arrlen(ms->caret_arr);
 		jio_append_leb128(jdat, num_carets);
 		for (int ii=0; ii<num_carets; ++ii) {
@@ -1685,8 +1681,9 @@ static int restore_snapshot(struct snapshot* ss, uint64_t snapshot_manifest_offs
 		struct docchar* cs = arraddnptr(doc.docchar_arr, doc_len);
 		for (int64_t i=0; i<doc_len; ++cs, ++i) {
 			cs->colorchar.codepoint = jio_ppread_leb128(jdat, &o1);
-			for (int ii=0; ii<4; ++ii) {
-				cs->colorchar.color[ii] = jio_ppread_u8(jdat, &o1);
+			cs->colorchar.splash4 = jio_ppread_leu16(jdat, &o1);
+			if (!is_valid_splash4(cs->colorchar.splash4)) {
+				return FMTERR(path, "bad splash4 color in doc");
 			}
 			cs->flags = jio_ppread_leb128(jdat, &o1);
 		}
@@ -1707,7 +1704,10 @@ static int restore_snapshot(struct snapshot* ss, uint64_t snapshot_manifest_offs
 		ms.session_id = jio_ppread_leb128(jdat, &o1);
 		ms.book_id    = jio_ppread_leb128(jdat, &o1);
 		ms.doc_id     = jio_ppread_leb128(jdat, &o1);
-		for (int ii=0; ii<4; ++ii) ms.color[ii] = jio_ppread_u8(jdat, &o1);
+		ms.splash4    = jio_ppread_leu16( jdat, &o1);
+		if (!is_valid_splash4(ms.splash4)) {
+			return FMTERR(path, "bad splash4 color in mim state");
+		}
 
 		const int64_t num_carets = jio_ppread_leb128(jdat, &o1);
 		arrinit(ms.caret_arr, &system_allocator);

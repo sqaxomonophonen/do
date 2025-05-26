@@ -310,14 +310,14 @@ static void test_regress_0d(void)
 	expect_col_and_doc(4,"123xxxyabc");
 
 	begin_mim(1);
-	mimi(0,"---");
+	mimi(0,"--");
 	end_mim();
-	expect_col_and_doc(7,"123---xxxyabc");
+	expect_col_and_doc(6,"123--xxxyabc");
 
 	gig_unhost();
 
 	gig_host(test_dir);
-	expect_col_and_doc(7,"123---xxxyabc");
+	expect_col_and_doc(6,"123--xxxyabc");
 	gig_unhost();
 }
 

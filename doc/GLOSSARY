@@ -44,13 +44,22 @@ belongs to the DO_JAM_JOURNAL.
 "cursor"), while "cursor" is used for the rest, like file/read/write cursors.
 
 : colorchar
-character consisting of a codepoint and a 4-component color.
+character consisting of a codepoint and a 4-component splash color (see:
+splash4)
 
 : docchar
 document char consisting of a colorchar, flags and timestamp.
 
 TODO : strchar? (mie string char, like colorchar but also contains source
 location)
+
+: splash4
+4-component splash color, each component a decimal digit, like 5050 or 3333.
+all valid colors are between 0000 and 9999. the components are RGBX where RGB
+are red/green/blue, and X is "shake". the color 3456 is red=3, green=4, blue=5
+and shake=6. the original splash (3-component) format was made by Lu Wilson aka
+Todepond (https://www.todepond.com/lab/splash/)
+
 
 ===============================================================================
 

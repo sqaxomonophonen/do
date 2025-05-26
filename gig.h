@@ -33,19 +33,23 @@ static inline void location_sort2(struct location** a, struct location** b)
 	}
 }
 
-// TODO considering "c5t" format ("5-component text")
-// maybe a 64bit header containing ascii "C5T1" and "Do01"
-// struct like this:
-struct c5char {
-	uint32_t codepoint:24;
-	uint32_t y:8, r:8, g:8, b:8, x:8;
-};
-static_assert(sizeof(struct c5char)==(2*sizeof(uint32_t)),"");
-
 struct colorchar {
 	int32_t codepoint;
-	uint8_t color[4];
+	uint16_t splash4; // [0000:9999]
 };
+
+static inline uint16_t splash4_from_i32(int32_t v)
+{
+	if (v<0) return 0;
+	if (v>9999) return 9999;
+	return v;
+}
+
+static inline int is_valid_splash4(int v)
+{
+	return ((0 <= v) && (v <= 9999));
+}
+
 
 // these flags are persistent (written in snapshotcache):
 #define FC_IS_INSERT (1LL<<0)
@@ -80,7 +84,7 @@ struct mim_state {
 	int artist_id, session_id;
 	// mim state is keyed by [artist_id,session_id]
 	int book_id, doc_id;
-	uint8_t color[4];
+	uint16_t splash4;
 	uint64_t snapshotcache_offset;
 	struct caret* caret_arr;
 	// (update mim_state_copy() when adding arr-fields here)
@@ -221,17 +225,6 @@ void mimi(int tag, const char*);
 void get_state_and_doc(int session_id, struct mim_state** out_mim_state, struct document** out_doc);
 
 int get_my_artist_id(void);
-
-static inline uint32_t decode_u32(const uint8_t** pp)
-{
-	uint32_t val =
-		  (*pp[0])
-		+ (*pp[1] << 8)
-		+ (*pp[2] << 16)
-		+ (*pp[3] << 24);
-	(*pp) += 4;
-	return val;
-}
 
 #define GIG_H
 #endif

@@ -19,18 +19,20 @@
    convenience). Spaces may use number prefixes to specify the ordering of
    files, so 00_foo comes before 10_bar.
 
- derived/aumio1/00_stdlib.mie.c5t
+ derived/aumio1/00_stdlib.mie.utf8splash4
  derived/aumio1/00_stdlib.mie.html
  derived/aumio1/00_stdlib.mie.txt
-   Various derived versions of the same "stdlib.mie" document. c5t is
-   "5-component text", html is a HTML version with colors, txt is a utf8 text
-   version without colors.
+   Various derived versions of the same "stdlib.mie" document. utf8splash4 is
+   the text encoded as pairs of (utf8,splash4), where utf8 is as-is and splash4
+   is little-endian uint16 encoded color between 0000 and 9999 (both
+   inclusive). html is a HTML version with colors, txt is a utf8 text version
+   without colors.
 
- derived/aumio1/50_art.mie.c5t
+ derived/aumio1/50_art.mie.utf8splash4
    "art" is typically the main file that artists edit, whereas all the other
    file are support files.
 
- derived/aumio1/99_post.mie.c5t
+ derived/aumio1/99_post.mie.utf8splash4
    Last file. Might call some stdlib stuff that does "garbage collecting" and
    more?
 

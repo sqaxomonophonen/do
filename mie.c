@@ -760,19 +760,6 @@ static int32_t vmie_alloc_string(struct vmie* vm, size_t len, struct colorchar**
 	return id;
 }
 
-static inline int32_t colorchar_rgbx_to_i32(struct colorchar tc)
-{
-	uint32_t e = 0;
-	for (int i=0; i<4; ++i) e |= ((uint32_t)(tc.color[i]) << (i*8));
-	return (int32_t)e; // XXX unsafe in theory?
-}
-
-static inline void colorchar_set_rgbx(struct colorchar* tc, int32_t rgbx)
-{
-	uint32_t e = rgbx; // XXX unsafe in theory?
-	for (int i=0; i<4; ++i) tc->color[i] = ((e >> (i*8)) & 0xff);
-}
-
 int vmie_run2(struct vmie* vm)
 {
 	const int TRACE = 0;
@@ -1150,7 +1137,7 @@ int vmie_run2(struct vmie* vm)
 				}
 				struct colorchar tc = str[index];
 				arrput(vm->stack_arr, intval(tc.codepoint));
-				arrput(vm->stack_arr, intval(colorchar_rgbx_to_i32(tc)));
+				arrput(vm->stack_arr, intval(tc.splash4));
 			}	break;
 
 			case OP_STRNEW: {
@@ -1167,9 +1154,8 @@ int vmie_run2(struct vmie* vm)
 				struct colorchar* str=NULL;
 				const int32_t id = vmie_alloc_string(vm, n, &str);
 				for (int i=(n-1); i>=0; --i) {
-					const int rgbx = arrpop(vm->stack_arr).i32;
+					str[i].splash4 = splash4_from_i32(arrpop(vm->stack_arr).i32);
 					str[i].codepoint = arrpop(vm->stack_arr).i32;
-					colorchar_set_rgbx(&str[i], rgbx);
 				}
 				arrput(vm->stack_arr, typeval(VAL_STR, id));
 			}	break;
@@ -1912,7 +1898,7 @@ static int compiler_process_utf8src(struct compiler* cm, const char* utf8src, in
 		if (codepoint == -1) continue;
 		compiler_push_char(cm, ((struct colorchar){
 			.codepoint = codepoint,
-			.color = {0x40,0x40,0x40,0},
+			.splash4   = 3330, // source code is gray by default
 		}));
 		if (cm->has_error) return -1;
 	}
