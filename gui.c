@@ -1145,10 +1145,11 @@ static inline int splash4_comp_delta(int splash4, int comp, int delta)
 
 static float splashc2f(int c)
 {
-	// XXX is f1 "correct"? and: do I want non-linearity / exponent?
 	const float f0 = 0.25f;
 	const float f1 = 2.5f;
-	return fminf(f1, fmaxf(f0, f0 + (f1-f0) * ((float)c * (1.0f / 9.0f))));
+	const float t = (float)c * (1.0f / 9.0f);
+	const float tx = powf(t, 1.5f);
+	return fminf(f1, fmaxf(f0, f0 + (f1-f0) * tx));
 }
 
 static void set_color_splash4(uint16_t splash4)
