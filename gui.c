@@ -1143,6 +1143,19 @@ static inline int splash4_comp_delta(int splash4, int comp, int delta)
 	return splash4_implode(red, green, blue, shake);
 }
 
+static inline int splash4_comp_set(int splash4, int comp, int value)
+{
+	int red,green,blue,shake;
+	splash4_explode(splash4, &red, &green, &blue, &shake);
+	switch (comp) {
+	case 0: red   = value; break;
+	case 1: green = value; break;
+	case 2: blue  = value; break;
+	case 3: shake = value; break;
+	}
+	return splash4_implode(red, green, blue, shake);
+}
+
 static float splashc2f(int c)
 {
 	const float f0 = 0.25f;
@@ -1220,10 +1233,17 @@ static void cpick_select(struct pane* p, int d)
 	p->code.splash4_comp = c;
 }
 
-static void cpick_add_comp(struct pane* p, int comp, int d)
+static void cpick_add_comp(struct pane* p, int comp, int delta)
 {
 	assert(p->type == CODE);
-	p->code.splash4_cache = splash4_comp_delta(p->code.splash4_cache, comp, d);
+	p->code.splash4_cache = splash4_comp_delta(p->code.splash4_cache, comp, delta);
+	mimf("%d~", p->code.splash4_cache);
+}
+
+static void cpick_set_comp(struct pane* p, int comp, int value)
+{
+	assert(p->type == CODE);
+	p->code.splash4_cache = splash4_comp_set(p->code.splash4_cache, comp, value);
 	mimf("%d~", p->code.splash4_cache);
 }
 
@@ -1231,6 +1251,12 @@ static void cpick_add(struct pane* p, int delta)
 {
 	assert(p->type == CODE);
 	cpick_add_comp(p, p->code.splash4_comp, delta);
+}
+
+static void cpick_set(struct pane* p, int value)
+{
+	assert(p->type == CODE);
+	cpick_set_comp(p, p->code.splash4_comp, value);
 }
 
 static void cpick_add_rgb(struct pane* p, int delta)
@@ -1241,14 +1267,17 @@ static void cpick_add_rgb(struct pane* p, int delta)
 	cpick_add_comp(p, 2, delta);
 }
 
+
 static void handle_editor_input(struct pane* pane)
 {
 	assert(pane->type == CODE);
 	begin_mim(pane->code.session_id);
+	int last_mod = 0;
 	for (int i=0; i<arrlen(g.key_buffer_arr); ++i) {
 		const int key = arrchkget(g.key_buffer_arr, i);
 		const int down = get_key_down(key);
 		const int mod = get_key_mod(key);
+		last_mod = mod;
 		const int code = get_key_code(key);
 		if (down && mod==0) {
 			switch (code) {
@@ -1284,18 +1313,22 @@ static void handle_editor_input(struct pane* pane)
 			case KEY_PAGE_UP    : cpick_add_rgb(pane ,  1); break;
 			case KEY_PAGE_DOWN  : cpick_add_rgb(pane , -1); break;
 			}
+			if (('0' <= code) && (code <= '9')) cpick_set(pane, code-'0');
 		}
 
 		if (down && mod==MOD_CONTROL && code==KEY_ENTER) mimf("0!");
 		if (down && mod==MOD_CONTROL && code==' ') mimf("0/");
 	}
 
-	const int num_chars = utf8_strlen(g.text_buffer_arr);
-	if (num_chars > 0) {
-		const int num_bytes = arrlen(g.text_buffer_arr) - 1;
-		mimf("0,%di", num_bytes);
-		for (int i=0; i<num_bytes; ++i) mim8(g.text_buffer_arr[i]);
+	if (!(last_mod & MOD_CONTROL)) {
+		const int num_chars = utf8_strlen(g.text_buffer_arr);
+		if (num_chars > 0) {
+			const int num_bytes = arrlen(g.text_buffer_arr) - 1;
+			mimf("0,%di", num_bytes);
+			for (int i=0; i<num_bytes; ++i) mim8(g.text_buffer_arr[i]);
+		}
 	}
+
 	end_mim();
 }
 
