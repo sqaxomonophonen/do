@@ -203,6 +203,7 @@ void sleep_nanoseconds(int64_t ns)
 	assert(!"don't sleep");
 }
 
+#if 0
 static void gig_thread_run(void)
 {
 	for (;;) {
@@ -210,10 +211,11 @@ static void gig_thread_run(void)
 		emscripten_wasm_worker_sleep(2000000L);
 	}
 }
+#endif
 
 int main(int argc, char** argv)
 {
-	g.num_cores = emscripten_navigator_hardware_concurrency();
+	//g.num_cores = emscripten_navigator_hardware_concurrency();
 	g.start_time = emscripten_get_now();
 
 	open_window();
@@ -233,7 +235,7 @@ int main(int argc, char** argv)
 	gig_host_no_jio();
 	gig_maybe_setup_stub();
 	gui_init();
-	emscripten_wasm_worker_post_function_v(emscripten_malloc_wasm_worker(1L<<20), gig_thread_run);
+	//emscripten_wasm_worker_post_function_v(emscripten_malloc_wasm_worker(1L<<20), gig_thread_run);
 	emscripten_set_main_loop(main_loop, 0, false);
 
 	return EXIT_SUCCESS;
