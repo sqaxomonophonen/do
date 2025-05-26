@@ -1100,6 +1100,24 @@ static void set_color3f(float red, float green, float blue)
 	set_colorv((float[]){red,green,blue});
 }
 
+static float splashc2f(int c)
+{
+	// XXX is f1 "correct"? and: do I want non-linearity / exponent?
+	const float f0 = 0.25f;
+	const float f1 = 2.5f;
+	return fminf(f1, fmaxf(f0, f0 + (f1-f0) * ((float)c * (1.0f / 9.0f))));
+}
+
+static void set_color_splash4(uint16_t splash4)
+{
+	int red   = (splash4 / 1000) % 10;
+	int green = (splash4 / 100 ) % 10;
+	int blue  = (splash4 / 10  ) % 10;
+	int shake = (splash4       ) % 10;
+	(void)shake;
+	set_color3f(splashc2f(red), splashc2f(green), splashc2f(blue));
+}
+
 static void update_fps(void)
 {
 	const int64_t t  = get_nanoseconds();
@@ -1204,6 +1222,12 @@ static inline int has_light(float color[3])
 	return color[0]>0 || color[1]>0 || color[2]>0;
 }
 
+static float randf(float v0, float v1)
+{
+	const float f = (float)rand() / (float)RAND_MAX;
+	return v0 + f*(v1-v0);
+}
+
 static void draw_code_pane(struct pane* pane)
 {
 	assert(pane->type == CODE);
@@ -1283,11 +1307,14 @@ static void draw_code_pane(struct pane* pane)
 
 		struct docchar* fc = it.docchar;
 		const unsigned cp = fc != NULL ? fc->colorchar.codepoint : 0;
+		int splash4 = 0;
 
 		if (fc != NULL) {
 			if (fc->flags & FC_IS_INSERT) bg_color[1] += 0.2f;
 			if (fc->flags & FC_IS_DELETE) bg_color[0] += 0.3f;
+			splash4 = fc->colorchar.splash4;
 		}
+		const int shake = splash4 % 10;
 
 		if (has_light(bg_color) && cp >= ' ') {
 			save();
@@ -1308,11 +1335,29 @@ static void draw_code_pane(struct pane* pane)
 			g.state.cursor_y += (int)ceilf(y_advance);
 		}
 
-		set_color3f(.6,.6,.6);
+		set_color_splash4(splash4);
 
 		// XXX ostensibly I also need to subtract "ascent" from y? but it looks
 		// wrong... text formatting is hard!
-		put_char(cp);
+		{
+			if (shake > 0) {
+				// XXX this code might be a little bad
+				save();
+				const float m = (float)shake;
+				g.state.cursor_x += randf(-m,m);
+				g.state.cursor_y += randf(-m,m);
+				const float x0 = g.state.cursor_x;
+				const float y0 = g.state.cursor_y;
+				put_char(cp);
+				const float dx = g.state.cursor_x - x0;
+				const float dy = g.state.cursor_y - y0;
+				restore();
+				g.state.cursor_x += dx;
+				g.state.cursor_y += dy;
+			} else {
+				put_char(cp);
+			}
+		}
 	}
 
 	#if 0
@@ -1412,16 +1457,6 @@ struct draw_list* gui_get_draw_list(int index)
 {
 	return arrchkptr(g.draw_list_arr, index);
 }
-
-struct draw_char {
-	unsigned codepoint;
-	unsigned foreground_color[4];
-	unsigned background_color[4];
-	unsigned focus;
-	// TODO particle effects?
-	// TODO shakes/tremors or other effects based on affine transforms?
-};
-
 
 void gui_set_dragging(struct window* w, int is_dragging)
 {
