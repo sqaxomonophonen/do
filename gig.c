@@ -798,8 +798,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 					}));
 				}	break;
 
-
-				case '~': { // set color
+				case '~': { // set mim state color
 					if (num_args != 1) {
 						return mimerr("command '%c' expected 1 argument; got %d", chr, num_args);
 					}
@@ -810,6 +809,32 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 					}
 					struct mim_state* ms = mimop_ms(mo);
 					ms->splash4 = splash4;
+				}	break;
+
+				case 'P': { // paint selection with color
+					if (num_args != 1) {
+						return mimerr("command '%c' expected 1 argument; got %d", chr, num_args);
+					}
+					arg_tag = arrchkget(number_stack_arr, 0);
+					arrreset(number_stack_arr);
+					if (!mimop_has_doc(mo)) return mimerr("command '%c' requires doc; mim state has none", chr);
+					struct document* doc = mimop_get_readwrite_doc(mo);
+					struct mim_state* ms = mimop_ms(mo);
+					const int num_carets = arrlen(ms->caret_arr);
+					for (int i=0; i<num_carets; ++i) {
+						struct caret* car = arrchkptr(ms->caret_arr, i);
+						struct location* loc0 = &car->caret_loc;
+						struct location* loc1 = &car->anchor_loc;
+						location_sort2(&loc0, &loc1);
+						const int off0 = document_locate(doc, loc0);
+						const int off1 = document_locate(doc, loc1);
+						assert(off0 <= off1);
+						for (int o=off0; o<off1; ++o) {
+							struct docchar* dc = arrchkptr(doc->docchar_arr, o);
+							dc->colorchar.splash4 = ms->splash4;
+						}
+						car->anchor_loc = car->caret_loc;
+					}
 				}	break;
 
 				case 'i':   // text insert

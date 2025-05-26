@@ -183,13 +183,13 @@ void jio_append(struct jio* jio, const void* ptr, int64_t size)
 		block_sleep(jio);
 	}
 
-	const unsigned turn0 = (head >> ringbuf_size_log2);
-	const unsigned turn1 = (new_head >> ringbuf_size_log2);
+	const unsigned cycle0 = (head         >> ringbuf_size_log2);
+	const unsigned cycle1 = ((new_head-1) >> ringbuf_size_log2);
 	const unsigned mask = (ringbuf_size-1);
-	if (turn0 == turn1) {
+	if (cycle0 == cycle1) {
 		memcpy(&jio->ringbuf[head & mask], ptr, size);
 	} else {
-		const unsigned remain = (turn1 << ringbuf_size_log2) - head;
+		const unsigned remain = (cycle1 << ringbuf_size_log2) - head;
 		memcpy(&jio->ringbuf[head & mask], ptr, remain);
 		memcpy(jio->ringbuf, ptr+remain, size-remain);
 	}
@@ -305,14 +305,14 @@ int jio_pread(struct jio* jio, void* ptr, int64_t size, int64_t offset)
 	if (copy_from_ringbuf) {
 		assert(cc1>cc0);
 		const int64_t i0 = (cc0 - jio->filesize0);
-		const int64_t i0turn = (i0 >> ringbuf_size_log2);
+		const int64_t i0cycle = (i0     >> ringbuf_size_log2);
 		const int64_t i1 = (cc1 - jio->filesize0);
-		const int64_t i1turn = (i1 >> ringbuf_size_log2);
+		const int64_t i1cycle = ((i1-1) >> ringbuf_size_log2);
 		assert(ringbuf_size == (1<<ringbuf_size_log2));
 		const int64_t mask = (ringbuf_size-1);
 		assert((i1-i0)==size || read_from_backend);
 		const int64_t i0mask = i0&mask;
-		if (i0turn == i1turn) {
+		if (i0cycle == i1cycle) {
 			memcpy(ccp, &jio->ringbuf[i0mask], (i1-i0));
 		} else {
 			const int64_t n0 = (ringbuf_size - i0mask);
@@ -366,12 +366,12 @@ void jio_thread_run(void)
 			const unsigned tail = jio->tail;
 			if (tail != head) {
 				const int ringbuf_size_log2 = jio->ringbuf_size_log2;
-				const unsigned head_turn = (head >> ringbuf_size_log2);
-				const unsigned tail_turn = (tail >> ringbuf_size_log2);
+				const unsigned head_cycle = ((head-1) >> ringbuf_size_log2);
+				const unsigned tail_cycle = (tail     >> ringbuf_size_log2);
 				const unsigned ringbuf_size = 1L << ringbuf_size_log2;
 				const unsigned mask = (ringbuf_size-1);
 				const unsigned size = (head-tail);
-				if (head_turn == tail_turn) {
+				if (head_cycle == tail_cycle) {
 					pwriten(jio->fd, &jio->ringbuf[tail&mask], size, jio->disk_cursor);
 				} else {
 					const unsigned remain = ringbuf_size - (tail&mask);

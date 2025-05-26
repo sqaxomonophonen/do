@@ -124,7 +124,6 @@ int main(int argc, char** argv)
 	common_main_init();
 	gig_host(arg_dir ? arg_dir : "."); // XXX?!
 	gig_maybe_setup_stub();
-
 	gui_init();
 	SDL_DetachThread(SDL_CreateThread(io_thread_run, "io", NULL));
 	SDL_DetachThread(SDL_CreateThread(gig_thread_run, "gig", NULL));

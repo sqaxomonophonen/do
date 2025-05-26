@@ -127,14 +127,11 @@ static bool handle_key_event(int type, const EmscriptenKeyboardEvent* ev, void* 
 	}
 
 	if (keycode > 0) {
-		//keycode |= mod;
-		//printf("TODO down=%d keycode=%d mod=%d\n", is_down, keycode, mod);
-		// FIXME gui_on_key() must be called before gui_begin_frame() and after gui_draw()
 		const int key = ((is_down ? KEY_IS_DOWN : 0) | keycode | mod);
 		arrput(g.key_buffer_arr, key);
 	}
 
-	return false;
+	return (mod & MOD_CONTROL) ? true : false;
 }
 
 // (NOTE _heap_malloc in Makefile.emscripten)
@@ -191,9 +188,19 @@ static void main_loop(void)
 	gl_render_gui_draw_lists();
 }
 
+int64_t get_nanoseconds_epoch(void)
+{
+	return emscripten_get_now()*1e6;
+}
+
 int64_t get_nanoseconds(void)
 {
 	return (emscripten_get_now()-g.start_time)*1e6;
+}
+
+void sleep_nanoseconds(int64_t ns)
+{
+	assert(!"don't sleep");
 }
 
 static void gig_thread_run(void)
@@ -222,6 +229,8 @@ int main(int argc, char** argv)
 
 	gl_init();
 	common_main_init();
+	gig_host(arg_dir ? arg_dir : "."); // XXX?!
+	gig_maybe_setup_stub();
 	gui_init();
 	emscripten_wasm_worker_post_function_v(emscripten_malloc_wasm_worker(1L<<20), gig_thread_run);
 	emscripten_set_main_loop(main_loop, 0, false);

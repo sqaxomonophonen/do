@@ -158,6 +158,7 @@ static float font_config_get_y_stretch_level_scale(struct font_config* fc, int i
 }
 
 struct draw_state {
+	int is_dimming;
 	int cursor_x0, cursor_x, cursor_y;
 	float current_color[3];
 	int current_font_spec_index;
@@ -773,8 +774,8 @@ static const struct blur_level default_blur_levels[] = {
 	},
 };
 
-static const float default_y_scalar_min = 0.7f;
-static const float default_y_scalar_max = 1.3f;
+static const float default_y_scalar_min = 0.6f;
+static const float default_y_scalar_max = 1.4f;
 
 static struct font_spec default_font_specs[] = {
 	{
@@ -827,7 +828,7 @@ void gui_init(void)
 	fc_add_special(fc);
 	fc->y_scalar_min = default_y_scalar_min;
 	fc->y_scalar_max = default_y_scalar_max;
-	fc->num_y_stretch_levels = 3;
+	fc->num_y_stretch_levels = 4;
 	fc->num_blur_levels = ARRAY_LENGTH(default_blur_levels);
 	fc->blur_levels = default_blur_levels;
 	fc->num_font_specs = ARRAY_LENGTH(default_font_specs);
@@ -1024,8 +1025,16 @@ static uint32_t make_hdr_rgba(int blur_level_index, float* color)
 	assert((0 <= blur_level_index) && (blur_level_index < fc->num_blur_levels));
 	const struct blur_level* bl = &fc->blur_levels[blur_level_index];
 	float c[3];
-	c[0]=color[0]; c[1]=color[1]; c[2]=color[2];
-	for (int i=0; i<3; ++i) c[i] *= bl->post_scalar;
+	for (int i=0; i<3; ++i) {
+		float v = color[i] * bl->post_scalar;
+		if (g.state.is_dimming) {
+			// XXX this is a bit of a hack...
+			float t = (float)blur_level_index / (float)(fc->num_blur_levels - 1);
+			v = v*powf(t, 3.0f);
+			v = tanhf(v*20.0f)/5.0f;
+		}
+		c[i] = v;
+	}
 	tonemap(c);
 	uint32_t cu = 0;
 	for (int i=0; i<3; ++i) {
@@ -1034,6 +1043,7 @@ static uint32_t make_hdr_rgba(int blur_level_index, float* color)
 	return 0xff000000 | cu;
 }
 
+#if 0
 static void get_current_line_metrics(float* out_ascent, float* out_descent, float* out_line_gap)
 {
 	struct font_spec* spec = get_current_font_spec();
@@ -1041,6 +1051,17 @@ static void get_current_line_metrics(float* out_ascent, float* out_descent, floa
 	if (out_ascent) *out_ascent = (float)spec->_ascent * scale;
 	if (out_descent) *out_descent = (float)spec->_descent * scale;
 	if (out_line_gap) *out_line_gap = (float)spec->_line_gap * scale;
+}
+#endif
+
+static float get_y_advance(void)
+{
+	struct font_spec* spec = get_current_font_spec();
+	const float scale = spec->_px_scale * get_current_y_stretch_scale();
+	float ascent   = (float)spec->_ascent * scale;
+	float descent  = (float)spec->_descent * scale;
+	const float m = 0.9f; // XXX less line spacing; formalise this?
+	return (ascent - descent) * m;
 }
 
 static void put_char(int codepoint)
@@ -1165,11 +1186,16 @@ static float splashc2f(int c)
 	return fminf(f1, fmaxf(f0, f0 + (f1-f0) * tx));
 }
 
-static void set_color_splash4(uint16_t splash4)
+static void set_color_splash4_mul(uint16_t splash4, float mul)
 {
 	int red,green,blue;
 	splash4_explode(splash4, &red, &green, &blue, NULL);
-	set_color3f(splashc2f(red), splashc2f(green), splashc2f(blue));
+	set_color3f(mul*splashc2f(red), mul*splashc2f(green), mul*splashc2f(blue));
+}
+
+static void set_color_splash4(uint16_t splash4)
+{
+	set_color_splash4_mul(splash4, 1.0f);
 }
 
 static void update_fps(void)
@@ -1227,8 +1253,15 @@ static void cpick_select(struct pane* p, int d)
 	assert(p->type == CODE);
 	int c = p->code.splash4_comp;
 	c += d;
+	#if 0
+	// wrap
 	while (c <  0) c += 4;
 	while (c >= 4) c -= 4;
+	#else
+	// clamp
+	if (c<0) c=0;
+	if (c>3) c=3;
+	#endif
 	assert((0 <= c) && (c < 4));
 	p->code.splash4_comp = c;
 }
@@ -1313,11 +1346,16 @@ static void handle_editor_input(struct pane* pane)
 			case KEY_PAGE_UP    : cpick_add_rgb(pane ,  1); break;
 			case KEY_PAGE_DOWN  : cpick_add_rgb(pane , -1); break;
 			}
-			if (('0' <= code) && (code <= '9')) cpick_set(pane, code-'0');
+			if (('0' <= code) && (code <= '9')) {
+				cpick_set(pane, code-'0');
+			}
 		}
 
-		if (down && mod==MOD_CONTROL && code==KEY_ENTER) mimf("0!");
-		if (down && mod==MOD_CONTROL && code==' ') mimf("0/");
+		if (down && mod==MOD_CONTROL) {
+			if (code==KEY_ENTER) mimf("0!"); // commit
+			if (code==' ')       mimf("0/"); // cancel
+			if (code=='P')       mimf("0P"); // paint
+		}
 	}
 
 	if (!(last_mod & MOD_CONTROL)) {
@@ -1357,6 +1395,8 @@ static void draw_code_pane(struct pane* pane)
 {
 	assert(pane->type == CODE);
 
+	g.state.is_dimming = pane->code.cpick_on;
+
 	struct rect pr = get_pane_rect(pane);
 
 	const int flags = keyboard_input_area(&pr, pane->code.focus_id);
@@ -1372,7 +1412,7 @@ static void draw_code_pane(struct pane* pane)
 
 	const int x0 = pr.x+30;
 	g.state.cursor_x0 = g.state.cursor_x = x0;
-	g.state.cursor_y = pr.y+50;
+	g.state.cursor_y = pr.y+20;
 
 	set_y_stretch_index(0);
 	//set_color3f(.7, 2.7, .7);
@@ -1384,6 +1424,9 @@ static void draw_code_pane(struct pane* pane)
 	pane->code.splash4_cache = ms->splash4;
 
 	const int num_carets = arrlen(ms->caret_arr);
+
+	static int* caret_coord_arr;
+	arrreset(caret_coord_arr);
 
 	struct doc_iterator it = doc_iterator(doc);
 	while (doc_iterator_next(&it)) {
@@ -1424,10 +1467,16 @@ static void draw_code_pane(struct pane* pane)
 			set_y_stretch_index(ylvl);
 		}
 
+		const float y_height = get_y_advance();
+
 		if (draw_caret) {
 			save();
-			set_color3f(1,1,3);
+			set_color_splash4_mul(ms->splash4, 1.5f);
+			g.state.cursor_y += (int)y_height;
+			arrput(caret_coord_arr, g.state.cursor_x);
+			arrput(caret_coord_arr, g.state.cursor_y);
 			put_char(SPECIAL_CODEPOINT_CARET);
+			g.state.cursor_y -= (int)y_height;
 			restore();
 		}
 
@@ -1445,20 +1494,17 @@ static void draw_code_pane(struct pane* pane)
 		if (has_light(bg_color) && cp >= ' ') {
 			save();
 			set_colorv(bg_color);
+			g.state.cursor_y += (int)y_height;
 			put_char(SPECIAL_CODEPOINT_BLOCK);
+			g.state.cursor_y -= (int)y_height;
 			restore();
 		}
 
 		if (cp == 0) continue;
 
 		if (cp == '\n') {
-			float /*ascent0,*/ descent0,   line_gap0;
-			float   ascent1, /*descent1,*/ line_gap1;
-			get_current_line_metrics(/*&ascent0*/NULL, &descent0, &line_gap0);
-			get_current_line_metrics(&ascent1, /*&descent1*/NULL, &line_gap1);
-			const float y_advance = ascent1 - descent0 + (line_gap0 + line_gap1)*.5f;
 			g.state.cursor_x = g.state.cursor_x0;
-			g.state.cursor_y += (int)ceilf(y_advance);
+			g.state.cursor_y += y_height;
 		}
 
 		set_color_splash4(splash4);
@@ -1481,14 +1527,18 @@ static void draw_code_pane(struct pane* pane)
 			g.state.cursor_y += randf(-m,m);
 			const float x0 = g.state.cursor_x;
 			const float y0 = g.state.cursor_y;
+			g.state.cursor_y += (int)y_height;
 			put_char(cp);
+			g.state.cursor_y -= (int)y_height;
 			const float dx = g.state.cursor_x - x0;
 			const float dy = g.state.cursor_y - y0;
 			restore();
 			g.state.cursor_x += dx;
 			g.state.cursor_y += dy;
 		} else {
+			g.state.cursor_y += (int)y_height;
 			put_char(cp);
+			g.state.cursor_y -= (int)y_height;
 		}
 	}
 
@@ -1514,31 +1564,40 @@ static void draw_code_pane(struct pane* pane)
 	}
 	#endif
 
+	g.state.is_dimming = 0;
+
 	if (pane->code.cpick_on) {
-		const int x0 = 40;
-		const int y0 = 40;
-		g.state.cursor_x = x0;
-		g.state.cursor_y = y0;
-		set_y_stretch_index(2);
-		set_color3f(1,1,1);
-		int red,green,blue,shake;
-		splash4_explode(pane->code.splash4_cache,&red,&green,&blue,&shake);
-		set_color_splash4(splash4_implode(red,0,0,0));
-		put_char('0'+red);
-		set_color_splash4(splash4_implode(0,green,0,0));
-		put_char('0'+green);
-		set_color_splash4(splash4_implode(0,0,blue,0));
-		put_char('0'+blue);
-		set_color_splash4(splash4_implode(3,3,3,shake));
-		put_char('0'+shake);
-		g.state.cursor_x = x0;
-		g.state.cursor_y = y0+30;
-		set_color_splash4(splash4_implode(red,green,blue,shake));
-		const int comp = pane->code.splash4_comp;
-		for (int i=0; i<4; ++i) {
-			put_char(i==comp?'^':' ');
+		assert(arrlen(caret_coord_arr) == (2*num_carets));
+		for (int i=0; i<num_carets; ++i) {
+			const int cx = caret_coord_arr[i*2];
+			const int cy = caret_coord_arr[i*2+1];
+
+			const int x0 = cx;
+			const int y0 = cy;
+			g.state.cursor_x = x0;
+			g.state.cursor_y = y0;
+			set_y_stretch_index(2);
+			set_color3f(1,1,1);
+			int red,green,blue,shake;
+			splash4_explode(pane->code.splash4_cache,&red,&green,&blue,&shake);
+			set_color_splash4(splash4_implode(red,0,0,0));
+			put_char('0'+red);
+			set_color_splash4(splash4_implode(0,green,0,0));
+			put_char('0'+green);
+			set_color_splash4(splash4_implode(0,0,blue,0));
+			put_char('0'+blue);
+			set_color_splash4(splash4_implode(3,3,3,shake));
+			put_char('0'+shake);
+			g.state.cursor_x = x0;
+			g.state.cursor_y = y0+30;
+			set_color_splash4(splash4_implode(red,green,blue,shake));
+			const int comp = pane->code.splash4_comp;
+			for (int i=0; i<4; ++i) {
+				put_char(i==comp?'^':' ');
+			}
 		}
 	}
+
 }
 
 static void gui_draw1(void)

@@ -322,30 +322,6 @@ static_assert(sizeof(union pword)==sizeof(uint32_t),"");
 #define PWORD_INT(v)   ((union pword){.i32=(v)})
 #define PWORD_FLOAT(v) ((union pword){.f32=(v)})
 
-static inline int val2int(struct val v, int* out_int)
-{
-	int i;
-	switch (v.type) {
-	case VAL_INT:   i=v.i32; break;
-	case VAL_FLOAT: i=(int)roundf(v.f32); break;
-	default: return 0;
-	}
-	if (out_int) *out_int=i;
-	return 1;
-}
-
-static inline int val2float(struct val v, float* out_float)
-{
-	int f;
-	switch (v.type) {
-	case VAL_INT:   f=v.i32; break;
-	case VAL_FLOAT: f=v.f32; break;
-	default: return 0;
-	}
-	if (out_float) *out_float=f;
-	return 1;
-}
-
 struct val_arr {
 	struct val* arr;
 };

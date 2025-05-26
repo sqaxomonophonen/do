@@ -83,10 +83,13 @@ struct caret {
 struct mim_state {
 	int artist_id, session_id;
 	// mim state is keyed by [artist_id,session_id]
+	// XXX the book_id/doc_id/splash4 fields are "artist-authoritative"; only
+	// the artist themselves can set these (unlike e.g. carets which can move
+	// due to document changes)
 	int book_id, doc_id;
 	uint16_t splash4;
-	uint64_t snapshotcache_offset;
 	struct caret* caret_arr;
+	uint64_t snapshotcache_offset;
 	// (update mim_state_copy() when adding arr-fields here)
 };
 

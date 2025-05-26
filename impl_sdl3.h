@@ -1,5 +1,6 @@
 #include <SDL3/SDL.h>
 #include "gui.h"
+#include "utf8.h"
 
 // this is fairly new?
 #ifndef SDLK_EXTENDED_MASK
@@ -203,6 +204,7 @@ static void handle_events()
 			if (keycode == -1 && !(event.key.key & SDLK_EXTENDED_MASK)) {
 				keycode = event.key.key;
 				assert(keycode < SPECIAL_KEY_BEGIN);
+				keycode = utf8_convert_lowercase_codepoint_to_uppercase(keycode);
 			}
 
 			gui_on_key((is_down ? KEY_IS_DOWN : 0) | keycode | mod);
