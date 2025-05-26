@@ -182,6 +182,7 @@ static inline void doc_iterator_locate(struct doc_iterator* it, struct location*
 }
 
 void gig_host(const char* dir);
+void gig_host_no_jio(void);
 void gig_unhost(void);
 void gig_maybe_setup_stub(void);
 //void gig_testsetup(void);

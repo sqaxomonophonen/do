@@ -1907,6 +1907,15 @@ void gig_host(const char* dir)
 	}
 }
 
+void gig_host_no_jio(void)
+{
+	// XXX? find a better solution, or?
+	memset(&gst, 0, sizeof gst);
+	gst.my_artist_id = 1; // XXX?
+	struct snapshot* ss = &gst.cool_snapshot; // XXX
+	snapshot_init(ss);
+}
+
 void gig_unhost(void)
 {
 	jio_close(gst.jio_journal);

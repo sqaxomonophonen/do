@@ -229,7 +229,8 @@ int main(int argc, char** argv)
 
 	gl_init();
 	common_main_init();
-	gig_host(arg_dir ? arg_dir : "."); // XXX?!
+	//gig_host(arg_dir ? arg_dir : "."); // XXX?!
+	gig_host_no_jio();
 	gig_maybe_setup_stub();
 	gui_init();
 	emscripten_wasm_worker_post_function_v(emscripten_malloc_wasm_worker(1L<<20), gig_thread_run);
