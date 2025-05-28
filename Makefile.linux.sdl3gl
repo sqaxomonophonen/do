@@ -6,5 +6,6 @@ LDFLAGS+=$(shell pkg-config --libs $(PKGS))
 ARTIFACT="do"
 OBJS+=main_sdl3gl.o
 
-include Makefile.inc.gui
-include Makefile.inc.common
+include MKinclude.gui
+include MKinclude.io
+include MKinclude.common

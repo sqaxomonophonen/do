@@ -55,14 +55,22 @@ int io_close(int file_id);
 
 int io_pread(int file_id, void* ptr, int64_t count, int64_t offset);
 
+int io_listen_tcp(int bind_port, int port_id, io_echo);
+// start listening on :bind_port (TODO addr?).
+// connections can be received on the port_id where the echo is what you set it
+// to, and status is the file id for the new connection
+
+void io_addr(int file_id);
+
 int io_port_create(void);
 int io_port_poll(int port_id, struct io_event*);
 
+void io_port_read(int port_id, io_echo echo, int file_id, void* ptr, int64_t count);
 void io_port_pread(int port_id, io_echo echo, int file_id, void* ptr, int64_t count, int64_t offset);
 void io_port_pwrite(int port_id, io_echo echo, int file_id, void* ptr, int64_t count, int64_t offset);
 
 void io_init(void);
-void io_tick(void);
+int io_tick(void);
 
 #define IO_H
 #endif

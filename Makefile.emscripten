@@ -20,5 +20,5 @@ LDFLAGS+=-sEXPORTED_FUNCTIONS=_main,_handle_text_input,_handle_file_drop,_set_dr
 ARTIFACT="do.js"
 OBJS+=main_emscripten.o
 
-include Makefile.inc.gui
-include Makefile.inc.common
+include MKinclude.gui
+include MKinclude.common

@@ -1346,9 +1346,11 @@ static void snapshot_spool_ex(struct snapshot* snapshot, uint8_t* data, int num_
 			} else {
 				vmie_reset(prg);
 				vmie_run();
+				#if 0
 				const char* err = mie_error();
 				if (err != NULL) printf("ERR: %s\n", err);
 				vmie_dump_stack();
+				#endif
 				mie_program_free(prg);
 			}
 		}

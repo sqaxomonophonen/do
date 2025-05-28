@@ -5,5 +5,5 @@ LDFLAGS+=-L/usr/local/lib -lSDL3 -lGL
 ARTIFACT="do"
 OBJS+=main_sdl3gl.o
 
-include Makefile.inc.gui
-include Makefile.inc.common
+include MKinclude.gui
+include MKinclude.common
