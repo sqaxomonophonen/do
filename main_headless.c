@@ -17,7 +17,11 @@ int64_t get_nanoseconds(void)
 int main(int argc, char** argv)
 {
 	parse_args(argc, argv);
-	common_main_init();
+	run_selftest();
+	io_init();
+	jio_init();
+	mie_thread_init();
+	gig_init();
 	for (;;) {
 		gig_thread_tick();
 		sleep_nanoseconds(3000000L); // 3ms

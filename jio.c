@@ -1,18 +1,26 @@
-#include <fcntl.h>
-#include <unistd.h>
-#include <errno.h>
-#include <threads.h>
-#include <stdatomic.h>
+//#include <fcntl.h>
+//#include <unistd.h>
+//#include <errno.h>
+//#include <threads.h>
+//#include <stdatomic.h>
 
 #include "jio.h"
 #include "main.h"
 #include "stb_ds_sysalloc.h"
 
+struct inflight {
+	uint32_t tail;
+	unsigned is_done :1;
+};
+
 struct jio {
-	int fd;
+	//int fd;
 	// underlying file descriptor
 
-	_Atomic(int) error;
+	int file_id;
+	int io_port_id;
+
+	int error;
 	// negative if an error occurred
 
 	int64_t filesize;
@@ -20,19 +28,8 @@ struct jio {
 	// available immediately after jio_append(). used from client thread.
 
 	int64_t filesize0;
-	int64_t appended;
-	// filesize0 is the size of the file when it was opened. appended is how
-	// much data has been added to the ringbuf since opening. in combination
-	// this is used to map the ringbuf to actual file positions (useful for
-	// jio_pread()ing directly from ringbuf)
 
-	int64_t disk_cursor;
-	// where data is being written to. can also be regarded as a "delayed
-	// filesize" (matches filesize when no writes are pending). used in io
-	// thread.
-
-	_Atomic(unsigned) head;
-	_Atomic(unsigned) tail;
+	unsigned head, tail;
 	// head/tail cursors for ringbuf. these should be able to wrap around (XXX
 	// is this tested&verified?)
 
@@ -40,125 +37,75 @@ struct jio {
 	uint8_t* ringbuf;
 	// ring buffer size and storage
 
-	int num_block_sleeps;
+	//int num_block_sleeps;
+
+	struct inflight* inflight_arr;
+	unsigned tag;
 };
 
 static struct {
-	struct jio** jio_arr;
-	mtx_t jio_arr_mutex;
+	unsigned tag_sequence;
 } g;
 
+#if 0
+static struct {
+	_Atomic(unsigned) tag_sequence;
+	struct jio** jio_arr;
+	mtx_t jio_arr_mutex;
+	//_Atomic(unsigned) inflight_sequence;
+	//struct port_ref* port_ref_arr;
+} g;
+#endif
+
+#if 0
 static void block_sleep(struct jio* jio)
 {
 	if (jio != NULL) ++jio->num_block_sleeps;
 	sleep_nanoseconds(100000L); // 100µs
 }
+#endif
 
-const char* jio_error_to_string(int error)
-{
-	switch (error) {
-	#define X(ENUM,MSG,_ID) case ENUM: return #MSG;
-	LIST_OF_JIO_ERRORS
-	#undef X
-	default: return NULL;
-	}
-}
-
-struct jio* jio_open(const char* path, enum jio_open_mode mode, int ringbuf_size_log2, int* out_error)
+struct jio* jio_open(const char* path, enum io_open_mode mode, int io_port_id, int ringbuf_size_log2, int* out_error)
 {
 	assert((0 <= ringbuf_size_log2) && (ringbuf_size_log2 <= 30));
 
-	int oflags;
-	int omode = 0;
-	switch (mode) {
-
-	case JIO_OPEN: {
-		oflags = (O_RDWR);
-	}	break;
-
-	case JIO_OPEN_OR_CREATE: {
-		oflags = (O_RDWR | O_CREAT);
-		omode = 0666;
-	}	break;
-
-	case JIO_CREATE: {
-		oflags = (O_RDWR | O_CREAT | O_EXCL);
-		omode = 0666;
-	}	break;
-
-	default: assert(!"unhandled mode");
-
-	}
-	const int fd = open(path, oflags, omode);
-	if (fd == -1) {
-		int err = JIO_ERROR;
-		switch (errno) {
-		case EACCES: err = JIO_NOT_PERMITTED  ; break;
-		case EEXIST: err = JIO_ALREADY_EXISTS ; break;
-		case ENOENT: err = JIO_NOT_FOUND      ; break;
-		}
-		if (out_error) *out_error = err;
-		return NULL;
-	}
-
-	const off_t o = lseek(fd, 0, SEEK_END);
-	if (o < 0) {
-		(void)close(fd);
-		if (out_error) *out_error = JIO_ERROR;
+	int64_t filesize;
+	const int file_id = io_open(path, mode, &filesize);
+	if (file_id < 0) {
+		if (out_error) *out_error = file_id;
 		return NULL;
 	}
 
 	struct jio* jio = calloc(1, sizeof *jio);
-	jio->fd = fd;
-	jio->filesize = o;
-	jio->filesize0 = o;
-	jio->disk_cursor = o;
+	jio->io_port_id = io_port_id;
+	jio->file_id = file_id;
+	jio->filesize = filesize;
+	jio->filesize0 = filesize;
 	jio->ringbuf_size_log2 = ringbuf_size_log2;
 	jio->ringbuf = calloc(1L << jio->ringbuf_size_log2, sizeof *jio->ringbuf);
-
-	assert(thrd_success == mtx_lock(&g.jio_arr_mutex));
-	arrput(g.jio_arr, jio);
-	assert(thrd_success == mtx_unlock(&g.jio_arr_mutex));
+	jio->tag = ++g.tag_sequence;
 
 	return jio;
 }
 
 int jio_close(struct jio* jio)
 {
-	// wait for pending writes to finish (or an error to occur)
+	if (jio->error < 0) return jio->error;
 	const unsigned head = jio->head;
-	while ((atomic_load(&jio->tail) != head) && (atomic_load(&jio->error) == 0)) {
-		block_sleep(jio);
-	}
+	if (jio->tail != head) return IO_PENDING;
 
+	const int e = io_close(jio->file_id);
 	int has_error = 0;
-	if (atomic_load(&jio->error) != 0) has_error = 1;
-
-	// close file descriptor
-	const int e = close(jio->fd);
-	if (e == -1) {
-		fprintf(stderr, "WARNING: close-error: %s\n", strerror(errno));
+	if (e < 0) {
+		fprintf(stderr, "WARNING: close-error: %s\n", io_error_to_string(e));
 		has_error = 1;
 	}
 
-	// remove jio from jio_arr
-	assert(thrd_success == mtx_lock(&g.jio_arr_mutex));
-	const int num = arrlen(g.jio_arr);
-	int did_remove = 0;
-	for (int i=0; i<num; ++i) {
-		if (g.jio_arr[i]->fd == jio->fd) {
-			arrdel(g.jio_arr, i);
-			did_remove = 1;
-			break;
-		}
-	}
-	assert(did_remove);
-	assert(thrd_success == mtx_unlock(&g.jio_arr_mutex));
-
 	free(jio->ringbuf);
+	arrfree(jio->inflight_arr);
 	free(jio);
 
-	return has_error ? JIO_ERROR : 0;
+	return has_error ? IO_ERROR : 0;
 }
 
 int64_t jio_get_size(struct jio* jio)
@@ -166,87 +113,76 @@ int64_t jio_get_size(struct jio* jio)
 	return jio->filesize;
 }
 
-void jio_append(struct jio* jio, const void* ptr, int64_t size)
+int jio_append(struct jio* jio, const void* ptr, int64_t size)
 {
 	// ignore writes if an error has been signalled
-	if (atomic_load(&jio->error) < 0) return;
-
-	if (size == 0) return;
+	if (jio->error < 0) return jio->error;
+	if (size == 0) return 0;
 	assert(size>0);
 	const int ringbuf_size_log2 = jio->ringbuf_size_log2;
 	const int64_t ringbuf_size = (1L << ringbuf_size_log2);
 	assert((size <= ringbuf_size) && "data does not fit in ringbuf");
 	const unsigned head = jio->head;
 	const unsigned new_head = (head + size);
-	while ((new_head - atomic_load(&jio->tail)) > ringbuf_size) {
-		// block until there's room in the ringbuf
-		block_sleep(jio);
+
+	if ((new_head - jio->tail) > ringbuf_size) {
+		jio->error = IO_BUFFER_FULL;
+		return jio->error;
 	}
 
 	const unsigned cycle0 = (head         >> ringbuf_size_log2);
 	const unsigned cycle1 = ((new_head-1) >> ringbuf_size_log2);
 	const unsigned mask = (ringbuf_size-1);
+	const int port_id = jio->io_port_id;
+	const int file_id = jio->file_id;
 	if (cycle0 == cycle1) {
-		memcpy(&jio->ringbuf[head & mask], ptr, size);
+		void* dst = &jio->ringbuf[head & mask];
+		memcpy(dst, ptr, size);
+		io_echo echo = {
+			.ua32 = jio->tag,
+			.ub32 = new_head,
+		};
+		io_port_pwrite(port_id, echo, file_id, dst, size, jio->filesize);
+		arrput(jio->inflight_arr, ((struct inflight){ .tail = new_head }));
 	} else {
 		const unsigned remain = (cycle1 << ringbuf_size_log2) - head;
-		memcpy(&jio->ringbuf[head & mask], ptr, remain);
-		memcpy(jio->ringbuf, ptr+remain, size-remain);
+
+		void* dst0 = &jio->ringbuf[head & mask];
+		memcpy(dst0, ptr, remain);
+		const unsigned head0 = new_head - (size-remain);
+		io_echo echo0 = {
+			.ua32 = jio->tag,
+			.ub32 = head0,
+		};
+		io_port_pwrite(port_id, echo0, file_id, dst0, remain, jio->filesize);
+		arrput(jio->inflight_arr, ((struct inflight){ .tail = head0 }));
+
+		void* dst1 = jio->ringbuf;
+		memcpy(dst1, ptr+remain, size-remain);
+		const unsigned head1 = new_head;
+		io_echo echo1 = {
+			.ua32 = jio->tag,
+			.ub32 = head1,
+		};
+		io_port_pwrite(port_id, echo1, file_id, dst1, size, jio->filesize+remain);
+		arrput(jio->inflight_arr, ((struct inflight){ .tail = head1 }));
 	}
 
 	jio->filesize += size;
-	jio->appended += size;
 
-	atomic_store(&jio->head, new_head);
-}
+	jio->head = new_head;
 
-static int pwriten(int fd, const void* buf, int64_t n, int64_t offset)
-{
-	int64_t remaining = n;
-	const void* p = buf;
-	while (remaining > 0) {
-		const int64_t n = pwrite(fd, p, remaining, offset);
-		if (n == -1) {
-			if (errno == EINTR) continue;
-			return -1;
-		}
-		assert(n >= 0);
-		p += n;
-		remaining -= n;
-		offset += n;
-	}
-	assert(remaining == 0);
 	return 0;
 }
 
-static int preadn(int fd, void* buf, int64_t n, int64_t offset)
-{
-	int64_t remaining = n;
-	void* p = buf;
-	while (remaining > 0) {
-		const int64_t n = pread(fd, p, remaining, offset);
-		if (n == -1) {
-			if (errno == EINTR) continue;
-			return -1;
-		}
-		assert(n >= 0);
-		p += n;
-		remaining -= n;
-		offset += n;
-	}
-	assert(remaining == 0);
-	return 0;
-}
 
 int jio_pread(struct jio* jio, void* ptr, int64_t size, int64_t offset)
 {
 	// ignore read if an error has been signalled
-	int error = atomic_load(&jio->error);
-	if (error < 0) return error;
+	if (jio->error < 0) return jio->error;
 	if (!((0L <= offset) && ((offset+size) <= jio->filesize))) {
-		error = JIO_READ_OUT_OF_RANGE;
-		atomic_store(&jio->error, error);
-		return error;
+		jio->error = IO_READ_OUT_OF_RANGE;
+		return jio->error;
 	}
 	if (size == 0) return 0;
 
@@ -254,7 +190,7 @@ int jio_pread(struct jio* jio, void* ptr, int64_t size, int64_t offset)
 	const int64_t ringbuf_size = 1L << ringbuf_size_log2;
 	// ring buffer file position interval [rb0;rb1[
 	int64_t rb0 = jio->filesize0;
-	const int64_t rb1 = rb0 + jio->appended;
+	const int64_t rb1 = rb0 + jio->filesize;
 	{
 		const int64_t rbn = (rb1-rb0);
 		assert(rbn >= 0);
@@ -296,10 +232,9 @@ int jio_pread(struct jio* jio, void* ptr, int64_t size, int64_t offset)
 
 	if (read_from_backend) {
 		assert(rr1>rr0);
-		if (-1 == preadn(jio->fd, rrp, (rr1-rr0), rr0)) {
-			error = JIO_READ_ERROR;
-			atomic_store(&jio->error, error);
-			return error;
+		if (0 > io_pread(jio->file_id, rrp, (rr1-rr0), rr0)) {
+			jio->error = IO_READ_ERROR;
+			return jio->error;
 		}
 	}
 	if (copy_from_ringbuf) {
@@ -326,66 +261,51 @@ int jio_pread(struct jio* jio, void* ptr, int64_t size, int64_t offset)
 
 int jio_get_error(struct jio* jio)
 {
-	return atomic_load(&jio->error);
+	return jio->error;
 }
 
-int jio_get_num_block_sleeps(struct jio* jio)
+void jio_clear_error(struct jio* jio)
 {
-	return jio->num_block_sleeps;
+	jio->error = 0;
 }
 
-void jio_init(void)
-{
-	assert(thrd_success == mtx_init(&g.jio_arr_mutex, mtx_plain));
-}
 
-void jio_thread_run(void)
+int jio_ack(struct jio* jio, io_echo echo)
 {
-	int cursor = 0;
-	for (;;) {
-		int did_wrap = 0;
-		int did_work = 0;
-		struct jio* jio = NULL;
-		assert(thrd_success == mtx_lock(&g.jio_arr_mutex));
-		const int num = arrlen(g.jio_arr);
-		if (num > 0) {
-			if (cursor >= num) {
-				cursor = 0;
-				did_wrap = 1;
-			}
-			assert((0 <= cursor) && (cursor < num));
-			jio = g.jio_arr[cursor];
-			++cursor;
-		} else {
-			cursor = 0;
-		}
-		assert(thrd_success == mtx_unlock(&g.jio_arr_mutex));
-
-		if (jio != NULL) {
-			const unsigned head = atomic_load(&jio->head);
-			const unsigned tail = jio->tail;
-			if (tail != head) {
-				const int ringbuf_size_log2 = jio->ringbuf_size_log2;
-				const unsigned head_cycle = ((head-1) >> ringbuf_size_log2);
-				const unsigned tail_cycle = (tail     >> ringbuf_size_log2);
-				const unsigned ringbuf_size = 1L << ringbuf_size_log2;
-				const unsigned mask = (ringbuf_size-1);
-				const unsigned size = (head-tail);
-				if (head_cycle == tail_cycle) {
-					pwriten(jio->fd, &jio->ringbuf[tail&mask], size, jio->disk_cursor);
+	if (echo.ua32 != jio->tag) return 0;
+	int num_inflight = arrlen(jio->inflight_arr);
+	int fill = 0;
+	int match = 0;
+	for (int i=0; i<num_inflight; ++i) {
+		struct inflight* inflight = &jio->inflight_arr[i];
+		int apply = 0;
+		if (!fill) {
+			if (inflight->tail == echo.ub32) {
+				match = 1;
+				if (i == 0) {
+					assert((!inflight->is_done) && "double ack?");
+					apply = 1;
+					fill = 1;
 				} else {
-					const unsigned remain = ringbuf_size - (tail&mask);
-					assert((0 < remain) && (remain < ringbuf_size));
-					pwriten(jio->fd, &jio->ringbuf[tail&mask], remain, jio->disk_cursor);
-					pwriten(jio->fd, jio->ringbuf, size-remain, jio->disk_cursor+remain);
+					inflight->is_done = 1;
+					return 1;
 				}
-				jio->disk_cursor += size;
-				atomic_store(&jio->tail, head);
+			}
+		} else {
+			if (inflight->is_done) {
+				apply = 1;
+			} else {
+				break;
 			}
 		}
-
-		if (!did_work && ((num==0) || did_wrap)) {
-			block_sleep(NULL);
+		if (apply) {
+			jio->tail = inflight->tail;
+			assert(i == 0);
+			arrdel(jio->inflight_arr, 0);
+			--i;
+			--num_inflight;
 		}
 	}
+	assert(match);
+	return 1;
 }

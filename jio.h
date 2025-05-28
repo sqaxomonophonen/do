@@ -21,47 +21,20 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include "io.h"
 #include "leb128.h"
 #include "binary.h"
 
-enum jio_open_mode {
-	JIO_OPEN = 1,
-	JIO_OPEN_OR_CREATE,
-	JIO_CREATE,
-};
-
-#define LIST_OF_JIO_ERRORS \
-	X(JIO_ERROR             , "an error occurred"       , -21000) \
-	X(JIO_NOT_FOUND         , "file not found"          , -21001) \
-	X(JIO_ALREADY_EXISTS    , "file already exists"     , -21002) \
-	X(JIO_NOT_PERMITTED     , "operation not permitted" , -21003) \
-	X(JIO_READ_ERROR        , "read error"              , -21004) \
-	X(JIO_READ_OUT_OF_RANGE , "read out of range"       , -21005)
-
-enum jio_error {
-	#define X(ENUM,_MSG,ID) ENUM=ID,
-	LIST_OF_JIO_ERRORS
-	#undef X
-};
 struct jio;
 
-const char* jio_error_to_string(int error);
-// returns static error string for error id, or NULL if not one of the ones in
-// the LIST_OF_JIO_ERRORS X macros
-
-static inline const char* jio_error_to_string_safe(int error)
-{
-	const char* s = jio_error_to_string(error);
-	return s ? s : "(not a jio error)";
-}
-
-struct jio* jio_open(const char* path, enum jio_open_mode, int ringbuf_size_log2, int* out_error);
+struct jio* jio_open(const char* path, enum io_open_mode, int io_port_id, int ringbuf_size_log2, int* out_error);
 int jio_close(struct jio*);
 int64_t jio_get_size(struct jio*);
-void jio_append(struct jio*, const void* ptr, int64_t size);
+int jio_append(struct jio*, const void* ptr, int64_t size);
 int jio_pread(struct jio*, void* ptr, int64_t size, int64_t offset);
 int jio_get_error(struct jio*);
-int jio_get_num_block_sleeps(struct jio*);
+void jio_clear_error(struct jio*);
+int jio_ack(struct jio*, io_echo);
 
 static inline void jio_append_u8(struct jio* jio, uint8_t v)
 {
@@ -166,9 +139,6 @@ static inline uint16_t jio_ppread_leu16(struct jio* jio, int64_t* offset)
 	const uint8_t* p = b;
 	return leu16_pdecode(&p);
 }
-
-void jio_init(void);
-void jio_thread_run(void);
 
 #define JIO_H
 #endif

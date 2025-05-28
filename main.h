@@ -18,12 +18,5 @@ int64_t get_nanoseconds_epoch(void);
 
 void sleep_nanoseconds(int64_t);
 
-static inline void common_main_init(void)
-{
-	run_selftest();
-	mie_thread_init();
-	gig_init();
-}
-
 #define MAIN_H
 #endif

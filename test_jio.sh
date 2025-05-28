@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -e
-cc -O0 -g -Wall allocator.c stb_ds.c jio.c test_jio.c -o _test_jio
+cc -O0 -g -Wall allocator.c stb_ds.c io.c jio.c test_jio.c -o _test_jio
 DIR=__jiotestdir
 rm -rf $DIR
 mkdir $DIR

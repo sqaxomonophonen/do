@@ -7,6 +7,7 @@
 #include "stb_ds_sysalloc.h"
 
 #include "main.h"
+#include "io.h"
 #include "jio.h"
 #include "arg.h"
 
@@ -62,16 +63,9 @@ static void housekeep_our_windows(void)
 static int io_thread_run(void* usr)
 {
 	(void)usr;
-	jio_thread_run();
-	return 0;
-}
-
-static int gig_thread_run(void* usr)
-{
-	(void)usr;
 	for (;;) {
-		gig_thread_tick();
-		sleep_nanoseconds(3000000L); // 3ms
+		io_tick();
+		sleep_nanoseconds(500000L); // 500µs
 	}
 	return 0;
 }
@@ -121,12 +115,14 @@ int main(int argc, char** argv)
 	printf("                GL_RENDERER: %s\n", glGetString(GL_RENDERER));
 
 	gl_init();
-	common_main_init();
+	run_selftest();
+	io_init();
+	mie_thread_init();
+	gig_init();
 	gig_host(arg_dir ? arg_dir : "."); // XXX?!
 	gig_maybe_setup_stub();
 	gui_init();
 	SDL_DetachThread(SDL_CreateThread(io_thread_run, "io", NULL));
-	SDL_DetachThread(SDL_CreateThread(gig_thread_run, "gig", NULL));
 
 	while (!g0.exiting && get_num_windows() > 0) {
 		gui_begin_frame();

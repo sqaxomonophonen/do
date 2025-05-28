@@ -39,7 +39,11 @@ void sleep_nanoseconds(int64_t ns)
 
 static int io_thread(void* usr)
 {
-	jio_thread_run();
+	for (;;) {
+		jio_tick();
+		io_tick();
+		sleep_nanoseconds(500000L); // 500µs
+	}
 	return 0;
 }
 

@@ -1235,7 +1235,7 @@ static int keyboard_input_area(struct rect* r, int focus_id)
 
 void gui_begin_frame(void)
 {
-	gig_spool();
+	gig_tick();
 	update_fps();
 	arrreset(g.key_buffer_arr);
 	arrreset(g.text_buffer_arr);
@@ -1696,8 +1696,6 @@ void gui_drop_file(const char* name, size_t num_bytes, uint8_t* bytes)
 
 // TODO
 
-// - proper line spacing approach? fix "y stretch"?
-
 // - secondary atlas for dynamic software rendered graphics (e.g. inline curves
 //   in document); all entries have a resource id and dimensions (the same
 //   resource id can be rendered at different scales), plus blur variants for
@@ -1708,3 +1706,4 @@ void gui_drop_file(const char* name, size_t num_bytes, uint8_t* bytes)
 //   atlas bigger and try again. consider blitting graphics from the old atlas
 //   when rebuilding it. also, resource are proably "immutable", so resource
 //   edits mean new resource ids?
+

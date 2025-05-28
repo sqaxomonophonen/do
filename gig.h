@@ -188,8 +188,7 @@ void gig_maybe_setup_stub(void);
 //void gig_testsetup(void);
 void gig_init(void);
 void gig_set_journal_snapshot_growth_threshold(int);
-void gig_spool(void);
-void gig_thread_tick(void);
+void gig_tick(void);
 void gig_selftest(void);
 
 void mim_set_latency(double mu, double sigma);

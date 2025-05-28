@@ -230,7 +230,10 @@ int main(int argc, char** argv)
 	#endif
 
 	gl_init();
-	common_main_init();
+	run_selftest();
+	jio_init();
+	mie_thread_init();
+	gig_init();
 	//gig_host(arg_dir ? arg_dir : "."); // XXX?!
 	gig_host_no_jio();
 	gig_maybe_setup_stub();
