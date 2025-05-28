@@ -1,8 +1,8 @@
 CFLAGS+=-O0 -g
+#CFLAGS+=-Os
 #CFLAGS+=-O2
 #CFLAGS+=-Os -g
 #CFLAGS+=-O3
-#CFLAGS+=-Os
 CFLAGS+=-Wall
 #CFLAGS+=-Wall
 

@@ -23,6 +23,7 @@ const char* io_error_to_string(int error)
 
 enum submission_type {
 	SUBMISSION_READ=1,
+	SUBMISSION_WRITE,
 	SUBMISSION_PREAD,
 	SUBMISSION_PWRITE,
 	// TODO send/recv?
@@ -39,12 +40,16 @@ struct submission {
 			int64_t count;
 		} read;
 		struct {
+			const void* ptr;
+			int64_t count;
+		} write;
+		struct {
 			void* ptr;
 			int64_t count;
 			int64_t offset;
 		} pread;
 		struct {
-			void* ptr;
+			const void* ptr;
 			int64_t count;
 			int64_t offset;
 		} pwrite;
@@ -323,6 +328,20 @@ void io_port_read(int port_id, io_echo echo, int file_id, void* ptr, int64_t cou
 	submit(file_id, &s);
 }
 
+void io_port_write(int port_id, io_echo echo, int file_id, const void* ptr, int64_t count)
+{
+	struct submission s = {
+		.port_id = port_id,
+		.type = SUBMISSION_WRITE,
+		.echo = echo,
+		.write = {
+			.ptr = ptr,
+			.count = count,
+		},
+	};
+	submit(file_id, &s);
+}
+
 void io_port_pread(int port_id, io_echo echo, int file_id, void* ptr, int64_t count, int64_t offset)
 {
 	struct submission s = {
@@ -338,7 +357,7 @@ void io_port_pread(int port_id, io_echo echo, int file_id, void* ptr, int64_t co
 	submit(file_id, &s);
 }
 
-void io_port_pwrite(int port_id, io_echo echo, int file_id, void* ptr, int64_t count, int64_t offset)
+void io_port_pwrite(int port_id, io_echo echo, int file_id, const void* ptr, int64_t count, int64_t offset)
 {
 	struct submission s = {
 		.port_id = port_id,
@@ -430,6 +449,7 @@ int io_tick(void)
 				case SUBMISSION_PREAD:
 					events |= POLLIN;
 					break;
+				case SUBMISSION_WRITE:
 				case SUBMISSION_PWRITE:
 					events |= POLLOUT;
 					break;
@@ -528,6 +548,7 @@ int io_tick(void)
 						}
 						break;
 
+					case SUBMISSION_WRITE:
 					case SUBMISSION_PWRITE:
 						if (revents & POLLOUT) {
 							do_fire = 1;
@@ -584,6 +605,10 @@ int io_tick(void)
 
 		case SUBMISSION_READ: {
 			fire->status = read(posix_fd, sub->read.ptr, sub->read.count);
+		}	break;
+
+		case SUBMISSION_WRITE: {
+			fire->status = write(posix_fd, sub->write.ptr, sub->write.count);
 		}	break;
 
 		case SUBMISSION_PREAD: {

@@ -66,8 +66,10 @@ int io_port_create(void);
 int io_port_poll(int port_id, struct io_event*);
 
 void io_port_read(int port_id, io_echo echo, int file_id, void* ptr, int64_t count);
+void io_port_write(int port_id, io_echo echo, int file_id, const void* ptr, int64_t count);
+
 void io_port_pread(int port_id, io_echo echo, int file_id, void* ptr, int64_t count, int64_t offset);
-void io_port_pwrite(int port_id, io_echo echo, int file_id, void* ptr, int64_t count, int64_t offset);
+void io_port_pwrite(int port_id, io_echo echo, int file_id, const void* ptr, int64_t count, int64_t offset);
 
 void io_init(void);
 int io_tick(void);
