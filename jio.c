@@ -14,11 +14,8 @@ struct inflight {
 };
 
 struct jio {
-	//int fd;
-	// underlying file descriptor
-
 	int file_id;
-	int io_port_id;
+	int port_id;
 
 	int error;
 	// negative if an error occurred
@@ -37,8 +34,6 @@ struct jio {
 	uint8_t* ringbuf;
 	// ring buffer size and storage
 
-	//int num_block_sleeps;
-
 	struct inflight* inflight_arr;
 	unsigned tag;
 };
@@ -47,25 +42,7 @@ static struct {
 	unsigned tag_sequence;
 } g;
 
-#if 0
-static struct {
-	_Atomic(unsigned) tag_sequence;
-	struct jio** jio_arr;
-	mtx_t jio_arr_mutex;
-	//_Atomic(unsigned) inflight_sequence;
-	//struct port_ref* port_ref_arr;
-} g;
-#endif
-
-#if 0
-static void block_sleep(struct jio* jio)
-{
-	if (jio != NULL) ++jio->num_block_sleeps;
-	sleep_nanoseconds(100000L); // 100µs
-}
-#endif
-
-struct jio* jio_open(const char* path, enum io_open_mode mode, int io_port_id, int ringbuf_size_log2, int* out_error)
+struct jio* jio_open(const char* path, enum io_open_mode mode, int port_id, int ringbuf_size_log2, int* out_error)
 {
 	assert((0 <= ringbuf_size_log2) && (ringbuf_size_log2 <= 30));
 
@@ -77,7 +54,7 @@ struct jio* jio_open(const char* path, enum io_open_mode mode, int io_port_id, i
 	}
 
 	struct jio* jio = calloc(1, sizeof *jio);
-	jio->io_port_id = io_port_id;
+	jio->port_id = port_id;
 	jio->file_id = file_id;
 	jio->filesize = filesize;
 	jio->filesize0 = filesize;
@@ -133,7 +110,7 @@ int jio_append(struct jio* jio, const void* ptr, int64_t size)
 	const unsigned cycle0 = (head         >> ringbuf_size_log2);
 	const unsigned cycle1 = ((new_head-1) >> ringbuf_size_log2);
 	const unsigned mask = (ringbuf_size-1);
-	const int port_id = jio->io_port_id;
+	const int port_id = jio->port_id;
 	const int file_id = jio->file_id;
 	if (cycle0 == cycle1) {
 		void* dst = &jio->ringbuf[head & mask];

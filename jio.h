@@ -27,7 +27,7 @@
 
 struct jio;
 
-struct jio* jio_open(const char* path, enum io_open_mode, int io_port_id, int ringbuf_size_log2, int* out_error);
+struct jio* jio_open(const char* path, enum io_open_mode, int port_id, int ringbuf_size_log2, int* out_error);
 int jio_close(struct jio*);
 int64_t jio_get_size(struct jio*);
 int jio_append(struct jio*, const void* ptr, int64_t size);
