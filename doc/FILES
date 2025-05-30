@@ -1,4 +1,3 @@
-
 ========================
 Overview of source files
 ========================
@@ -28,13 +27,18 @@ fonts
   font0.c - embedded system font
 
 utility code
-  util.h      - misc shared utility code
-  allocator.c - allocator interface and allocators
-  leb128.h    - LEB128 variable-length integer codec
-  utf8.c      - UTF-8 code
-  io.c        - I/O for files (TODO: UDP/TCP)
-  path.c      - File path handling
-  sep2dconv.c - separable 2D convolution (used for HDR blur)
+  util.h       - misc shared utility code
+  allocator.c  - allocator interface and allocators
+  leb128.h     - LEB128 variable-length integer codec
+  binary.h     - binary data codecs
+  utf8.c       - UTF-8 code
+  io.c         - I/O for files and tcp/ip (TODO: udp/ip)
+  jio.c        - journaled I/O (append-only files, roughly)
+  path.c       - File path handling
+  sep2dconv.c  - separable 2D convolution (used for HDR blur)
+  base64.h     - base64 encoder/decoder (used by WebSocket)
+  sha1.h       - SHA-1 hasher (used /only/ by WebSocket as part of RFC6455)
+  httpserver.c - HTTP/1.1 + WebSocket server (no TLS, HTTP/2+, etc)
   see also: stb_ds_sysalloc.h
 
 tests

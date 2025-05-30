@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/socket.h>
+#include <sys/sendfile.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
@@ -24,8 +25,11 @@ const char* io_error_to_string(int error)
 enum submission_type {
 	SUBMISSION_READ=1,
 	SUBMISSION_WRITE,
+	SUBMISSION_WRITEALL,
 	SUBMISSION_PREAD,
 	SUBMISSION_PWRITE,
+	SUBMISSION_SENDFILE,
+	SUBMISSION_SENDFILEALL,
 	// TODO send/recv?
 	INTERNAL_ACCEPT,
 };
@@ -44,6 +48,10 @@ struct submission {
 			int64_t count;
 		} write;
 		struct {
+			const void* ptr;
+			int64_t count;
+		} writeall;
+		struct {
 			void* ptr;
 			int64_t count;
 			int64_t offset;
@@ -53,6 +61,16 @@ struct submission {
 			int64_t count;
 			int64_t offset;
 		} pwrite;
+		struct {
+			int src_file_id;
+			int64_t count;
+			int64_t src_offset;
+		} sendfile;
+		struct {
+			int src_file_id;
+			int64_t count;
+			int64_t src_offset;
+		} sendfileall;
 	};
 };
 
@@ -68,6 +86,8 @@ struct file {
 	int posix_fd;
 	struct submission* submission_arr;
 	struct sockaddr_in addr;
+	int is_pipe_destination;
+	int num_pipe_destinations;
 };
 
 struct listen {
@@ -85,6 +105,7 @@ struct fire {
 	int posix_fd;
 	int status;
 	struct submission sub;
+	unsigned did_resub  :1;
 };
 
 static struct {
@@ -116,6 +137,9 @@ int io_open(const char* path, enum io_open_mode mode, int64_t* out_filesize)
 	int oflags;
 	int omode = 0;
 	switch (mode) {
+	case IO_OPEN_RDONLY: {
+		oflags = (O_RDONLY);
+	}	break;
 	case IO_OPEN: {
 		oflags = (O_RDWR);
 	}	break;
@@ -174,6 +198,18 @@ static int file_id_to_posix_fd(int file_id)
 {
 	return get_file(file_id)->posix_fd;
 }
+
+static struct file* get_file_by_posix_fd(int posix_fd)
+{
+	const int num_files = arrlen(g.file_arr);
+	for (int ii=0; ii<num_files; ++ii) {
+		struct file* f = &g.file_arr[ii];
+		if (f->posix_fd != posix_fd) continue;
+		return f;
+	}
+	assert(!"posix fd not found?");
+}
+
 
 int io_close(int file_id)
 {
@@ -342,6 +378,20 @@ void io_port_write(int port_id, io_echo echo, int file_id, const void* ptr, int6
 	submit(file_id, &s);
 }
 
+void io_port_writeall(int port_id, io_echo echo, int file_id, const void* ptr, int64_t count)
+{
+	struct submission s = {
+		.port_id = port_id,
+		.type = SUBMISSION_WRITEALL,
+		.echo = echo,
+		.writeall = {
+			.ptr = ptr,
+			.count = count,
+		},
+	};
+	submit(file_id, &s);
+}
+
 void io_port_pread(int port_id, io_echo echo, int file_id, void* ptr, int64_t count, int64_t offset)
 {
 	struct submission s = {
@@ -371,6 +421,37 @@ void io_port_pwrite(int port_id, io_echo echo, int file_id, const void* ptr, int
 	};
 	submit(file_id, &s);
 }
+
+void io_port_sendfile(int port_id, io_echo echo, int dst_file_id, int src_file_id, int64_t count, int64_t src_offset)
+{
+	struct submission s = {
+		.port_id = port_id,
+		.type = SUBMISSION_SENDFILE,
+		.echo = echo,
+		.sendfile = {
+			.src_file_id=src_file_id,
+			.count = count,
+			.src_offset = src_offset,
+		},
+	};
+	submit(dst_file_id, &s);
+}
+
+void io_port_sendfileall(int port_id, io_echo echo, int dst_file_id, int src_file_id, int64_t count, int64_t src_offset)
+{
+	struct submission s = {
+		.port_id = port_id,
+		.type = SUBMISSION_SENDFILEALL,
+		.echo = echo,
+		.sendfileall = {
+			.src_file_id=src_file_id,
+			.count = count,
+			.src_offset = src_offset,
+		},
+	};
+	submit(dst_file_id, &s);
+}
+
 
 int io_port_create(void)
 {
@@ -423,6 +504,8 @@ struct listenecho {
 	io_echo echo;
 };
 
+
+
 int io_tick(void)
 {
 	static struct pollfd* pollfd_arr;
@@ -437,34 +520,95 @@ int io_tick(void)
 	G_LOCK();
 	{
 		const int num_files = arrlen(g.file_arr);
+
+		// clear "piping info" on files (sendfile)
+		for (int i=0; i<num_files; ++i) {
+			struct file* file = &g.file_arr[i];
+			file->is_pipe_destination = 0;
+			file->num_pipe_destinations = 0;
+		}
+
+		// figure out which files are sendfile sources
 		for (int i=0; i<num_files; ++i) {
 			struct file* file = &g.file_arr[i];
 			const int num_subs = arrlen(file->submission_arr);
-			if (num_subs == 0) continue;
-			int events = 0;
 			for (int ii=0; ii<num_subs; ++ii) {
 				struct submission* sub = &file->submission_arr[ii];
+				int src_file_id = -1;
+
 				switch (sub->type) {
-				case SUBMISSION_READ:
-				case SUBMISSION_PREAD:
-					events |= POLLIN;
-					break;
-				case SUBMISSION_WRITE:
-				case SUBMISSION_PWRITE:
-					events |= POLLOUT;
-					break;
-				default: assert(!"unhandled submission type");
+				case SUBMISSION_SENDFILE    : src_file_id = sub->sendfile.src_file_id    ; break;
+				case SUBMISSION_SENDFILEALL : src_file_id = sub->sendfileall.src_file_id ; break;
+				default: break;
+				}
+
+				if (src_file_id >= 0) {
+					file->is_pipe_destination = 1;
+					++get_file(src_file_id)->num_pipe_destinations;
 				}
 			}
-
-			if (events == 0) continue;
-
-			arrput(pollfd_arr, ((struct pollfd) {
-				.fd = file->posix_fd,
-				.events = events,
-			}));
 		}
 
+		// populate pollfd data for poll(2). 3 categories:
+		// - common I/O; reads, writes...
+		// - pipes between files
+		// - tcp/ip sockets listening for new connections
+		for (int i=0; i<num_files; ++i) {
+			struct file* file = &g.file_arr[i];
+			int events = 0;
+			if (file->num_pipe_destinations) {
+				events |= POLLIN;
+				arrput(pollfd_arr, ((struct pollfd) {
+					.fd = file->posix_fd,
+					.events = events,
+				}));
+			}
+
+			const int num_subs = arrlen(file->submission_arr);
+			if (num_subs == 0) continue;
+
+			// handle common I/O
+			for (int ii=0; ii<num_subs; ++ii) {
+				struct submission* sub = &file->submission_arr[ii];
+				int add=0;
+
+				switch (sub->type) {
+
+				case SUBMISSION_READ:
+				case SUBMISSION_PREAD:
+					add = POLLIN;
+					break;
+
+				case SUBMISSION_WRITE:
+				case SUBMISSION_WRITEALL:
+				case SUBMISSION_PWRITE:
+				case SUBMISSION_SENDFILE:    // handling sendfile destinations here
+				case SUBMISSION_SENDFILEALL: // sources are handled above
+					add = POLLOUT;
+					break;
+
+				default: assert(!"unhandled submission type");
+				}
+
+				assert(add);
+				if (!(events & add)) {
+					if (!events) {
+						events |= add;
+						arrput(pollfd_arr, ((struct pollfd) {
+							.fd = file->posix_fd,
+							.events = events,
+						}));
+					} else {
+						events |= add;
+						struct pollfd* pf = &pollfd_arr[arrlen(pollfd_arr)-1];
+						pf->events |= add;
+						assert(pf->events == events);
+					}
+				}
+			}
+		}
+
+		// handle listening sockets
 		first_listen_index = arrlen(pollfd_arr);
 		const int num_ports = arrlen(g.port_arr);
 		for (int i=0; i<num_ports; ++i) {
@@ -483,6 +627,7 @@ int io_tick(void)
 			}
 		}
 	}
+
 	assert((0 <= first_listen_index) && (first_listen_index <= arrlen(pollfd_arr)));
 	assert(arrlen(listenecho_arr) == (arrlen(pollfd_arr) - first_listen_index));
 	G_UNLOCK();
@@ -508,84 +653,116 @@ int io_tick(void)
 
 	// convert poll() output to list of calls to make
 	G_LOCK();
-	{
-		const int num_files = arrlen(g.file_arr);
-		for (int i=0; i<num_pollfd; ++i) {
-			struct pollfd* pollfd = &pollfd_arr[i];
-			int revents = pollfd->revents;
-			assert(first_listen_index >= 0);
-			if (i < first_listen_index) {
-				assert(!(revents & POLLNVAL) && "invalid fd added?");
+	for (int i=0; i<num_pollfd; ++i) {
+		struct pollfd* pollfd = &pollfd_arr[i];
+		int revents = pollfd->revents;
+		assert(first_listen_index >= 0);
 
-				if (revents & POLLERR) {
-					assert(!"handle ERR");
-				}
-				if (revents & POLLHUP) {
-					assert(!"handle HUP");
-				}
+		if (i < first_listen_index) {
+			assert(!(revents & POLLNVAL) && "invalid fd added?");
 
-				struct file* file = NULL;
-				for (int ii=0; ii<num_files; ++ii) {
-					struct file* f = &g.file_arr[ii];
-					if (f->posix_fd != pollfd->fd) continue;
-					file = f;
+			if (revents & POLLERR) {
+				assert(!"handle ERR");
+			}
+			if (revents & POLLHUP) {
+				assert(!"handle HUP");
+			}
+
+			struct file* file = get_file_by_posix_fd(pollfd->fd);
+
+			revents &= (POLLIN | POLLOUT); // only consider these events from here on
+			int num_subs = arrlen(file->submission_arr);
+			for (int ii=0; revents && ii<num_subs; ++ii) {
+				struct submission* sub = &file->submission_arr[ii];
+				int do_fire=0;
+				switch (sub->type) {
+
+				case SUBMISSION_READ:
+				case SUBMISSION_PREAD:
+					if (revents & POLLIN) {
+						do_fire = 1;
+						revents &= ~POLLIN;
+					}
 					break;
-				}
-				assert((file != NULL) && "fd not found?!");
 
-				revents &= (POLLIN | POLLOUT); // only consider these events from here on
-				int num_subs = arrlen(file->submission_arr);
-				for (int ii=0; revents && ii<num_subs; ++ii) {
-					struct submission* sub = &file->submission_arr[ii];
-					int do_fire=0;
-					switch (sub->type) {
+				case SUBMISSION_WRITE:
+				case SUBMISSION_WRITEALL:
+				case SUBMISSION_PWRITE:
+					if (revents & POLLOUT) {
+						do_fire = 1;
+						revents &= ~POLLOUT;
+					}
+					break;
 
-					case SUBMISSION_READ:
-					case SUBMISSION_PREAD:
-						if (revents & POLLIN) {
-							do_fire = 1;
-							revents &= ~POLLIN;
+				case SUBMISSION_SENDFILE:
+					if (revents & POLLOUT) {
+						struct file* src_file = get_file(sub->sendfile.src_file_id);
+						int src_is_ready = 0;
+						for (int iii=0; iii<num_pollfd; ++iii) {
+							struct pollfd* other = &pollfd_arr[iii];
+							if (other->fd == src_file->posix_fd) {
+								if (other->revents & POLLIN) {
+									src_is_ready = 1;
+								}
+								break;
+							} 
 						}
-						break;
-
-					case SUBMISSION_WRITE:
-					case SUBMISSION_PWRITE:
-						if (revents & POLLOUT) {
+						if (src_is_ready) {
 							do_fire = 1;
 							revents &= ~POLLOUT;
 						}
-						break;
-
-					default: assert(!"unhandled submission type");
 					}
+					break;
 
-					if (!do_fire) continue;
+				case SUBMISSION_SENDFILEALL:
+					if (revents & POLLOUT) {
+						struct file* src_file = get_file(sub->sendfileall.src_file_id);
+						int src_is_ready = 0;
+						for (int iii=0; iii<num_pollfd; ++iii) {
+							struct pollfd* other = &pollfd_arr[iii];
+							if (other->fd == src_file->posix_fd) {
+								if (other->revents & POLLIN) {
+									src_is_ready = 1;
+								}
+								break;
+							} 
+						}
+						if (src_is_ready) {
+							do_fire = 1;
+							revents &= ~POLLOUT;
+						}
+					}
+					break;
 
-					arrput(fire_arr, ((struct fire) {
-						.posix_fd = file->posix_fd,
-						.sub = *sub,
-					}));
-					arrdel(file->submission_arr, ii);
-					--ii;
-					--num_subs;
+				default: assert(!"unhandled submission type");
 				}
-			} else { // i >= first_listen_index
 
-				if (revents & POLLIN) {
-					const int il = i - first_listen_index;
-					const int num_listenecho = arrlen(listenecho_arr);
-					assert((0 <= il) && (il < num_listenecho));
-					struct listenecho* le = &listenecho_arr[il];
+				if (!do_fire) continue;
 
-					arrput(fire_arr, ((struct fire) {
-						.posix_fd = pollfd->fd,
-						.sub = {
-							.type = INTERNAL_ACCEPT,
-							.port_id = le->port_id,
-							.echo = le->echo,
-						},
-					}));
-				}
+				arrput(fire_arr, ((struct fire) {
+					.posix_fd = file->posix_fd,
+					.sub = *sub,
+				}));
+				arrdel(file->submission_arr, ii);
+				--ii;
+				--num_subs;
+			}
+		} else { // i >= first_listen_index
+
+			if (revents & POLLIN) {
+				const int il = i - first_listen_index;
+				const int num_listenecho = arrlen(listenecho_arr);
+				assert((0 <= il) && (il < num_listenecho));
+				struct listenecho* le = &listenecho_arr[il];
+
+				arrput(fire_arr, ((struct fire) {
+					.posix_fd = pollfd->fd,
+					.sub = {
+						.type = INTERNAL_ACCEPT,
+						.port_id = le->port_id,
+						.echo = le->echo,
+					},
+				}));
 			}
 		}
 	}
@@ -600,7 +777,9 @@ int io_tick(void)
 		struct fire* fire = &fire_arr[i];
 		const int posix_fd = fire->posix_fd;
 		struct submission* sub = &fire->sub;
+		struct submission resub;
 
+		int resub_fd=-1;
 		switch (sub->type) {
 
 		case SUBMISSION_READ: {
@@ -611,12 +790,57 @@ int io_tick(void)
 			fire->status = write(posix_fd, sub->write.ptr, sub->write.count);
 		}	break;
 
+		case SUBMISSION_WRITEALL: {
+			fire->status = write(posix_fd, sub->writeall.ptr, sub->writeall.count);
+			if (fire->status != -1) {
+				if (sub->writeall.count > fire->status) {
+					fire->did_resub=1;
+					resub_fd=posix_fd;
+					resub=*sub;
+					resub.writeall.ptr   += fire->status;
+					resub.writeall.count -= fire->status;
+				} else {
+					assert(sub->writeall.count == fire->status);
+				}
+			}
+		}	break;
+
 		case SUBMISSION_PREAD: {
 			fire->status = pread(posix_fd, sub->pread.ptr, sub->pread.count, sub->pread.offset);
+			if (fire->status != -1) {
+				assert((fire->status == sub->pread.count) && "TODO resub");
+			}
 		}	break;
 
 		case SUBMISSION_PWRITE: {
 			fire->status = pwrite(posix_fd, sub->pwrite.ptr, sub->pwrite.count, sub->pwrite.offset);
+			if (fire->status != -1) {
+				assert((fire->status == sub->pwrite.count) && "TODO resub");
+			}
+		}	break;
+
+		case SUBMISSION_SENDFILE: {
+			const int src_fd = file_id_to_posix_fd(sub->sendfile.src_file_id);
+			off_t o = sub->sendfile.src_offset;
+			assert(!"XXX0");
+			fire->status = sendfile(posix_fd, src_fd, &o, sub->sendfile.count);
+		}	break;
+
+		case SUBMISSION_SENDFILEALL: {
+			const int src_fd = file_id_to_posix_fd(sub->sendfileall.src_file_id);
+			off_t o = sub->sendfileall.src_offset;
+			fire->status = sendfile(posix_fd, src_fd, &o, sub->sendfileall.count);
+			if (fire->status != -1) {
+				if (sub->sendfileall.count > fire->status) {
+					fire->did_resub=1;
+					resub_fd=posix_fd;
+					resub=*sub;
+					resub.sendfileall.src_offset  += fire->status;
+					resub.sendfileall.count       -= fire->status;
+				} else {
+					assert(sub->sendfileall.count == fire->status);
+				}
+			}
 		}	break;
 
 		case INTERNAL_ACCEPT: {
@@ -637,6 +861,19 @@ int io_tick(void)
 		default: assert(!"unhandled submission type");
 		}
 
+		if (resub_fd>=0) {
+			struct file* file = NULL;
+			const int num_files = arrlen(g.file_arr);
+			for (int ii=0; ii<num_files; ++ii) {
+				struct file* f = &g.file_arr[ii];
+				if (f->posix_fd != resub_fd) continue;
+				file = f;
+				break;
+			}
+			assert((file != NULL) && "fd not found?!");
+			submit(file->file_id, &resub);
+		}
+
 	}
 
 	// put events into ports so io_port_poll() can find them
@@ -647,6 +884,7 @@ int io_tick(void)
 		const int num_ports = arrlen(g.port_arr);
 		for (int i=0; i<num_fire; ++i) {
 			struct fire* fire = &fire_arr[i];
+			if (fire->did_resub) continue;
 
 			if (fire->status == -1) {
 				// TODO convert status?

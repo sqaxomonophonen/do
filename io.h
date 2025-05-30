@@ -3,7 +3,8 @@
 #include <stdint.h>
 
 enum io_open_mode {
-	IO_OPEN = 1,
+	IO_OPEN_RDONLY = 1,
+	IO_OPEN,
 	IO_OPEN_OR_CREATE,
 	IO_CREATE,
 };
@@ -67,9 +68,14 @@ int io_port_poll(int port_id, struct io_event*);
 
 void io_port_read(int port_id, io_echo echo, int file_id, void* ptr, int64_t count);
 void io_port_write(int port_id, io_echo echo, int file_id, const void* ptr, int64_t count);
+void io_port_writeall(int port_id, io_echo echo, int file_id, const void* ptr, int64_t count);
 
 void io_port_pread(int port_id, io_echo echo, int file_id, void* ptr, int64_t count, int64_t offset);
 void io_port_pwrite(int port_id, io_echo echo, int file_id, const void* ptr, int64_t count, int64_t offset);
+void io_port_sendfile(int port_id, io_echo echo, int dst_file_id, int src_file_id, int64_t count, int64_t src_offset);
+void io_port_sendfileall(int port_id, io_echo echo, int dst_file_id, int src_file_id, int64_t count, int64_t src_offset);
+// sendfile is (probably?) only guaranteed to work properly when dst_file_id is
+// a socket, and src_file_id is a file.
 
 void io_init(void);
 int io_tick(void);

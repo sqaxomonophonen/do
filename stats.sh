@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 filter() {
-	grep -vF stb_ | grep -vF doc/ | grep -vF font0.c | grep -vF .gitignore
+	grep -vF stb_ | grep -vF sha1. | grep -vF doc/ | grep -vF font0.c | grep -vF .gitignore
 }
 
 echo -n "lines of code: "
