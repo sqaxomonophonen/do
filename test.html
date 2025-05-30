@@ -1,0 +1,15 @@
+<script>
+window.onload = () => {
+	console.log("A");
+	ws = new WebSocket("ws://" + location.host + "/wstest");
+	ws.onopen = () => {
+		console.log("B");
+		ws.send("hello there!");
+		ws.onmessage = (m) => {
+			console.log("received", m.data);
+		};
+	};
+};
+</script>
+
+<marquee>IT'S WORKING!</marquee>

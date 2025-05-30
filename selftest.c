@@ -29,6 +29,12 @@
 //  - Maybe support a define that replaces run_selftest() with an empty
 //    function, just in case it makes a difference on constrained platforms.
 
+//  - Growing problem: all binaries want to run_selftest(), but some tests are
+//    only relevant for some binaries. e.g. web/emscripten doesn't want to run
+//    httpserver_selftest(). possible solution: in the Makefile (or wherever)
+//    the decision is made to depend on httpserver.o; the same place could add
+//    a define we use here, e.g. `-DHAS_HTTPSERVER`. httpserver.c itself could
+//    throw an #error if HAS_HTTPSERVER is undefined
 
 #include "main.h"
 
@@ -42,15 +48,17 @@
 #include "path.h"
 
 #include "gig.h"
+#include "httpserver.h"
 
 void run_selftest(void)
 {
 	const int64_t t0 = get_nanoseconds();
-    utf8_unit_test();
-    leb128_unit_test();
+	utf8_unit_test();
+	leb128_unit_test();
 	path_unit_test();
 	gig_selftest();
 	mie_selftest();
+	httpserver_selftest();
 	const int64_t dt = get_nanoseconds() - t0;
 	printf("selftest took %.5fs\n", (double)dt * 1e-9);
 }

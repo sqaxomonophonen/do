@@ -89,6 +89,7 @@ static const char R503[]=
 enum conn_state {
 	REQUEST = 1,
 	WEBSOCKET,
+	CLOSE,
 };
 
 enum websock_state {
@@ -306,7 +307,7 @@ static int header_next(struct header_reader* hr)
 	hr->colon = colon;
 	hr->header_end = hr->p;
 	assert(*hr->p == 0);
-	++hr->p;
+	hr->p += 2;
 	return 1;
 }
 
@@ -315,6 +316,8 @@ static int case_insensitive_match(const char* s0, const char* s1, int n)
 	for (int i=0; i<n; ++i) {
 		char c0 = s0[i];
 		char c1 = s1[i];
+		assert(c0 != 0);
+		assert(c1 != 0);
 		// convert lowercase ASCII letters to uppercase:
 		if (('a' <= c0) && (c0 <= 'z')) c0 -= 32;
 		if (('a' <= c1) && (c1 <= 'z')) c1 -= 32;
@@ -344,12 +347,13 @@ static int header_csv_contains(struct header_reader* hr, const char* s)
 	const int ns = strlen(s);
 	const char* p = hr->colon;
 	assert(p != NULL);
+	++p;
 	const char* pend = hr->header_end;
 	assert(pend != NULL);
 	while (p<pend) {
 		while (p<pend && *p==' ') ++p;
 		const char* v0=p;
-		while (p<pend && *p!=',') ++p;
+		while (p<pend && *p && *p!=',') ++p;
 		const char* v1=p;
 		while (v1>hr->colon && *v1==' ') --v1;
 		if (((v1-v0) == ns) && case_insensitive_match(v0,s,ns)) {
@@ -446,9 +450,9 @@ static void serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 		err |= (p[1] != '\n');
 		if (!end_of_header) {
 			err |= (headcolon==NULL);
-			*head1 = 0; // insert NUL-terminator
+			head1[0] = 0; // insert NUL-terminator, overwriting \r
+			head1[1] = 0; // also overwrite \n
 			printf("header [%s] err=%d\n", head0, err);
-			// TODO handle header...
 		}
 		p+=2;
 	}
@@ -491,6 +495,7 @@ static void serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 			DO405();
 			return;
 		}
+
 	} else if (ROUTE("/ding/dong")) { // XXX
 		if (IS(GET)) {
 			SERVE_STATIC_AND_CLOSE(file_id, R200test);
@@ -499,6 +504,7 @@ static void serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 			DO405();
 			return;
 		}
+
 	} else if (ROUTE("/data")) {
 		if (IS(GET)) {
 			const size_t n = 1<<24;
@@ -519,6 +525,7 @@ static void serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 			DO405();
 			return;
 		}
+
 	} else if (ROUTE("/test.html")) {
 		if (IS(GET)) {
 			//SERVE_STATIC_AND_CLOSE(file_id, R200test);
@@ -545,6 +552,7 @@ static void serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 			DO405();
 			return;
 		}
+
 	} else if (ROUTE("/wstest")) {
 		if (IS(GET)) {
 			upgrade_to_websocket = 1;
@@ -552,6 +560,7 @@ static void serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 			DO405();
 			return;
 		}
+
 	} else {
 		SERVE_STATIC_AND_CLOSE(file_id, R404);
 		return;
@@ -561,34 +570,39 @@ static void serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 	#undef ROUTE
 
 	if (upgrade_to_websocket) {
-		int upgrade_ok = 0;
-		int connection_ok = 0;
-		int version_ok = 0;
-		int key_ok = 0;
+		int upgrade_ok    = -1;
+		int connection_ok = -1;
+		int version_ok    = -1;
+		int key_ok        = -1;
+
 		char sec_websocket_key[24];
 
 		while (header_next(&hr)) {
 			if (is_header(&hr, "Upgrade")) {
-				if (header_csv_contains(&hr, "WebSocket")) {
-					upgrade_ok = 1;
-				}
+				upgrade_ok = header_csv_contains(&hr, "WebSocket");
 			} else if (is_header(&hr, "Connection")) {
-				if (header_csv_contains(&hr, "Upgrade")) {
-					connection_ok = 1;
-				}
+				connection_ok = header_csv_contains(&hr, "Upgrade");
 			} else if (is_header(&hr, "Sec-WebSocket-Version")) {
-				if (header_csv_contains(&hr, "13")) {
-					version_ok = 1;
-				}
+				version_ok = header_csv_contains(&hr, "13");
 			} else if (is_header(&hr, "Sec-WebSocket-Key")) {
 				if (get_header_value_length(&hr) == sizeof sec_websocket_key) {
 					header_copy_value(&hr, sec_websocket_key);
 					key_ok = 1;
+				} else {
+					key_ok = 0;
 				}
 			}
 		}
 
-		if ((!upgrade_ok) || (!connection_ok) || (!version_ok) || (!key_ok)) {
+		#if 0
+		printf("OKs %d %d %d %d\n",
+			upgrade_ok,
+			connection_ok,
+			version_ok,
+			key_ok);
+		#endif
+
+		if ((upgrade_ok<1) || (connection_ok<1) || (version_ok<1) || (key_ok<1)) {
 			SERVE_STATIC_AND_CLOSE(file_id, R400proto);
 			return;
 		}
@@ -604,7 +618,7 @@ static void serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 		// so why are we using SHA-1 again? also, what does the "sec" in
 		// "Sec-WebSocket-Key" stand for? secondhand?
 		SHA1_Init(&sha1);
-		SHA1_Update(&sha1, (uint8_t*) sec_websocket_key, 24);
+		SHA1_Update(&sha1, (uint8_t*) sec_websocket_key, sizeof sec_websocket_key);
 		// now let's add some base64-encoded data from "Sec-WebSocket-Key"...
 		// except we haven't actually verified it's base64-encoded, because
 		// the RFC says: "It is not necessary for the server to base64-decode
@@ -623,15 +637,21 @@ static void serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 		SHA1_Final(&sha1, digest);
 
 		char accept_key[32];
-		base64_encode(accept_key, digest, sizeof digest);
+		char* p = base64_encode(accept_key, digest, sizeof digest);
+		assert(p < (accept_key + sizeof(accept_key)));
+		*p = 0;
+
 		// and base64-encode it for the sec-websocket-accept header. at this
 		// point ima little surprised we're not base64-encoding it twice but
 
-		conn_print(conn,
+		printf("accept key [%s]\n", accept_key);
+
+		conn_printf(conn,
 			"HTTP/1.1 101 Switching Protocols\r\n"
 			"Upgrade: websocket\r\n"
-			"Connection: Upgrade\r\n");
-		conn_printf(conn, "Sec-WebSocket-Accept: %s\r\n\r\n", accept_key);
+			"Connection: Upgrade\r\n"
+			"Sec-WebSocket-Accept: %s\r\n\r\n",
+			accept_key);
 		// so if "Upgrade: websocket" and more headers werent't enough, we also
 		// have to reply with this psuedo crypto nonsense. if you really want
 		// the server to "prove" you speak websocket, why not just echo the
@@ -670,7 +690,8 @@ static void serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 		// ok whatever
 		// from here on the protocol is actually pretty normal (?)
 		conn->state = WEBSOCKET;
-
+		assert(conn->websock.state == 0);
+		conn->websock.state = HEAD_FIN_RSV_OPCODE;
 		return;
 	}
 
@@ -692,7 +713,10 @@ static int websocket_read_header_u8(struct conn* conn, uint8_t b)
 		ws->cursor = 0;
 		ws->fin = !!(b&0x80);
 		const int RSV123 = b & 0x70;
-		if (RSV123) return -1; // reserved bits must be 0
+		if (RSV123) {
+			fprintf(stderr, "RSV123=%d but expected RSV123=0\n", RSV123);
+			return -1; // reserved bits must be 0
+		}
 		ws->opcode = b & 0xf;
 
 		switch (ws->opcode) {
@@ -713,6 +737,7 @@ static int websocket_read_header_u8(struct conn* conn, uint8_t b)
 			return -1;
 		default:
 			// TODO log unexpected/reserved opcode?
+			fprintf(stderr, "unexpected opcode %d\n", ws->opcode);
 			websocket_drop(conn);
 			return -1;
 		}
@@ -723,13 +748,21 @@ static int websocket_read_header_u8(struct conn* conn, uint8_t b)
 
 	case HEAD_MASK_PLEN7: {
 		ws->payload_length = 0;
-		if (b < 126) {
-			ws->payload_length = b;
+		const int mask = !!(b&0x80);
+		if (!mask) {
+			// MASK bit must always be 1 in data sent from client to server
+			fprintf(stderr, "MASK bit not set in client data\n");
+			websocket_drop(conn);
+			return -1;
+		}
+		const uint8_t pl7 = (b&0x7f);
+		if (pl7 < 126) {
+			ws->payload_length = pl7;
 			next_state = HEAD_MASKKEY;
-		} else if (b == 126) {
+		} else if (pl7 == 126) {
 			next_state = HEAD_PLEN16;
 			ws->cursor = 0;
-		} else if (b == 127) {
+		} else if (pl7 == 127) {
 			next_state = HEAD_PLEN64;
 			ws->cursor = 0;
 		} else {
@@ -800,8 +833,13 @@ static void websocket_read(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 				// on the wire."
 				p[i] ^= ws->mask_key[(o0+i)&3];
 			}
-			printf("TODO websocket num_bytes=%ld fin=%d\n", r, ws->fin);
+
+			printf("TODO websocket num_bytes=%ld fin=%d [", r, ws->fin); // TODO
+
+			for (int i=0; i<r; ++i) printf("%c", p[i]);
+			printf("]\n");
 			ws->remaining -= r;
+			p += r;
 			if (ws->remaining == 0) {
 				ws->state = HEAD_FIN_RSV_OPCODE;
 			} else {
@@ -830,25 +868,25 @@ int httpserver_tick(void)
 			if (ev.status >= 0) {
 				io_addr(ev.status);
 			}
-			const int id = alloc_conn();
-			if (id == -1) {
+			const int conn_id = alloc_conn();
+			if (conn_id == -1) {
 				SERVE_STATIC_AND_CLOSE(ev.status, R503);
 			} else {
-				struct conn* conn = get_conn(id);
+				struct conn* conn = get_conn(conn_id);
 				memset(conn, 0, sizeof *conn);
 				conn->file_id = ev.status;
 				conn->state = REQUEST;
-				uint8_t* buf = get_conn_buffer_by_id(id);
-				io_echo echo = { .i64 = id };
+				uint8_t* buf = get_conn_buffer_by_id(conn_id);
+				io_echo echo = { .i64 = conn_id };
 				io_port_read(g.port_id, echo, conn->file_id, buf, BUFFER_SIZE);
 			}
 		} else {
 			const int64_t id64 = ev.echo.i64;
 			assert((0 <= id64) && (id64 < MAX_CONN_COUNT));
-			const int id = id64;
-			struct conn* conn = get_conn(id);
+			const int conn_id = id64;
+			struct conn* conn = get_conn(conn_id);
 			const int num_bytes = ev.status;
-			uint8_t* buf = get_conn_buffer_by_id(id);
+			uint8_t* buf = get_conn_buffer_by_id(conn_id);
 			switch (conn->state) {
 			case REQUEST: {
 				serve(conn, buf, buf+num_bytes);
@@ -858,7 +896,56 @@ int httpserver_tick(void)
 			}	break;
 			default: assert(!"unhandled conn state");
 			}
+
+			if (conn->state != CLOSE) {
+				io_echo echo = { .i64 = conn_id };
+				io_port_read(g.port_id, echo, conn->file_id, buf, BUFFER_SIZE);
+			}
 		}
 	}
 	return did_work;
+}
+
+void httpserver_selftest(void)
+{
+	{
+		assert(case_insensitive_match("foo", "foo", 3));
+		assert(case_insensitive_match("foo", "Foo", 3));
+		assert(case_insensitive_match("foo", "FOO", 3));
+		assert(case_insensitive_match("fOo", "foo", 3));
+		assert(!case_insensitive_match("fOo!", "foo?", 4));
+		assert(!case_insensitive_match("aa0", "aa1", 3));
+	}
+
+	{
+		// headers have NUL'd \r\n after the initial pass which is why these
+		// headers end in \0\0
+		static char h0[] =
+		"Foo: 666\0\0"
+		"Bar: xx, yyy, zzzz\0\0"
+		;
+		struct header_reader hr = header_begin(h0, h0+sizeof(h0)-1);
+
+		assert(header_next(&hr));
+		assert(is_header(&hr, "foo"));
+		assert(is_header(&hr, "Foo"));
+		assert(!is_header(&hr, "BaR"));
+		assert(get_header_value_length(&hr) == 3);
+		assert(header_csv_contains(&hr, "666"));
+		assert(!header_csv_contains(&hr, "66"));
+		assert(!header_csv_contains(&hr, "6666"));
+		assert(!header_csv_contains(&hr, "777"));
+
+		assert(header_next(&hr));
+		assert(!is_header(&hr, "foo"));
+		assert(!is_header(&hr, "Foo"));
+		assert(is_header(&hr, "BaR"));
+		assert(header_csv_contains(&hr, "xx"));
+		assert(!header_csv_contains(&hr, "x"));
+		assert(!header_csv_contains(&hr, "xxx"));
+		assert(header_csv_contains(&hr, "yyy"));
+		assert(header_csv_contains(&hr, "zzzz"));
+
+		assert(!header_next(&hr));
+	}
 }
