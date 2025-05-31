@@ -4,9 +4,13 @@ window.onload = () => {
 	ws = new WebSocket("ws://" + location.host + "/wstest");
 	ws.onopen = () => {
 		console.log("B");
-		ws.send("hello there!");
+		function msg() {
+			ws.send("hello there!");
+			setTimeout(msg, 1000);
+		}
+		msg();
 		ws.onmessage = (m) => {
-			console.log("received", m.data);
+			console.log("received:", m.data);
 		};
 	};
 };

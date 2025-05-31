@@ -1,11 +1,13 @@
 // RFCs:
 //   RFC2616: Hypertext Transfer Protocol -- HTTP/1.1
 //   RFC6455: The WebSocket Protocol
+
 // (NOTE: RFC2616 is supposedly "obsoleted", and replaced by RFC7230 thru
 // RFC7235, and later RFC9110. If these are used to guide this implementation
 // include them in the list above. I'm currently avoiding them because RFC723x
 // splits the standard into multiple docs (whyy) and RFC9110 includes HTTP/2
-// and beyond (ew))
+// and beyond (corporate bloatware). Also, since HTTP/1.1 isn't about to die,
+// the only thing the newer RFCs can offer is corrections and clarifications?)
 
 // search this file for "ROUTE" to find the routes
 
@@ -20,7 +22,6 @@
 #include "sha1.h"
 #include "base64.h"
 #include "stb_sprintf.h"
-
 
 #define IGNORE_ECHO_TYPE (-10)
 #define LISTEN_ECHO_TYPE (-11)
@@ -162,8 +163,8 @@ enum websock_state {
 };
 
 struct websock {
-	enum websock_state state;
-	int cursor;
+	enum websock_state wstate;
+	int header_cursor;
 	int64_t payload_length;
 	int64_t remaining;
 	uint8_t mask_key[4];
@@ -172,13 +173,15 @@ struct websock {
 };
 
 struct conn {
-	enum conn_state state;
+	enum conn_state cstate;
 	int file_id;
 	int write_cursor;
 	int num_writes_pending;
 	int sendfile_src_file_id;
 	unsigned buffer_full :1;
+	unsigned enter_websocket_after_response :1;
 	unsigned inflight_sendfile :1;
+	unsigned inflight_write    :1; // TODO
 	unsigned inflight_read     :1;
 	union {
 		struct websock websock;
@@ -210,12 +213,6 @@ static int alloc_conn(void)
 	return g.next++;
 }
 
-static uint8_t* get_conn_buffer_by_id(int id)
-{
-	assert((0 <= id) && (id < MAX_CONN_COUNT));
-	return &g.buffer_storage[id << BUFFER_SIZE_LOG2];
-}
-
 static int get_conn_id_by_conn(struct conn* conn)
 {
 	int64_t id = conn - g.conns;
@@ -223,9 +220,50 @@ static int get_conn_id_by_conn(struct conn* conn)
 	return id;
 }
 
-static uint8_t* get_conn_buffer_by_conn(struct conn* conn)
+static uint8_t* get_conn_buffer_raw(struct conn* conn, int divindex, int bufdiv_log2, size_t* out_size)
 {
-	return get_conn_buffer_by_id(get_conn_id_by_conn(conn));
+	const int id = get_conn_id_by_conn(conn);
+	assert((0 <= id) && (id < MAX_CONN_COUNT));
+	uint8_t* base = &g.buffer_storage[id << BUFFER_SIZE_LOG2];
+	const int bufdiv = (1 << bufdiv_log2);
+	assert((0 <= divindex) && (divindex < bufdiv));
+	int size_log2 = (BUFFER_SIZE_LOG2 - bufdiv_log2);
+	const size_t size = 1L << size_log2;
+	if (out_size) *out_size = size;
+	return base + (divindex << size_log2);
+}
+
+#define HTTP_BUFDIV_LOG2 (0)
+// HTTP is kind of "half duplex" where the connection is either reading or
+// writing, never both at the same time, so we use the entire buffer for reads
+// or writes.
+
+#define WS_BUFDIV_LOG2 (1)
+// WebSockets are "full duplex", so the connection buffer is split into read
+// and write parts
+
+static uint8_t* get_conn_http_read_buffer(struct conn* conn, size_t* out_size)
+{
+	assert(conn->cstate == HTTP_REQUEST);
+	return get_conn_buffer_raw(conn, 0, HTTP_BUFDIV_LOG2, out_size);
+}
+
+static uint8_t* get_conn_http_write_buffer(struct conn* conn, size_t* out_size)
+{
+	assert(conn->cstate == HTTP_RESPONSE);
+	return get_conn_buffer_raw(conn, 0, HTTP_BUFDIV_LOG2, out_size);
+}
+
+static uint8_t* get_conn_ws_read_buffer(struct conn* conn, size_t* out_size)
+{
+	assert(conn->cstate == WEBSOCKET);
+	return get_conn_buffer_raw(conn, 0, WS_BUFDIV_LOG2, out_size);
+}
+
+static uint8_t* get_conn_ws_write_buffer(struct conn* conn, size_t* out_size)
+{
+	assert(conn->cstate == WEBSOCKET);
+	return get_conn_buffer_raw(conn, 1, WS_BUFDIV_LOG2, out_size);
 }
 
 static struct conn* get_conn(int id)
@@ -240,6 +278,30 @@ static void free_conn(struct conn* conn)
 	assert((0 <= id) && (id < MAX_CONN_COUNT));
 	assert(g.num_free < MAX_CONN_COUNT);
 	g.freelist[g.num_free++] = id;
+}
+
+static void conn_enter(struct conn* conn, enum conn_state state)
+{
+	assert(state > 0);
+	int no_reentry = 0;
+	switch (state) {
+	case HTTP_RESPONSE:
+		conn->write_cursor = 0;
+		no_reentry = 1;
+		break;
+	default:
+		break;
+	}
+	assert((!no_reentry || (conn->cstate != state)) && "no reentry!");
+	conn->cstate = state;
+}
+
+static int conn_can_write(struct conn* conn)
+{
+	switch (conn->cstate) {
+	case HTTP_RESPONSE: return 1;
+	default           : return 0;
+	}
 }
 
 static void conn_read(struct conn* conn, void* buf, int64_t count)
@@ -266,7 +328,7 @@ static void conn_sendfileall(struct conn* conn, int src_file_id, int64_t count, 
 
 static void conn_drop(struct conn* conn)
 {
-	conn->state = CLOSING;
+	conn_enter(conn, CLOSING);
 	io_port_close(g.port_id, echo_close(get_conn_id_by_conn(conn)), conn->file_id);
 }
 
@@ -284,9 +346,11 @@ static void serve_static(struct conn* conn, const void* data, size_t size)
 	conn_writeall(conn, data, size);
 }
 
-// use this with the "canned responses", R404 etc. assumes that sizeof(R) is
-// one larger that the response due to NUL-terminator
-#define SERVE_STATIC(CONN,R) serve_static(CONN,R,sizeof(R)-1)
+// use this with the "canned responses", R404 etc. assumes that sizeof(SS) is
+// one larger that the response due to NUL-terminator, so only use with
+// responses defined like `static char foo[] = "..."`
+#define SERVE_STATIC_AND_RETURN(CONN,SS) {serve_static(CONN,SS,sizeof(SS)-1);return;}
+#define SERVE_STATIC_CLOSE_AND_RETURN(CONN,SS) {serve_static(CONN,SS,sizeof(SS)-1);conn_enter(conn,CLOSING);return;}
 
 static int is_route(const char* route, const char* path)
 {
@@ -300,34 +364,35 @@ static int is_route(const char* route, const char* path)
 	}
 }
 
-static void conn_begin_write(struct conn* conn)
-{
-	conn->write_cursor = 0;
-}
-
 FORMATPRINTF2
 static void conn_printf(struct conn* conn, const char* fmt, ...)
 {
-	int r = (BUFFER_SIZE - conn->write_cursor);
+	assert(conn_can_write(conn));
+	size_t bufsize;
+	uint8_t* buf = get_conn_http_write_buffer(conn, &bufsize);
+	const int r = (bufsize - conn->write_cursor);
 	if (r == 0) {
 		assert(conn->buffer_full);
 		return;
 	}
 	assert(r>0);
-	char* p = (char*)(get_conn_buffer_by_conn(conn) + conn->write_cursor);
+	char* p = (char*)(buf + conn->write_cursor);
 	va_list va;
 	va_start(va, fmt);
 	const int n = stbsp_vsnprintf(p, r, fmt, va);
 	va_end(va);
 	conn->write_cursor += n;
-	if ((BUFFER_SIZE - conn->write_cursor) == 0) {
+	if ((bufsize - conn->write_cursor) == 0) {
 		conn->buffer_full = 1;
 	}
 }
 
 static void conn_print(struct conn* conn, const char* str)
 {
-	int r = (BUFFER_SIZE - conn->write_cursor);
+	assert(conn_can_write(conn));
+	size_t bufsize;
+	uint8_t* buf = get_conn_http_write_buffer(conn, &bufsize);
+	int r = (bufsize - conn->write_cursor);
 	if (r == 0) {
 		assert(conn->buffer_full);
 		return;
@@ -335,7 +400,7 @@ static void conn_print(struct conn* conn, const char* str)
 	assert(r>0);
 	int num = strlen(str);
 	if (num > r) num = r;
-	uint8_t* p = (get_conn_buffer_by_conn(conn) + conn->write_cursor);
+	uint8_t* p = (buf + conn->write_cursor);
 	memcpy(p, str, num);
 	conn->write_cursor += num;
 }
@@ -347,8 +412,12 @@ static void conn_respond(struct conn* conn)
 		conn_drop(conn);
 		return;
 	}
-	uint8_t* p = get_conn_buffer_by_conn(conn);
-	conn_writeall(conn, p, conn->write_cursor);
+	assert(conn_can_write(conn));
+	if (conn->write_cursor == 0) return;
+	size_t size;
+	uint8_t* buf = get_conn_http_write_buffer(conn, &size);
+	assert(conn->write_cursor <= size);
+	conn_writeall(conn, buf, conn->write_cursor);
 }
 
 static void serve405(struct conn* conn, int allow_method_set)
@@ -478,18 +547,16 @@ static void header_copy_value(struct header_reader* hr, char* dst)
 }
 
 // parses HTTP/1.1 request between pstart/pend. the memory is modified.
-static enum conn_state http_serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
+static void http_serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 {
-	assert(conn->state == HTTP_REQUEST);
+	assert(conn->cstate == HTTP_REQUEST);
 
-	// skip past method
+	// parse method ([GET] /path/to/resource HTTP/1.1\r\n)
 	uint8_t* p=pstart;
 	uint8_t* method0=p;
 	while (p<pend && *p>' ') ++p;
 	int err = (*p != ' ');
 	uint8_t* method1=p;
-
-	// parse method
 	enum http_method method = UNKNOWN;
 	#define X(ENUM) \
 	if (method==UNKNOWN) { \
@@ -502,16 +569,15 @@ static enum conn_state http_serve(struct conn* conn, uint8_t* pstart, uint8_t* p
 	LIST_OF_METHODS
 	#undef X
 
-	// skip past path
+	// read path (GET [/path/to/resource] HTTP/1.1\r\n)
 	++p;
 	uint8_t* path0=p;
 	while (p<pend && *p>' ') ++p;
 	err |= (*p != ' ');
 	uint8_t* path1=p;
 	*path1 = 0; // insert NUL-terminator
-	//const size_t plen = (path1-path0);
 
-	// match protocol ("HTTP/1.1")
+	// match protocol (GET /path/to/resource [HTTP/1.1]\r\n)
 	++p;
 	uint8_t* proto0=p;
 	while (p<(pend-1) && *p>' ') ++p;
@@ -522,13 +588,14 @@ static enum conn_state http_serve(struct conn* conn, uint8_t* pstart, uint8_t* p
 	static const char PROTO[] = "HTTP/1.1";
 	err |= ((proto1-proto0) != (sizeof(PROTO)-1) || memcmp(proto0,PROTO,proto1-proto0) != 0);
 
-	//printf("method=%d path=[%s]/%zd err=%d\n", method, path0, plen, err);
 	if (err) {
+		// client didn't send even one line of valid HTTP so just drop the
+		// connection instead of bothering with a 400-response
 		conn_drop(conn);
-		return CLOSING;
+		return;
 	}
 
-	// read headers
+	// read headers (Header: Value\r\n)
 	uint8_t* headers0 = p;
 	int end_of_header = 0;
 	while ((p<(pend-1)) && !end_of_header) {
@@ -549,38 +616,30 @@ static enum conn_state http_serve(struct conn* conn, uint8_t* pstart, uint8_t* p
 			err |= (headcolon==NULL);
 			head1[0] = 0; // insert NUL-terminator, overwriting \r
 			head1[1] = 0; // also overwrite \n
-			//printf("header [%s] err=%d\n", head0, err);
 		}
 		p+=2;
 	}
 	uint8_t* headers1 = p;
 	assert(p<=pend);
 
-	if (err) {
-		SERVE_STATIC(conn, R400proto);
-		return CLOSING;
-	}
-
-	if (!end_of_header) {
-		SERVE_STATIC(conn, R413);
-		return CLOSING;
-	}
+	if (err) SERVE_STATIC_CLOSE_AND_RETURN(conn, R400proto)
+	if (!end_of_header) SERVE_STATIC_CLOSE_AND_RETURN(conn, R413)
 
 	const size_t remaining = (pend-p);
-	//printf("remaining: %zd\n", remaining);
 
-	if ((remaining > 0) && method==GET) {
-		SERVE_STATIC(conn, R400proto);
-		return CLOSING;
-	}
+	if ((remaining > 0) && method==GET) SERVE_STATIC_CLOSE_AND_RETURN(conn, R400proto)
+
+	assert((remaining == 0) && "XXX we're not handling POST/PUT bodies yet");
 
 	struct header_reader hr = header_begin((char*)headers0, (char*)headers1);
 
 	int upgrade_to_websocket = 0;
-	int method_set = 0;
+	int method_set;
+	conn_enter(conn, HTTP_RESPONSE);
+
 	#define ROUTE(R) (method_set=0 , is_route(R,(char*)path0))
 	#define IS(M)    (assert(!(method_set&(1<<(M)))), (method_set|=(1<<(M))), method==(M))
-	#define DO405_AND_RETURN {assert(method_set);serve405(conn,method_set);return HTTP_RESPONSE;}
+	#define DO405_AND_RETURN {assert(method_set);serve405(conn,method_set);return;}
 
 	if (ROUTE("/data")) {
 		if (IS(GET)) {
@@ -596,7 +655,7 @@ static enum conn_state http_serve(struct conn* conn, uint8_t* pstart, uint8_t* p
 
 			conn_respond(conn);
 			conn_writeall(conn, mem, n);
-			return HTTP_RESPONSE;
+			return;
 		} else {
 			DO405_AND_RETURN
 		}
@@ -605,10 +664,7 @@ static enum conn_state http_serve(struct conn* conn, uint8_t* pstart, uint8_t* p
 		if (IS(GET)) {
 			int64_t size;
 			const int src_file_id = io_open("test.html", IO_OPEN_RDONLY, &size);
-			if (src_file_id < 0) {
-				SERVE_STATIC(conn, R404);
-				return HTTP_RESPONSE;
-			}
+			if (src_file_id < 0) SERVE_STATIC_AND_RETURN(conn, R404)
 			assert(src_file_id >= 0);
 
 			conn_printf(conn,
@@ -620,7 +676,7 @@ static enum conn_state http_serve(struct conn* conn, uint8_t* pstart, uint8_t* p
 
 			conn_respond(conn);
 			conn_sendfileall(conn, src_file_id, size, 0);
-			return HTTP_RESPONSE;
+			return;
 		} else {
 			DO405_AND_RETURN
 		}
@@ -633,8 +689,7 @@ static enum conn_state http_serve(struct conn* conn, uint8_t* pstart, uint8_t* p
 		}
 
 	} else {
-		SERVE_STATIC(conn, R404);
-		return HTTP_RESPONSE;
+		SERVE_STATIC_AND_RETURN(conn, R404)
 	}
 	#undef DO405
 	#undef IS
@@ -674,8 +729,7 @@ static enum conn_state http_serve(struct conn* conn, uint8_t* pstart, uint8_t* p
 		#endif
 
 		if ((upgrade_ok<1) || (connection_ok<1) || (version_ok<1) || (key_ok<1)) {
-			SERVE_STATIC(conn, R400proto);
-			return CLOSING;
+			SERVE_STATIC_CLOSE_AND_RETURN(conn, R400proto)
 		}
 
 		// the hardest problem in computer science is to hold back your sarcasm
@@ -759,22 +813,32 @@ static enum conn_state http_serve(struct conn* conn, uint8_t* pstart, uint8_t* p
 		conn_respond(conn);
 		// ok whatever
 		// from here on the protocol is actually pretty normal (?)
-		assert(conn->websock.state == 0);
-		conn->websock.state = HEAD_FIN_RSV_OPCODE;
-		return WEBSOCKET;
+		assert(conn->websock.wstate == 0);
+		conn->enter_websocket_after_response = 1;
+		conn->websock.wstate = HEAD_FIN_RSV_OPCODE;
+		return;
 	}
 
 	assert(!"unreachable");
 }
 
+enum {
+	WS_CONTINUATION_FRAME = 0,
+	WS_TEXT_FRAME         = 1,
+	WS_BINARY_FRAME       = 2,
+	WS_CONNECTION_CLOSE   = 8,
+	WS_PING               = 9,
+	WS_PONG               = 10,
+};
+
 static int websocket_read_header_u8(struct conn* conn, uint8_t b)
 {
 	struct websock* ws = &conn->websock;
 	int next_state = -1;
-	switch (ws->state) {
+	switch (ws->wstate) {
 
 	case HEAD_FIN_RSV_OPCODE: {
-		ws->cursor = 0;
+		ws->header_cursor = 0;
 		ws->fin = !!(b&0x80);
 		const int RSV123 = b & 0x70;
 		if (RSV123) {
@@ -784,18 +848,18 @@ static int websocket_read_header_u8(struct conn* conn, uint8_t b)
 		ws->opcode = b & 0xf;
 
 		switch (ws->opcode) {
-		case 0: // continuation frame
+		case WS_CONTINUATION_FRAME:
 			break;
-		case 1: // text frame
+		case WS_TEXT_FRAME:
 			// TODO?
 			break;
-		case 2: // binary frame
+		case WS_BINARY_FRAME:
 			// TODO?
 			break;
-		case 8: // connection close:
+		case WS_CONNECTION_CLOSE:
 			conn_drop(conn);
 			return 0;
-		case 9: // ping
+		case WS_PING:
 			TODO(websocket ping);
 			// TODO send opcode=10 (pong) back
 			conn_drop(conn);
@@ -825,51 +889,51 @@ static int websocket_read_header_u8(struct conn* conn, uint8_t b)
 			next_state = HEAD_MASKKEY;
 		} else if (pl7 == 126) {
 			next_state = HEAD_PLEN16;
-			ws->cursor = 0;
+			ws->header_cursor = 0;
 		} else if (pl7 == 127) {
 			next_state = HEAD_PLEN64;
-			ws->cursor = 0;
+			ws->header_cursor = 0;
 		} else {
 			assert(!"unreachable");
 		}
 	}	break;
 
 	case HEAD_PLEN16: {
-		assert(ws->cursor < 2);
-		ws->payload_length |= b << 8*(1 - ws->cursor);
-		++ws->cursor;
-		if (ws->cursor == 2) {
+		assert(ws->header_cursor < 2);
+		ws->payload_length |= b << 8*(1 - ws->header_cursor);
+		++ws->header_cursor;
+		if (ws->header_cursor == 2) {
 			next_state = HEAD_MASKKEY;
-			ws->cursor = 0;
+			ws->header_cursor = 0;
 		} else {
-			assert((0 < ws->cursor) && (ws->cursor < 2));
-			next_state = ws->state;
+			assert((0 < ws->header_cursor) && (ws->header_cursor < 2));
+			next_state = ws->wstate;
 		}
 	}	break;
 
 	case HEAD_PLEN64: {
-		assert(ws->cursor < 8);
-		ws->payload_length |= (int64_t)b << 8*(7 - ws->cursor);
-		++ws->cursor;
-		if (ws->cursor == 8) {
+		assert(ws->header_cursor < 8);
+		ws->payload_length |= (int64_t)b << 8*(7 - ws->header_cursor);
+		++ws->header_cursor;
+		if (ws->header_cursor == 8) {
 			next_state = HEAD_MASKKEY;
-			ws->cursor = 0;
+			ws->header_cursor = 0;
 		} else {
-			assert((0 < ws->cursor) && (ws->cursor < 8));
-			next_state = ws->state;
+			assert((0 < ws->header_cursor) && (ws->header_cursor < 8));
+			next_state = ws->wstate;
 		}
 	}	break;
 
 	case HEAD_MASKKEY: {
-		assert((0 <= ws->cursor) && (ws->cursor < 4));
-		ws->mask_key[ws->cursor++] = b;
-		if (ws->cursor == 4) {
+		assert((0 <= ws->header_cursor) && (ws->header_cursor < 4));
+		ws->mask_key[ws->header_cursor++] = b;
+		if (ws->header_cursor == 4) {
 			next_state = PAYLOAD;
 			ws->remaining = ws->payload_length;
-			ws->cursor = 0;
+			ws->header_cursor = 0;
 		} else {
-			assert((0 < ws->cursor) && (ws->cursor < 4));
-			next_state = ws->state;
+			assert((0 < ws->header_cursor) && (ws->header_cursor < 4));
+			next_state = ws->wstate;
 		}
 	}	break;
 
@@ -877,8 +941,67 @@ static int websocket_read_header_u8(struct conn* conn, uint8_t b)
 	default:      assert(!"unhandled state");
 	}
 	assert(next_state>=0);
-	ws->state = next_state;
+	ws->wstate = next_state;
 	return 0;
+}
+
+static int websocket_send0(struct conn* conn, void* payload, int payload_size)
+{
+	assert(conn->cstate == WEBSOCKET);
+
+	size_t bufsize;
+	uint8_t* buf = get_conn_ws_write_buffer(conn, &bufsize);
+
+	int header_size=0;
+	int do_write_plen16=0;
+	int do_write_plen64=0;
+	// FIXME if payload_size is, say, 42MB, and the buffer size is less than
+	// 64kB, then we still could use the 16bit "plen16" approach, but we
+	// currently don't because payload_size is truncated later
+	if (payload_size < 126) {
+		header_size = 2;
+	} else if (payload_size < 65536) {
+		header_size = 2+2;
+		do_write_plen16 = 1;
+	} else {
+		header_size = 2+8;
+		do_write_plen64 = 1;
+	}
+	assert(header_size >= 2);
+
+	const int payload_space = bufsize - header_size;
+	assert(payload_space > 0);
+	const int fin = payload_size <= payload_space;
+
+	const int opcode = WS_TEXT_FRAME; // XXX binary?
+	buf[0] = (fin ? 0x80 : 0) + opcode;
+
+	uint8_t* p = &buf[1];
+	if (!do_write_plen16 && !do_write_plen64) {
+		assert(payload_size < 126);
+		*(p++) = payload_size;
+	} else if (do_write_plen16 && !do_write_plen64) {
+		*(p++) = 126;
+		for (int i=0; i<2; ++i) {
+			*(p++) = (payload_size >> (8*(1-i))) & 0xff;
+		}
+	} else if (do_write_plen64 && !do_write_plen16) {
+		*(p++) = 127;
+		for (int i=0; i<8; ++i) {
+			*(p++) = (payload_size >> (8*(7-i))) & 0xff;
+		}
+	} else {
+		assert(!"unreachable");
+	}
+	assert((bufsize-(p-buf)) == payload_space);
+	int num = payload_size;
+	if (num > payload_space) num = payload_space;
+	memcpy(p, payload, num);
+	p+=num;
+
+	conn_writeall(conn, buf, conn->write_cursor);
+
+	return num;
 }
 
 static void websocket_serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
@@ -886,7 +1009,7 @@ static void websocket_serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 	struct websock* ws = &conn->websock;
 	uint8_t* p = pstart;
 	while (p < pend) {
-		if (ws->state == PAYLOAD) {
+		if (ws->wstate == PAYLOAD) {
 			int64_t r = (pend - p);
 			if (r > ws->remaining) r = ws->remaining;
 			const int64_t o0 = (ws->payload_length - ws->remaining);
@@ -900,12 +1023,14 @@ static void websocket_serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 
 			printf("TODO websocket num_bytes=%ld fin=%d [", r, ws->fin); // TODO
 
+			assert(5 == websocket_send0(conn, "howdy", 5));
+
 			for (int i=0; i<r; ++i) printf("%c", p[i]);
 			printf("]\n");
 			ws->remaining -= r;
 			p += r;
 			if (ws->remaining == 0) {
-				ws->state = HEAD_FIN_RSV_OPCODE;
+				ws->wstate = HEAD_FIN_RSV_OPCODE;
 			} else {
 				assert(ws->remaining > 0);
 			}
@@ -940,19 +1065,20 @@ int httpserver_tick(void)
 				struct conn* conn = get_conn(conn_id);
 				memset(conn, 0, sizeof *conn);
 				conn->file_id = ev.status;
-				conn->state = HTTP_REQUEST;
-				uint8_t* buf = get_conn_buffer_by_id(conn_id);
-				io_port_read(g.port_id, echo_read(conn_id), conn->file_id, buf, BUFFER_SIZE);
+				conn_enter(conn, HTTP_REQUEST);
+				size_t size;
+				uint8_t* buf = get_conn_http_read_buffer(conn, &size);
+				io_port_read(g.port_id, echo_read(conn_id), conn->file_id, buf, size);
 			}
 		} else if (is_echo_close(ev.echo, &conn_id)) {
 			struct conn* conn = get_conn(conn_id);
-			assert(conn->state == CLOSING);
+			assert(conn->cstate == CLOSING);
 			free_conn(conn);
 		} else if (is_echo_read(ev.echo, &conn_id)) {
 			const int conn_id = ev.echo.ib32;
 			assert((0 <= conn_id) && (conn_id < MAX_CONN_COUNT));
 			struct conn* conn = get_conn(conn_id);
-			assert(conn->state != CLOSING);
+			assert(conn->cstate != CLOSING);
 			conn->inflight_read=0;
 			if (ev.status < 0) {
 				fprintf(stderr, "conn I/O error %d for echo %d:%d\n", ev.status, ev.echo.ia32, ev.echo.ib32);
@@ -960,47 +1086,49 @@ int httpserver_tick(void)
 				continue;
 			}
 			const int num_bytes = ev.status;
-			uint8_t* buf = get_conn_buffer_by_id(conn_id);
 
-			int read_again = 1;
-			switch (conn->state) {
+			switch (conn->cstate) {
 			case HTTP_REQUEST: {
-				conn_begin_write(conn);
-				conn->state = http_serve(conn, buf, buf+num_bytes);
-				assert(conn->state > 0);
-				if (conn->state == HTTP_RESPONSE) {
-					// don't read next request too eagerly?
-					read_again=0;
-				}
+				size_t size;
+				uint8_t* buf = get_conn_http_read_buffer(conn, &size);
+				assert(num_bytes <= size);
+				http_serve(conn, buf, buf+num_bytes);
 			}	break;
 			case WEBSOCKET: {
+				size_t size;
+				uint8_t* buf = get_conn_ws_read_buffer(conn, &size);
+				assert(num_bytes <= size);
 				websocket_serve(conn, buf, buf+num_bytes);
+				conn_read(conn, buf, size);
 			}	break;
 			default: assert(!"unhandled conn state");
 			}
-
-			if (read_again && conn->state != CLOSING) {
-				assert(!conn->inflight_read);
-				conn_read(conn, buf, BUFFER_SIZE);
-			}
+			assert((conn->cstate != HTTP_REQUEST) && "unexpected state");
 		} else if (is_echo_write(ev.echo, &conn_id)) {
 			struct conn* conn = get_conn(conn_id);
-			assert(conn->state != CLOSING);
 			assert(conn->num_writes_pending > 0);
 			--conn->num_writes_pending;
 			if (conn->num_writes_pending == 0) {
-				if (conn->state == HTTP_RESPONSE) {
+				if (conn->cstate == HTTP_RESPONSE) {
 					if (conn->inflight_sendfile) {
 						io_port_close(g.port_id, IGNORE_ECHO, conn->sendfile_src_file_id);
 						conn->sendfile_src_file_id = 0;
 						conn->inflight_sendfile = 0;
 					}
-					uint8_t* buf = get_conn_buffer_by_id(conn_id);
-					printf("con%d back to req\n", conn_id);
-					conn->state = HTTP_REQUEST;
-					if (!conn->inflight_read) {
-						conn_read(conn, buf, BUFFER_SIZE);
+					if (conn->enter_websocket_after_response) {
+						conn_enter(conn, WEBSOCKET);
+						conn->enter_websocket_after_response = 0;
+						size_t size;
+						uint8_t* buf = get_conn_ws_read_buffer(conn, &size);
+						conn_read(conn, buf, size);
+					} else {
+						conn_enter(conn, HTTP_REQUEST);
+						size_t size;
+						uint8_t* buf = get_conn_http_read_buffer(conn, &size);
+						conn_read(conn, buf, size);
 					}
+				} else {
+					assert(!conn->enter_websocket_after_response);
 				}
 			} else {
 				assert(conn->num_writes_pending > 0);
