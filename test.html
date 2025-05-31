@@ -1,11 +1,12 @@
 <script>
 window.onload = () => {
 	console.log("A");
+	let hello=0;
 	ws = new WebSocket("ws://" + location.host + "/wstest");
 	ws.onopen = () => {
 		console.log("B");
 		function msg() {
-			ws.send("hello there!");
+			ws.send("hello there! / " + (++hello));
 			setTimeout(msg, 1000);
 		}
 		msg();

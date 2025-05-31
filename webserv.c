@@ -999,7 +999,8 @@ static int websocket_send0(struct conn* conn, void* payload, int payload_size)
 	memcpy(p, payload, num);
 	p+=num;
 
-	conn_writeall(conn, buf, conn->write_cursor);
+	assert((p-buf) <= bufsize);
+	conn_writeall(conn, buf, p-buf);
 
 	return num;
 }
