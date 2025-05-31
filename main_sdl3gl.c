@@ -8,7 +8,7 @@
 
 #include "main.h"
 #include "io.h"
-#include "httpserver.h"
+#include "webserv.h"
 #include "jio.h"
 #include "arg.h"
 
@@ -66,7 +66,7 @@ static int io_thread_run(void* usr)
 	(void)usr;
 	for (;;) {
 		int did_work = 0;
-		did_work |= httpserver_tick();
+		did_work |= webserv_tick();
 		did_work |= io_tick();
 		if (!did_work) {
 			// sleep 500µs when idle-ing
@@ -123,7 +123,7 @@ int main(int argc, char** argv)
 	gl_init();
 	run_selftest();
 	io_init();
-	httpserver_init();
+	webserv_init();
 	mie_thread_init();
 	gig_init();
 	gig_host(arg_dir ? arg_dir : "."); // XXX?!

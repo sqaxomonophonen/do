@@ -16,7 +16,7 @@
 #include <assert.h>
 #include <limits.h>
 
-#include "httpserver.h"
+#include "webserv.h"
 #include "io.h"
 #include "util.h"
 #include "sha1.h"
@@ -332,7 +332,7 @@ static void conn_drop(struct conn* conn)
 	io_port_close(g.port_id, echo_close(get_conn_id_by_conn(conn)), conn->file_id);
 }
 
-void httpserver_init(void)
+void webserv_init(void)
 {
 	g.port_id = io_port_create();
 	g.listen_file_id = io_listen_tcp(6510, g.port_id, LISTEN_ECHO);
@@ -793,7 +793,7 @@ static void http_serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 		// the server that the client can speak websocket, but the server is
 		// doing all the work? the client can just send:
 		//   Sec-WebSocket-Key: adsfasdf12341243143adfa2
-		// (making it 24 chars "fools" our httpserver), as well as it can send:
+		// (making it 24 chars "fools" our webserv), as well as it can send:
 		//   Sec-WebSocket-Version: 13
 		// which it must anyway??? (a browser can send neither due to the sec-*
 		// header prefix). if the client /really/ wants to fool a
@@ -1044,7 +1044,7 @@ static void websocket_serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 	assert(p == pend);
 }
 
-int httpserver_tick(void)
+int webserv_tick(void)
 {
 	int did_work = 0;
 	struct io_event ev;
@@ -1138,7 +1138,7 @@ int httpserver_tick(void)
 	return did_work;
 }
 
-void httpserver_selftest(void)
+void webserv_selftest(void)
 {
 	{
 		assert(case_insensitive_match("foo", "foo", 3));

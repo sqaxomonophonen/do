@@ -38,7 +38,7 @@ utility code
   sep2dconv.c  - separable 2D convolution (used for HDR blur)
   base64.h     - base64 encoder/decoder (used by WebSocket)
   sha1.h       - SHA-1 hasher (used /only/ by WebSocket as part of RFC6455)
-  httpserver.c - HTTP/1.1 + WebSocket server (no TLS, HTTP/2+, etc)
+  webserv.c    - HTTP/1.1 + WebSocket server (no TLS, HTTP/2+, etc)
   see also: stb_ds_sysalloc.h
 
 tests
