@@ -328,6 +328,7 @@ static void conn_sendfileall(struct conn* conn, int src_file_id, int64_t count, 
 
 static void conn_drop(struct conn* conn)
 {
+	//printf("dropping conn in state %d\n", conn->cstate);
 	conn_enter(conn, CLOSING);
 	io_port_close(g.port_id, echo_close(get_conn_id_by_conn(conn)), conn->file_id);
 }
@@ -1024,7 +1025,9 @@ static void websocket_serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 
 			printf("TODO websocket num_bytes=%ld fin=%d [", r, ws->fin); // TODO
 
-			assert(5 == websocket_send0(conn, "howdy", 5));
+			if (conn->cstate == WEBSOCKET) {
+				assert(5 == websocket_send0(conn, "howdy", 5));
+			}
 
 			for (int i=0; i<r; ++i) printf("%c", p[i]);
 			printf("]\n");
@@ -1079,14 +1082,17 @@ int webserv_tick(void)
 			const int conn_id = ev.echo.ib32;
 			assert((0 <= conn_id) && (conn_id < MAX_CONN_COUNT));
 			struct conn* conn = get_conn(conn_id);
-			assert(conn->cstate != CLOSING);
-			conn->inflight_read=0;
-			if (ev.status < 0) {
-				fprintf(stderr, "conn I/O error %d for echo %d:%d\n", ev.status, ev.echo.ia32, ev.echo.ib32);
+			if (ev.status <= 0) {
+				if (ev.status < 0) {
+					fprintf(stderr, "conn I/O error %d for echo %d:%d\n", ev.status, ev.echo.ia32, ev.echo.ib32);
+				}
 				conn_drop(conn);
 				continue;
 			}
+			conn->inflight_read=0;
 			const int num_bytes = ev.status;
+			assert(num_bytes > 0);
+			assert(conn->cstate != CLOSING);
 
 			switch (conn->cstate) {
 			case HTTP_REQUEST: {
