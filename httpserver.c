@@ -7,6 +7,8 @@
 // splits the standard into multiple docs (whyy) and RFC9110 includes HTTP/2
 // and beyond (ew))
 
+// search this file for "ROUTE" to find the routes
+
 #include <stdio.h>
 #include <string.h>
 #include <assert.h>
@@ -19,8 +21,62 @@
 #include "base64.h"
 #include "stb_sprintf.h"
 
-#define IGNORE_ECHO (-100)
-#define LISTEN_ECHO (-101)
+
+#define IGNORE_ECHO_TYPE (-10)
+#define LISTEN_ECHO_TYPE (-11)
+
+#define IGNORE_ECHO ((io_echo) { .ia32 = IGNORE_ECHO_TYPE })
+#define LISTEN_ECHO ((io_echo) { .ia32 = LISTEN_ECHO_TYPE })
+
+static inline int is_ignore_echo(io_echo echo)
+{
+	return (echo.ia32 == IGNORE_ECHO_TYPE) && (echo.ib32 == 0);
+}
+
+static inline int is_listen_echo(io_echo echo)
+{
+	return (echo.ia32 == LISTEN_ECHO_TYPE) && (echo.ib32 == 0);
+}
+
+static inline int is_type(io_echo echo, int type, int* out_id)
+{
+	if (echo.ia32!=type) return 0;
+	if (out_id) *out_id = echo.ib32;
+	return 1;
+}
+
+enum { CLOSE=1,READ,WRITE,SENDFILE };
+
+static inline io_echo echo_write(int conn_id)
+{
+	return (io_echo) {.ia32=WRITE, .ib32=conn_id };
+}
+
+static inline int is_echo_write(io_echo echo, int* out_conn_id)
+{
+	return is_type(echo, WRITE, out_conn_id);
+}
+
+static inline io_echo echo_read(int conn_id)
+{
+	return (io_echo) {.ia32=READ, .ib32=conn_id };
+}
+
+static inline int is_echo_read(io_echo echo, int* out_conn_id)
+{
+	return is_type(echo, READ, out_conn_id);
+}
+
+static inline io_echo echo_close(int conn_id)
+{
+	return (io_echo) {.ia32=CLOSE, .ib32=conn_id };
+}
+
+static inline int is_echo_close(io_echo echo, int* out_conn_id)
+{
+	return is_type(echo, CLOSE, out_conn_id);
+}
+
 
 #define BUFFER_SIZE_LOG2     (14)
 #define BUFFER_SIZE          (1L << (BUFFER_SIZE_LOG2))
@@ -37,15 +93,25 @@ enum http_method {
 	#define X(ENUM) ENUM,
 	LIST_OF_METHODS
 	#undef X
+	METHOD_COUNT
 };
+static_assert(METHOD_COUNT <= 31, "(1<<METHOD_COUNT) close to int-overflow -- too many http methods...");
 
-// canned responses (these can be sent cheaply in a fire'n'forget manner
-// because the memory is static and we close the connection)
+// canned responses in static memory
+
+static const char R404[]=
+	"HTTP/1.1 404 Not Found\r\n"
+	"Content-Type: text/plain; charset=utf-8\r\n"
+	"Content-Length: 13\r\n"
+	"\r\n"
+	"404 Not Found"
+	;
 
 #define BLAHBLAHBLAH \
 	"Content-Type: text/plain; charset=utf-8\r\n" \
 	"Connection: close\r\n" \
 
+#if 0
 static const char R200test[]=
 	"HTTP/1.1 200 OK\r\n"
 	BLAHBLAHBLAH
@@ -53,6 +119,7 @@ static const char R200test[]=
 	"\r\n"
 	"This Is Fine!"
 	;
+#endif
 
 static const char R400proto[]=
 	"HTTP/1.1 400 Bad Request\r\n"
@@ -60,14 +127,6 @@ static const char R400proto[]=
 	"Content-Length: 32\r\n"
 	"\r\n"
 	"400 Bad Request (protocol error)"
-	;
-
-static const char R404[]=
-	"HTTP/1.1 404 Not Found\r\n"
-	BLAHBLAHBLAH
-	"Content-Length: 13\r\n"
-	"\r\n"
-	"404 Not Found"
 	;
 
 static const char R413[]=
@@ -87,9 +146,10 @@ static const char R503[]=
 	;
 
 enum conn_state {
-	REQUEST = 1,
+	HTTP_REQUEST = 1,
+	HTTP_RESPONSE,
 	WEBSOCKET,
-	CLOSE,
+	CLOSING,
 };
 
 enum websock_state {
@@ -115,7 +175,11 @@ struct conn {
 	enum conn_state state;
 	int file_id;
 	int write_cursor;
+	int num_writes_pending;
+	int sendfile_src_file_id;
 	unsigned buffer_full :1;
+	unsigned inflight_sendfile :1;
+	unsigned inflight_read     :1;
 	union {
 		struct websock websock;
 	};
@@ -132,6 +196,7 @@ static struct {
 	int next;
 } g;
 
+
 static int alloc_conn(void)
 {
 	assert((0 <= g.num_free) && (g.num_free <= MAX_CONN_COUNT));
@@ -145,26 +210,22 @@ static int alloc_conn(void)
 	return g.next++;
 }
 
-#if 0
-static void free_conn(int id)
-{
-	assert((0 <= id) && (id < MAX_CONN_COUNT));
-	assert(g.num_free < MAX_CONN_COUNT);
-	g.freelist[g.num_free++] = id;
-}
-#endif
-
 static uint8_t* get_conn_buffer_by_id(int id)
 {
 	assert((0 <= id) && (id < MAX_CONN_COUNT));
 	return &g.buffer_storage[id << BUFFER_SIZE_LOG2];
 }
 
-static uint8_t* get_conn_buffer_by_conn(struct conn* conn)
+static int get_conn_id_by_conn(struct conn* conn)
 {
 	int64_t id = conn - g.conns;
 	assert((0 <= id) && (id < MAX_CONN_COUNT));
-	return get_conn_buffer_by_id((int)id);
+	return id;
+}
+
+static uint8_t* get_conn_buffer_by_conn(struct conn* conn)
+{
+	return get_conn_buffer_by_id(get_conn_id_by_conn(conn));
 }
 
 static struct conn* get_conn(int id)
@@ -173,26 +234,59 @@ static struct conn* get_conn(int id)
 	return &g.conns[id];
 }
 
+static void free_conn(struct conn* conn)
+{
+	const int id = get_conn_id_by_conn(conn);
+	assert((0 <= id) && (id < MAX_CONN_COUNT));
+	assert(g.num_free < MAX_CONN_COUNT);
+	g.freelist[g.num_free++] = id;
+}
+
+static void conn_read(struct conn* conn, void* buf, int64_t count)
+{
+	assert(!conn->inflight_read);
+	io_port_read(g.port_id, echo_read(get_conn_id_by_conn(conn)), conn->file_id, buf, count);
+	conn->inflight_read=1;
+}
+
+static void conn_writeall(struct conn* conn, const void* ptr, int64_t count)
+{
+	io_port_writeall(g.port_id, echo_write(get_conn_id_by_conn(conn)), conn->file_id, ptr, count);
+	++conn->num_writes_pending;
+}
+
+static void conn_sendfileall(struct conn* conn, int src_file_id, int64_t count, int64_t src_offset)
+{
+	assert(conn->inflight_sendfile == 0);
+	io_port_sendfileall(g.port_id, echo_write(get_conn_id_by_conn(conn)), conn->file_id, src_file_id, count, src_offset);
+	conn->sendfile_src_file_id = src_file_id;
+	conn->inflight_sendfile = 1;
+	++conn->num_writes_pending;
+}
+
+static void conn_drop(struct conn* conn)
+{
+	conn->state = CLOSING;
+	io_port_close(g.port_id, echo_close(get_conn_id_by_conn(conn)), conn->file_id);
+}
+
 void httpserver_init(void)
 {
 	g.port_id = io_port_create();
-	io_echo echo0 = { .i64 = LISTEN_ECHO };
-	g.listen_file_id = io_listen_tcp(6510, g.port_id, echo0);
+	g.listen_file_id = io_listen_tcp(6510, g.port_id, LISTEN_ECHO);
 	g.buffer_storage = calloc(1L << (MAX_CONN_COUNT_LOG2 + BUFFER_SIZE_LOG2), sizeof *g.buffer_storage);
 	g.conns    = calloc(1L << MAX_CONN_COUNT_LOG2, sizeof *g.conns);
 	g.freelist = calloc(1L << MAX_CONN_COUNT_LOG2, sizeof *g.freelist);
 }
 
-static void serve_static_and_close(int file_id, const void* data, size_t size)
+static void serve_static(struct conn* conn, const void* data, size_t size)
 {
-	io_echo echo = { .i64 = IGNORE_ECHO };
-	io_port_writeall(g.port_id, echo, file_id, data, size);
-	// XXX ... and close?
+	conn_writeall(conn, data, size);
 }
 
 // use this with the "canned responses", R404 etc. assumes that sizeof(R) is
 // one larger that the response due to NUL-terminator
-#define SERVE_STATIC_AND_CLOSE(FILE_ID,R) serve_static_and_close(FILE_ID,R,sizeof(R)-1)
+#define SERVE_STATIC(CONN,R) serve_static(CONN,R,sizeof(R)-1)
 
 static int is_route(const char* route, const char* path)
 {
@@ -204,6 +298,11 @@ static int is_route(const char* route, const char* path)
 	} else {
 		return (path_len > route_len) && (memcmp(route,path,route_len)==0);
 	}
+}
+
+static void conn_begin_write(struct conn* conn)
+{
+	conn->write_cursor = 0;
 }
 
 FORMATPRINTF2
@@ -244,14 +343,12 @@ static void conn_print(struct conn* conn, const char* str)
 static void conn_respond(struct conn* conn)
 {
 	if (conn->buffer_full) {
-		// TODO log a warning?
-		// should always close when this happens...
+		fprintf(stderr, "buffer full\n");
+		conn_drop(conn);
+		return;
 	}
-
-	// XXX not really right
-	io_echo echo = { .i64 = IGNORE_ECHO };
 	uint8_t* p = get_conn_buffer_by_conn(conn);
-	io_port_writeall(g.port_id, echo, conn->file_id, p, conn->write_cursor);
+	conn_writeall(conn, p, conn->write_cursor);
 }
 
 static void serve405(struct conn* conn, int allow_method_set)
@@ -381,10 +478,9 @@ static void header_copy_value(struct header_reader* hr, char* dst)
 }
 
 // parses HTTP/1.1 request between pstart/pend. the memory is modified.
-static void serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
+static enum conn_state http_serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 {
-	assert(conn->state == REQUEST);
-	const int file_id = conn->file_id;
+	assert(conn->state == HTTP_REQUEST);
 
 	// skip past method
 	uint8_t* p=pstart;
@@ -413,7 +509,7 @@ static void serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 	err |= (*p != ' ');
 	uint8_t* path1=p;
 	*path1 = 0; // insert NUL-terminator
-	const size_t plen = (path1-path0);
+	//const size_t plen = (path1-path0);
 
 	// match protocol ("HTTP/1.1")
 	++p;
@@ -426,9 +522,10 @@ static void serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 	static const char PROTO[] = "HTTP/1.1";
 	err |= ((proto1-proto0) != (sizeof(PROTO)-1) || memcmp(proto0,PROTO,proto1-proto0) != 0);
 
-	printf("method=%d path=[%s]/%zd err=%d\n", method, path0, plen, err);
+	//printf("method=%d path=[%s]/%zd err=%d\n", method, path0, plen, err);
 	if (err) {
-		assert(!"TODO handle bad http; close connection?");
+		conn_drop(conn);
+		return CLOSING;
 	}
 
 	// read headers
@@ -452,7 +549,7 @@ static void serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 			err |= (headcolon==NULL);
 			head1[0] = 0; // insert NUL-terminator, overwriting \r
 			head1[1] = 0; // also overwrite \n
-			printf("header [%s] err=%d\n", head0, err);
+			//printf("header [%s] err=%d\n", head0, err);
 		}
 		p+=2;
 	}
@@ -460,21 +557,21 @@ static void serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 	assert(p<=pend);
 
 	if (err) {
-		SERVE_STATIC_AND_CLOSE(file_id, R400proto);
-		return;
+		SERVE_STATIC(conn, R400proto);
+		return CLOSING;
 	}
 
 	if (!end_of_header) {
-		SERVE_STATIC_AND_CLOSE(file_id, R413);
-		return;
+		SERVE_STATIC(conn, R413);
+		return CLOSING;
 	}
 
 	const size_t remaining = (pend-p);
 	//printf("remaining: %zd\n", remaining);
 
 	if ((remaining > 0) && method==GET) {
-		SERVE_STATIC_AND_CLOSE(file_id, R400proto);
-		return;
+		SERVE_STATIC(conn, R400proto);
+		return CLOSING;
 	}
 
 	struct header_reader hr = header_begin((char*)headers0, (char*)headers1);
@@ -483,29 +580,9 @@ static void serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 	int method_set = 0;
 	#define ROUTE(R) (method_set=0 , is_route(R,(char*)path0))
 	#define IS(M)    (assert(!(method_set&(1<<(M)))), (method_set|=(1<<(M))), method==(M))
-	#define DO405()  (assert(method_set),serve405(conn, method_set))
+	#define DO405_AND_RETURN {assert(method_set);serve405(conn,method_set);return HTTP_RESPONSE;}
 
-	if (ROUTE("/foo/bar")) { // XXX
-		if (IS(GET)) {
-			SERVE_STATIC_AND_CLOSE(file_id, R200test);
-			return;
-		} else if (IS(PUT)) {
-			assert(!"TODO PUT /foo/bar"); // XXX
-		} else {
-			DO405();
-			return;
-		}
-
-	} else if (ROUTE("/ding/dong")) { // XXX
-		if (IS(GET)) {
-			SERVE_STATIC_AND_CLOSE(file_id, R200test);
-			return;
-		} else {
-			DO405();
-			return;
-		}
-
-	} else if (ROUTE("/data")) {
+	if (ROUTE("/data")) {
 		if (IS(GET)) {
 			const size_t n = 1<<24;
 			void* mem = malloc(n);
@@ -518,20 +595,20 @@ static void serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 				n);
 
 			conn_respond(conn);
-			io_echo echo = { .i64 = IGNORE_ECHO };
-			io_port_writeall(g.port_id, echo, file_id, mem, n);
-			return;
+			conn_writeall(conn, mem, n);
+			return HTTP_RESPONSE;
 		} else {
-			DO405();
-			return;
+			DO405_AND_RETURN
 		}
 
 	} else if (ROUTE("/test.html")) {
 		if (IS(GET)) {
-			//SERVE_STATIC_AND_CLOSE(file_id, R200test);
-			//int io_open(const char* path, enum io_open_mode, int64_t* out_filesize);
 			int64_t size;
 			const int src_file_id = io_open("test.html", IO_OPEN_RDONLY, &size);
+			if (src_file_id < 0) {
+				SERVE_STATIC(conn, R404);
+				return HTTP_RESPONSE;
+			}
 			assert(src_file_id >= 0);
 
 			conn_printf(conn,
@@ -542,28 +619,22 @@ static void serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 				size);
 
 			conn_respond(conn);
-
-			// XXX not really right eh...
-			io_echo echo = { .i64 = IGNORE_ECHO };
-			io_port_sendfileall(g.port_id, echo, conn->file_id, src_file_id, size, 0);
-
-			return;
+			conn_sendfileall(conn, src_file_id, size, 0);
+			return HTTP_RESPONSE;
 		} else {
-			DO405();
-			return;
+			DO405_AND_RETURN
 		}
 
 	} else if (ROUTE("/wstest")) {
 		if (IS(GET)) {
 			upgrade_to_websocket = 1;
 		} else {
-			DO405();
-			return;
+			DO405_AND_RETURN
 		}
 
 	} else {
-		SERVE_STATIC_AND_CLOSE(file_id, R404);
-		return;
+		SERVE_STATIC(conn, R404);
+		return HTTP_RESPONSE;
 	}
 	#undef DO405
 	#undef IS
@@ -603,8 +674,8 @@ static void serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 		#endif
 
 		if ((upgrade_ok<1) || (connection_ok<1) || (version_ok<1) || (key_ok<1)) {
-			SERVE_STATIC_AND_CLOSE(file_id, R400proto);
-			return;
+			SERVE_STATIC(conn, R400proto);
+			return CLOSING;
 		}
 
 		// the hardest problem in computer science is to hold back your sarcasm
@@ -644,8 +715,7 @@ static void serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 		// and base64-encode it for the sec-websocket-accept header. at this
 		// point ima little surprised we're not base64-encoding it twice but
 
-		printf("accept key [%s]\n", accept_key);
-
+		//printf("accept key [%s]\n", accept_key);
 		conn_printf(conn,
 			"HTTP/1.1 101 Switching Protocols\r\n"
 			"Upgrade: websocket\r\n"
@@ -689,18 +759,12 @@ static void serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 		conn_respond(conn);
 		// ok whatever
 		// from here on the protocol is actually pretty normal (?)
-		conn->state = WEBSOCKET;
 		assert(conn->websock.state == 0);
 		conn->websock.state = HEAD_FIN_RSV_OPCODE;
-		return;
+		return WEBSOCKET;
 	}
 
 	assert(!"unreachable");
-}
-
-static void websocket_drop(struct conn* conn)
-{
-	assert(!"TODO DROP/WS");
 }
 
 static int websocket_read_header_u8(struct conn* conn, uint8_t b)
@@ -714,7 +778,7 @@ static int websocket_read_header_u8(struct conn* conn, uint8_t b)
 		ws->fin = !!(b&0x80);
 		const int RSV123 = b & 0x70;
 		if (RSV123) {
-			fprintf(stderr, "RSV123=%d but expected RSV123=0\n", RSV123);
+			fprintf(stderr, "RSV123=0x%x but expected RSV123=0\n", RSV123);
 			return -1; // reserved bits must be 0
 		}
 		ws->opcode = b & 0xf;
@@ -729,16 +793,16 @@ static int websocket_read_header_u8(struct conn* conn, uint8_t b)
 			// TODO?
 			break;
 		case 8: // connection close:
-			websocket_drop(conn);
+			conn_drop(conn);
 			return 0;
 		case 9: // ping
-		case 10: // pong
-			assert(!"TODO ping pong");
+			TODO(websocket ping);
+			// TODO send opcode=10 (pong) back
+			conn_drop(conn);
 			return -1;
 		default:
-			// TODO log unexpected/reserved opcode?
 			fprintf(stderr, "unexpected opcode %d\n", ws->opcode);
-			websocket_drop(conn);
+			conn_drop(conn);
 			return -1;
 		}
 
@@ -752,7 +816,7 @@ static int websocket_read_header_u8(struct conn* conn, uint8_t b)
 		if (!mask) {
 			// MASK bit must always be 1 in data sent from client to server
 			fprintf(stderr, "MASK bit not set in client data\n");
-			websocket_drop(conn);
+			conn_drop(conn);
 			return -1;
 		}
 		const uint8_t pl7 = (b&0x7f);
@@ -817,7 +881,7 @@ static int websocket_read_header_u8(struct conn* conn, uint8_t b)
 	return 0;
 }
 
-static void websocket_read(struct conn* conn, uint8_t* pstart, uint8_t* pend)
+static void websocket_serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 {
 	struct websock* ws = &conn->websock;
 	uint8_t* p = pstart;
@@ -847,7 +911,7 @@ static void websocket_read(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 			}
 		} else {
 			if (-1 == websocket_read_header_u8(conn, *(p++))) {
-				websocket_drop(conn);
+				conn_drop(conn);
 				return;
 			}
 		}
@@ -861,45 +925,85 @@ int httpserver_tick(void)
 	struct io_event ev;
 	while (io_port_poll(g.port_id, &ev)) {
 		did_work = 1;
-		if (ev.echo.i64 == IGNORE_ECHO) {
-			// ok
-		} else if (ev.echo.i64 == LISTEN_ECHO) {
-			printf("http ev status=%d!\n", ev.status);
+		int conn_id = -1;
+		if (is_ignore_echo(ev.echo)) {
+			// ok; ignored
+		} else if (is_listen_echo(ev.echo)) {
+			//printf("http ev status=%d!\n", ev.status);
 			if (ev.status >= 0) {
 				io_addr(ev.status);
 			}
 			const int conn_id = alloc_conn();
 			if (conn_id == -1) {
-				SERVE_STATIC_AND_CLOSE(ev.status, R503);
+				io_port_writeall(g.port_id, IGNORE_ECHO, ev.status, R503, sizeof(R503)-1);
 			} else {
 				struct conn* conn = get_conn(conn_id);
 				memset(conn, 0, sizeof *conn);
 				conn->file_id = ev.status;
-				conn->state = REQUEST;
+				conn->state = HTTP_REQUEST;
 				uint8_t* buf = get_conn_buffer_by_id(conn_id);
-				io_echo echo = { .i64 = conn_id };
-				io_port_read(g.port_id, echo, conn->file_id, buf, BUFFER_SIZE);
+				io_port_read(g.port_id, echo_read(conn_id), conn->file_id, buf, BUFFER_SIZE);
 			}
-		} else {
-			const int64_t id64 = ev.echo.i64;
-			assert((0 <= id64) && (id64 < MAX_CONN_COUNT));
-			const int conn_id = id64;
+		} else if (is_echo_close(ev.echo, &conn_id)) {
 			struct conn* conn = get_conn(conn_id);
+			assert(conn->state == CLOSING);
+			free_conn(conn);
+		} else if (is_echo_read(ev.echo, &conn_id)) {
+			const int conn_id = ev.echo.ib32;
+			assert((0 <= conn_id) && (conn_id < MAX_CONN_COUNT));
+			struct conn* conn = get_conn(conn_id);
+			assert(conn->state != CLOSING);
+			conn->inflight_read=0;
+			if (ev.status < 0) {
+				fprintf(stderr, "conn I/O error %d for echo %d:%d\n", ev.status, ev.echo.ia32, ev.echo.ib32);
+				conn_drop(conn);
+				continue;
+			}
 			const int num_bytes = ev.status;
 			uint8_t* buf = get_conn_buffer_by_id(conn_id);
+
+			int read_again = 1;
 			switch (conn->state) {
-			case REQUEST: {
-				serve(conn, buf, buf+num_bytes);
+			case HTTP_REQUEST: {
+				conn_begin_write(conn);
+				conn->state = http_serve(conn, buf, buf+num_bytes);
+				assert(conn->state > 0);
+				if (conn->state == HTTP_RESPONSE) {
+					// don't read next request too eagerly?
+					read_again=0;
+				}
 			}	break;
 			case WEBSOCKET: {
-				websocket_read(conn, buf, buf+num_bytes);
+				websocket_serve(conn, buf, buf+num_bytes);
 			}	break;
 			default: assert(!"unhandled conn state");
 			}
 
-			if (conn->state != CLOSE) {
-				io_echo echo = { .i64 = conn_id };
-				io_port_read(g.port_id, echo, conn->file_id, buf, BUFFER_SIZE);
+			if (read_again && conn->state != CLOSING) {
+				assert(!conn->inflight_read);
+				conn_read(conn, buf, BUFFER_SIZE);
+			}
+		} else if (is_echo_write(ev.echo, &conn_id)) {
+			struct conn* conn = get_conn(conn_id);
+			assert(conn->state != CLOSING);
+			assert(conn->num_writes_pending > 0);
+			--conn->num_writes_pending;
+			if (conn->num_writes_pending == 0) {
+				if (conn->state == HTTP_RESPONSE) {
+					if (conn->inflight_sendfile) {
+						io_port_close(g.port_id, IGNORE_ECHO, conn->sendfile_src_file_id);
+						conn->sendfile_src_file_id = 0;
+						conn->inflight_sendfile = 0;
+					}
+					uint8_t* buf = get_conn_buffer_by_id(conn_id);
+					printf("con%d back to req\n", conn_id);
+					conn->state = HTTP_REQUEST;
+					if (!conn->inflight_read) {
+						conn_read(conn, buf, BUFFER_SIZE);
+					}
+				}
+			} else {
+				assert(conn->num_writes_pending > 0);
 			}
 		}
 	}
@@ -935,6 +1039,9 @@ void httpserver_selftest(void)
 		assert(!header_csv_contains(&hr, "66"));
 		assert(!header_csv_contains(&hr, "6666"));
 		assert(!header_csv_contains(&hr, "777"));
+		assert(!header_csv_contains(&hr, "foo"));
+		assert(!header_csv_contains(&hr, "Foo"));
+		assert(!header_csv_contains(&hr, ":"));
 
 		assert(header_next(&hr));
 		assert(!is_header(&hr, "foo"));
@@ -943,6 +1050,7 @@ void httpserver_selftest(void)
 		assert(header_csv_contains(&hr, "xx"));
 		assert(!header_csv_contains(&hr, "x"));
 		assert(!header_csv_contains(&hr, "xxx"));
+		assert(!header_csv_contains(&hr, "bar"));
 		assert(header_csv_contains(&hr, "yyy"));
 		assert(header_csv_contains(&hr, "zzzz"));
 

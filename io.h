@@ -34,6 +34,10 @@ typedef union {
 		uint32_t ua32;
 		uint32_t ub32;
 	};
+	struct {
+		int32_t ia32;
+		int32_t ib32;
+	};
 } io_echo;
 
 struct io_event {
@@ -65,6 +69,8 @@ void io_addr(int file_id);
 
 int io_port_create(void);
 int io_port_poll(int port_id, struct io_event*);
+
+void io_port_close(int port_id, io_echo echo, int file_id);
 
 void io_port_read(int port_id, io_echo echo, int file_id, void* ptr, int64_t count);
 void io_port_write(int port_id, io_echo echo, int file_id, const void* ptr, int64_t count);

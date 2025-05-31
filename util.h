@@ -15,7 +15,6 @@
 #define FORMATPRINTF1  __attribute__((format(printf,1,2)))
 #define FORMATPRINTF2  __attribute__((format(printf,2,3)))
 
-
 //#define ALIGNAS(x) _Alignas(x)
 //#define ATOMIC(T) _Atomic(T)
 
@@ -49,6 +48,15 @@ static inline int bounds_check(int index, int length, const char* location)
 #define arrchkptr(xs,index) (&(arrchkget(xs,index)))
 #define arrreset(xs) arrsetlen(xs,0)
 #define arrsetmincap(xs,mincap) ((mincap)>arrcap(xs)?arrsetcap(xs,mincap):0)
+
+#define TODO(S) fprintf(stderr,"TODO(" #S ") at %s:%d\n",__FILE__,__LINE__);
+#define TODO_NOW(S) TODO(S);abort();
+
+#define FIXME(S) fprintf(stderr,"FIXME(" #S ") at %s:%d\n",__FILE__,__LINE__);
+#define FIXME_NOW(S) FIXME(S);abort();
+
+#define XXX(S) fprintf(stderr,"XXX(" #S ") at %s:%d\n",__FILE__,__LINE__);
+#define XXX_NOW(S) XXX(S);abort();
 
 #define UTIL_H
 #endif
