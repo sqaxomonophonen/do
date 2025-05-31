@@ -60,6 +60,9 @@ are red/green/blue, and X is "shake". the color 3456 is red=3, green=4, blue=5
 and shake=6. the original splash (3-component) format was made by Lu Wilson aka
 Todepond (https://www.todepond.com/lab/splash/)
 
+: webpack
+web/emscripten build of the do application that can be served from the desktop
+application (and TODO dojo.go?). it's built with webpack.bash.
 
 ===============================================================================
 

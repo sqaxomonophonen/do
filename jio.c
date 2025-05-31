@@ -1,8 +1,7 @@
-//#include <fcntl.h>
-//#include <unistd.h>
-//#include <errno.h>
-//#include <threads.h>
-//#include <stdatomic.h>
+#ifdef __EMSCRIPTEN__
+#include <unistd.h>
+#define BLOCKING
+#endif
 
 #include "jio.h"
 #include "main.h"
@@ -90,6 +89,58 @@ int64_t jio_get_size(struct jio* jio)
 	return jio->filesize;
 }
 
+int jio_ack(struct jio* jio, io_echo echo)
+{
+	if (echo.ua32 != jio->tag) return 0;
+	int num_inflight = arrlen(jio->inflight_arr);
+	int fill = 0;
+	int match = 0;
+	for (int i=0; i<num_inflight; ++i) {
+		struct inflight* inflight = &jio->inflight_arr[i];
+		int apply = 0;
+		if (!fill) {
+			if (inflight->tail == echo.ub32) {
+				match = 1;
+				if (i == 0) {
+					assert((!inflight->is_done) && "double ack?");
+					apply = 1;
+					fill = 1;
+				} else {
+					inflight->is_done = 1;
+					return 1;
+				}
+			}
+		} else {
+			if (inflight->is_done) {
+				apply = 1;
+			} else {
+				break;
+			}
+		}
+		if (apply) {
+			jio->tail = inflight->tail;
+			assert(i == 0);
+			arrdel(jio->inflight_arr, 0);
+			--i;
+			--num_inflight;
+		}
+	}
+	assert(match);
+	return 1;
+}
+
+static void our_pwrite(struct jio* jio, io_echo echo, int file_id, void* buf, int64_t count, int64_t offset, unsigned tail)
+{
+	#ifdef BLOCKING
+	pwrite(file_id, buf, count, offset);
+	arrput(jio->inflight_arr, ((struct inflight){ .tail = tail }));
+	jio_ack(jio, echo);
+	#else
+	io_port_pwrite(jio->port_id, echo, file_id, buf, count, offset);
+	arrput(jio->inflight_arr, ((struct inflight){ .tail = tail }));
+	#endif
+}
+
 int jio_append(struct jio* jio, const void* ptr, int64_t size)
 {
 	// ignore writes if an error has been signalled
@@ -110,7 +161,6 @@ int jio_append(struct jio* jio, const void* ptr, int64_t size)
 	const unsigned cycle0 = (head         >> ringbuf_size_log2);
 	const unsigned cycle1 = ((new_head-1) >> ringbuf_size_log2);
 	const unsigned mask = (ringbuf_size-1);
-	const int port_id = jio->port_id;
 	const int file_id = jio->file_id;
 	if (cycle0 == cycle1) {
 		void* dst = &jio->ringbuf[head & mask];
@@ -119,8 +169,8 @@ int jio_append(struct jio* jio, const void* ptr, int64_t size)
 			.ua32 = jio->tag,
 			.ub32 = new_head,
 		};
-		io_port_pwrite(port_id, echo, file_id, dst, size, jio->filesize);
-		arrput(jio->inflight_arr, ((struct inflight){ .tail = new_head }));
+		our_pwrite(jio, echo, file_id, dst, size, jio->filesize, new_head);
+
 	} else {
 		const unsigned remain = (cycle1 << ringbuf_size_log2) - head;
 
@@ -131,8 +181,7 @@ int jio_append(struct jio* jio, const void* ptr, int64_t size)
 			.ua32 = jio->tag,
 			.ub32 = head0,
 		};
-		io_port_pwrite(port_id, echo0, file_id, dst0, remain, jio->filesize);
-		arrput(jio->inflight_arr, ((struct inflight){ .tail = head0 }));
+		our_pwrite(jio, echo0, file_id, dst0, remain, jio->filesize, head0);
 
 		void* dst1 = jio->ringbuf;
 		memcpy(dst1, ptr+remain, size-remain);
@@ -141,8 +190,7 @@ int jio_append(struct jio* jio, const void* ptr, int64_t size)
 			.ua32 = jio->tag,
 			.ub32 = head1,
 		};
-		io_port_pwrite(port_id, echo1, file_id, dst1, size, jio->filesize+remain);
-		arrput(jio->inflight_arr, ((struct inflight){ .tail = head1 }));
+		our_pwrite(jio, echo1, file_id, dst1, size, jio->filesize+remain, head1);
 	}
 
 	jio->filesize += size;
@@ -244,45 +292,4 @@ int jio_get_error(struct jio* jio)
 void jio_clear_error(struct jio* jio)
 {
 	jio->error = 0;
-}
-
-
-int jio_ack(struct jio* jio, io_echo echo)
-{
-	if (echo.ua32 != jio->tag) return 0;
-	int num_inflight = arrlen(jio->inflight_arr);
-	int fill = 0;
-	int match = 0;
-	for (int i=0; i<num_inflight; ++i) {
-		struct inflight* inflight = &jio->inflight_arr[i];
-		int apply = 0;
-		if (!fill) {
-			if (inflight->tail == echo.ub32) {
-				match = 1;
-				if (i == 0) {
-					assert((!inflight->is_done) && "double ack?");
-					apply = 1;
-					fill = 1;
-				} else {
-					inflight->is_done = 1;
-					return 1;
-				}
-			}
-		} else {
-			if (inflight->is_done) {
-				apply = 1;
-			} else {
-				break;
-			}
-		}
-		if (apply) {
-			jio->tail = inflight->tail;
-			assert(i == 0);
-			arrdel(jio->inflight_arr, 0);
-			--i;
-			--num_inflight;
-		}
-	}
-	assert(match);
-	return 1;
 }

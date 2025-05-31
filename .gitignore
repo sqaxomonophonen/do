@@ -6,9 +6,13 @@
 /do.ww.js
 /do
 /temporary_httpd
+/webpack.gen.h
 
 # test artifacts
 /_*
+
+# dok file store
+/dok/
 
 # vim
 .*swp

@@ -231,7 +231,6 @@ int main(int argc, char** argv)
 
 	gl_init();
 	run_selftest();
-	jio_init();
 	mie_thread_init();
 	gig_init();
 	//gig_host(arg_dir ? arg_dir : "."); // XXX?!

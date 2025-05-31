@@ -22,6 +22,7 @@
 #include <stddef.h>
 
 #include "io.h"
+
 #include "leb128.h"
 #include "binary.h"
 
@@ -34,7 +35,9 @@ int jio_append(struct jio*, const void* ptr, int64_t size);
 int jio_pread(struct jio*, void* ptr, int64_t size, int64_t offset);
 int jio_get_error(struct jio*);
 void jio_clear_error(struct jio*);
+#ifndef __EMSCRIPTEN__
 int jio_ack(struct jio*, io_echo);
+#endif
 
 static inline void jio_append_u8(struct jio* jio, uint8_t v)
 {

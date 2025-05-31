@@ -1,3 +1,5 @@
+// search this file for "ROUTE" to find the routes
+
 // RFCs:
 //   RFC2616: Hypertext Transfer Protocol -- HTTP/1.1
 //   RFC6455: The WebSocket Protocol
@@ -8,8 +10,6 @@
 // splits the standard into multiple docs (whyy) and RFC9110 includes HTTP/2
 // and beyond (corporate bloatware). Also, since HTTP/1.1 isn't about to die,
 // the only thing the newer RFCs can offer is corrections and clarifications?)
-
-// search this file for "ROUTE" to find the routes
 
 #include <stdio.h>
 #include <string.h>
@@ -23,11 +23,29 @@
 #include "base64.h"
 #include "stb_sprintf.h"
 
+#define CRLF "\r\n"
+
 #define IGNORE_ECHO_TYPE (-10)
 #define LISTEN_ECHO_TYPE (-11)
 
 #define IGNORE_ECHO ((io_echo) { .ia32 = IGNORE_ECHO_TYPE })
 #define LISTEN_ECHO ((io_echo) { .ia32 = LISTEN_ECHO_TYPE })
+
+#ifndef NO_WEBPACK
+#include "webpack.gen.h" // <- missing? see codegen/disable comments below:
+// to codegen webpack.gen.h, run `./webpack.bash` (requires Emscripten)
+// to disable "webpack" (web app at route /o) build with NO_WEBPACK defined:
+// `CFLAGS="-DNO_WEBPACK" gmake -f Makefile...`
+
+static const char* webpack_lookup(const char* name)
+{
+	#define X(LOCNAME,DOKNAME) if (strcmp(name,LOCNAME)==0) return DOKNAME;
+	LIST_OF_WEBPACK_FILES
+	#undef X
+	fprintf(stderr, "webpack_lookup(\"%s\") failed\n", name);
+	abort();
+}
+#endif
 
 static inline int is_ignore_echo(io_echo echo)
 {
@@ -85,6 +103,7 @@ static inline int is_echo_close(io_echo echo, int* out_conn_id)
 #define MAX_CONN_COUNT       (1L << (MAX_CONN_COUNT_LOG2))
 
 #define LIST_OF_METHODS \
+	X(HEAD) \
 	X(GET) \
 	X(POST) \
 	X(PUT)
@@ -101,48 +120,48 @@ static_assert(METHOD_COUNT <= 31, "(1<<METHOD_COUNT) close to int-overflow -- to
 // canned responses in static memory
 
 static const char R404[]=
-	"HTTP/1.1 404 Not Found\r\n"
-	"Content-Type: text/plain; charset=utf-8\r\n"
-	"Content-Length: 13\r\n"
-	"\r\n"
+	"HTTP/1.1 404 Not Found" CRLF
+	"Content-Type: text/plain; charset=utf-8" CRLF
+	"Content-Length: 13" CRLF
+	CRLF
 	"404 Not Found"
 	;
 
 #define BLAHBLAHBLAH \
-	"Content-Type: text/plain; charset=utf-8\r\n" \
-	"Connection: close\r\n" \
+	"Content-Type: text/plain; charset=utf-8" CRLF \
+	"Connection: close" CRLF \
 
 #if 0
 static const char R200test[]=
-	"HTTP/1.1 200 OK\r\n"
+	"HTTP/1.1 200 OK" CRLF
 	BLAHBLAHBLAH
-	"Content-Length: 13\r\n"
-	"\r\n"
+	"Content-Length: 13" CRLF
+	CRLF
 	"This Is Fine!"
 	;
 #endif
 
 static const char R400proto[]=
-	"HTTP/1.1 400 Bad Request\r\n"
+	"HTTP/1.1 400 Bad Request" CRLF
 	BLAHBLAHBLAH
-	"Content-Length: 32\r\n"
-	"\r\n"
+	"Content-Length: 32" CRLF
+	CRLF
 	"400 Bad Request (protocol error)"
 	;
 
 static const char R413[]=
-	"HTTP/1.1 413 Payload Too Large\r\n"
+	"HTTP/1.1 413 Payload Too Large" CRLF
 	BLAHBLAHBLAH
-	"Content-Length: 21\r\n"
-	"\r\n"
+	"Content-Length: 21" CRLF
+	CRLF
 	"413 Payload Too Large"
 	;
 
 static const char R503[]=
-	"HTTP/1.1 503 Service Unavailable\r\n"
+	"HTTP/1.1 503 Service Unavailable" CRLF
 	BLAHBLAHBLAH
-	"Content-Length: 23\r\n"
-	"\r\n"
+	"Content-Length: 23" CRLF
+	CRLF
 	"503 Service Unavailable"
 	;
 
@@ -336,7 +355,7 @@ static void conn_drop(struct conn* conn)
 void webserv_init(void)
 {
 	g.port_id = io_port_create();
-	g.listen_file_id = io_listen_tcp(6510, g.port_id, LISTEN_ECHO);
+	g.listen_file_id = io_listen_tcp(6581, g.port_id, LISTEN_ECHO);
 	g.buffer_storage = calloc(1L << (MAX_CONN_COUNT_LOG2 + BUFFER_SIZE_LOG2), sizeof *g.buffer_storage);
 	g.conns    = calloc(1L << MAX_CONN_COUNT_LOG2, sizeof *g.conns);
 	g.freelist = calloc(1L << MAX_CONN_COUNT_LOG2, sizeof *g.freelist);
@@ -353,15 +372,21 @@ static void serve_static(struct conn* conn, const void* data, size_t size)
 #define SERVE_STATIC_AND_RETURN(CONN,SS) {serve_static(CONN,SS,sizeof(SS)-1);return;}
 #define SERVE_STATIC_CLOSE_AND_RETURN(CONN,SS) {serve_static(CONN,SS,sizeof(SS)-1);conn_enter(conn,CLOSING);return;}
 
-static int is_route(const char* route, const char* path)
+static int is_route(const char* route, const char* path, const char** out_tail)
 {
+	if (out_tail) *out_tail = NULL;
 	const size_t route_len = strlen(route);
 	const size_t path_len  = strlen(path);
 	if (path_len < route_len) return 0;
 	if (route[route_len-1] != '/') {
-		return strcmp(route,path)==0;
+		return (strcmp(route,path)==0);
 	} else {
-		return (path_len > route_len) && (memcmp(route,path,route_len)==0);
+		if ((path_len > route_len) && (memcmp(route,path,route_len)==0)) {
+			if (out_tail) *out_tail = &path[route_len];
+			return 1;
+		} else {
+			return 0;
+		}
 	}
 }
 
@@ -425,9 +450,9 @@ static void serve405(struct conn* conn, int allow_method_set)
 {
 	assert(allow_method_set != 0);
 	conn_print(conn,
-		"HTTP/1.1 405 Method Not Allowed\r\n"
-		"Connection: close\r\n"
-		"Content-Length: 0\r\n"
+		"HTTP/1.1 405 Method Not Allowed" CRLF
+		"Connection: close" CRLF
+		"Content-Length: 0" CRLF
 		"Allow:"
 	);
 	int num=0;
@@ -439,8 +464,7 @@ static void serve405(struct conn* conn, int allow_method_set)
 	LIST_OF_METHODS
 	#undef X
 	assert(num>0);
-	conn_print(conn, "\r\n\r\n");
-
+	conn_print(conn, CRLF CRLF);
 	conn_respond(conn);
 }
 
@@ -547,6 +571,16 @@ static void header_copy_value(struct header_reader* hr, char* dst)
 	memcpy(dst, (hr->header_end-n), n);
 }
 
+static const char* get_mime_from_ext(const char* ext)
+{
+	if (0==strcmp("wav",ext))   return "audio/wav";
+	if (0==strcmp("js",ext))    return "text/javascript";
+	if (0==strcmp("wasm",ext))  return "application/wasm";
+	if (0==strcmp("css",ext))   return "text/css";
+	if (0==strcmp("html",ext))  return "text/html; charset=UTF-8";
+	return "application/octet-stream";
+}
+
 // parses HTTP/1.1 request between pstart/pend. the memory is modified.
 static void http_serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 {
@@ -638,54 +672,111 @@ static void http_serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 	int method_set;
 	conn_enter(conn, HTTP_RESPONSE);
 
-	#define ROUTE(R) (method_set=0 , is_route(R,(char*)path0))
+	const char* tail;
+	#define ROUTE(R) (method_set=0 , is_route(R,(char*)path0,&tail))
 	#define IS(M)    (assert(!(method_set&(1<<(M)))), (method_set|=(1<<(M))), method==(M))
 	#define DO405_AND_RETURN {assert(method_set);serve405(conn,method_set);return;}
 
-	if (ROUTE("/data")) {
-		if (IS(GET)) {
-			const size_t n = 1<<24;
-			void* mem = malloc(n);
-			memset(mem, 0xdd, n);
-			conn_printf(conn,
-				"HTTP/1.1 200 OK\r\n"
-				"Content-Type: application/octet-stream\r\n"
-				"Content-Length: %zd\r\n\r\n"
-				,
-				n);
+	if (ROUTE("/o")) {
+		#ifdef NO_WEBPACK
+		SERVE_STATIC_AND_RETURN(conn, R404)
+		#else
+		char html[1<<12];
 
-			conn_respond(conn);
-			conn_writeall(conn, mem, n);
-			return;
-		} else {
-			DO405_AND_RETURN
-		}
+		const int n = stbsp_snprintf(html, sizeof html,
+			"<!DOCTYPE html>\n"
+			"<title>%s</title>"
+			"<link rel=\"stylesheet\" type=\"text/css\" href=\"/dok/%s\"/>"
+			"<canvas id=\"canvas\"></canvas>"
+			"<div id=\"text_input_overlay\" contenteditable>?</div>"
+			"<script src=\"/dok/%s\"></script>"
+			,
+			"toDO",
+			webpack_lookup("do.css"),
+			webpack_lookup("do.js")
+		);
 
-	} else if (ROUTE("/test.html")) {
-		if (IS(GET)) {
-			int64_t size;
-			const int src_file_id = io_open("test.html", IO_OPEN_RDONLY, &size);
-			if (src_file_id < 0) SERVE_STATIC_AND_RETURN(conn, R404)
-			assert(src_file_id >= 0);
+		conn_printf(conn,
+			"HTTP/1.1 200 OK" CRLF
+			"Content-Type: text/html; charset=UTF-8" CRLF
+			"Content-Length: %d" CRLF
+			CRLF
+			"%s"
+			, n, html);
+		conn_respond(conn);
+		return;
+		#endif
 
-			conn_printf(conn,
-				"HTTP/1.1 200 OK\r\n"
-				"Content-Type: text/html; charset=utf-8\r\n"
-				"Content-Length: %ld\r\n\r\n"
-				,
-				size);
-
-			conn_respond(conn);
-			conn_sendfileall(conn, src_file_id, size, 0);
-			return;
-		} else {
-			DO405_AND_RETURN
-		}
-
-	} else if (ROUTE("/wstest")) {
+	} else if (ROUTE("/o/info")) {
+		TODO(web/info)
+		SERVE_STATIC_AND_RETURN(conn, R404)
+	} else if (ROUTE("/o/websocket")) {
 		if (IS(GET)) {
 			upgrade_to_websocket = 1;
 		} else {
+			DO405_AND_RETURN
+		}
+
+	} else if (ROUTE("/o/resolv/")) {
+		TODO(web/resolv)
+		SERVE_STATIC_AND_RETURN(conn, R404)
+	} else if (ROUTE("/dok/")) {
+		if (IS(HEAD) || IS(GET)) {
+			assert(tail != NULL);
+			char* p = (char*)tail;
+			const size_t np = strlen(p);
+			// strictly match <hash>.<ext> filename in "tail" after /dok/:
+			//   <hash> must be 64 lowercase hex digits (sha256)
+			//   <ext> must be a supported type (see get_mime_from_ext())
+			if (np < 66) {
+				// too short
+				SERVE_STATIC_AND_RETURN(conn, R404)
+			}
+			for (int i=0; i<64; ++i) {
+				char c = p[i];
+				if (!((('0'<=c) && (c<='9')) || ('a'<=c && c<='f'))) {
+					// non-hex digit found in <hash>
+					SERVE_STATIC_AND_RETURN(conn, R404)
+				}
+			}
+			if (p[64] != '.') {
+				// no dot at expected position
+				SERVE_STATIC_AND_RETURN(conn, R404)
+			}
+			const char* ext = p+65;
+
+			// XXX code assumes to find the same file under dok/... relative to
+			// current directory, but we might want to make the dok-path
+			// configurable
+			p = (char*)path0;
+			while (*p=='/') ++p;
+			int64_t size;
+			const int src_file_id = io_open(p, IO_OPEN_RDONLY, &size);
+			if (src_file_id < 0) {
+				// file actually not found
+				SERVE_STATIC_AND_RETURN(conn, R404)
+			}
+			assert(src_file_id >= 0);
+
+			// TODO range?
+
+			conn_printf(conn,
+				"HTTP/1.1 200 OK" CRLF
+				"Content-Type: %s" CRLF
+				"Content-Length: %ld" CRLF
+				"Cache-Control: max-age=31536000, immutable" CRLF
+				CRLF
+				,
+				get_mime_from_ext(ext),
+				size);
+
+			conn_respond(conn);
+			if (method==GET) {
+				conn_sendfileall(conn, src_file_id, size, 0);
+			} else assert(method==HEAD);
+			return;
+		} else {
+			// TODO PUT?
 			DO405_AND_RETURN
 		}
 
@@ -772,10 +863,12 @@ static void http_serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 
 		//printf("accept key [%s]\n", accept_key);
 		conn_printf(conn,
-			"HTTP/1.1 101 Switching Protocols\r\n"
-			"Upgrade: websocket\r\n"
-			"Connection: Upgrade\r\n"
-			"Sec-WebSocket-Accept: %s\r\n\r\n",
+			"HTTP/1.1 101 Switching Protocols" CRLF
+			"Upgrade: websocket" CRLF
+			"Connection: Upgrade" CRLF
+			"Sec-WebSocket-Accept: %s" CRLF
+			CRLF
+			,
 			accept_key);
 		// so if "Upgrade: websocket" and more headers werent't enough, we also
 		// have to reply with this psuedo crypto nonsense. if you really want

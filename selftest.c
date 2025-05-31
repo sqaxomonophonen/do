@@ -48,7 +48,10 @@
 #include "path.h"
 
 #include "gig.h"
+
+#ifndef __EMSCRIPTEN__
 #include "webserv.h"
+#endif
 
 void run_selftest(void)
 {
@@ -58,7 +61,9 @@ void run_selftest(void)
 	path_unit_test();
 	gig_selftest();
 	mie_selftest();
+	#ifndef __EMSCRIPTEN__
 	webserv_selftest();
+	#endif
 	const int64_t dt = get_nanoseconds() - t0;
 	printf("selftest took %.5fs\n", (double)dt * 1e-9);
 }

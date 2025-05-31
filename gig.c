@@ -8,7 +8,6 @@
 
 #include "stb_ds.h"
 #include "stb_sprintf.h"
-#include "io.h"
 #include "jio.h"
 #include "gig.h"
 #include "util.h"
@@ -320,6 +319,7 @@ static struct {
 
 void gig_tick(void)
 {
+	#ifndef __EMSCRIPTEN__
 	struct io_event ev = {0};
 	while (io_port_poll(g.io_port_id, &ev)) {
 		io_echo ec = ev.echo;
@@ -328,6 +328,7 @@ void gig_tick(void)
 		if (gst.jio_snapshotcache_index && jio_ack(gst.jio_snapshotcache_index , ec)) continue;
 		assert(!"unhandled event");
 	}
+	#endif
 }
 
 static char* get_mim_buffer_top(void)
@@ -1558,7 +1559,7 @@ static int errf(const char* fmt, ...)
 	return -1;
 }
 
-#define FMTERR(PATH,MSG)     errf("%s (format error): %s (at %s:%d)", (PATH), (MSG), __FILE__, __LINE__)
+#define FMTERR(PATH,MSG)    errf("%s (format error): %s (at %s:%d)", (PATH), (MSG), __FILE__, __LINE__)
 #define IOERR(PATH,ERRCODE) errf("%s (jio error): %s (at %s:%d)", (PATH), io_error_to_string_safe(ERRCODE), __FILE__, __LINE__)
 
 static int is_snapshotcache_index_size_valid(int64_t sz)
@@ -1958,7 +1959,11 @@ void gig_set_journal_snapshot_growth_threshold(int t)
 
 void gig_init(void)
 {
+	#ifdef __EMSCRIPTEN__
+	g.io_port_id = -1;
+	#else
 	g.io_port_id = io_port_create();
+	#endif
 	gig_set_journal_snapshot_growth_threshold(5000);
 	arrinit(g.mim_buffer_arr, &system_allocator);
 }
