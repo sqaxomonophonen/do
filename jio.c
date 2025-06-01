@@ -3,6 +3,8 @@
 #define BLOCKING
 #endif
 
+#include <limits.h>
+
 #include "jio.h"
 #include "main.h"
 #include "stb_ds_sysalloc.h"
@@ -205,11 +207,17 @@ int jio_pread(struct jio* jio, void* ptr, int64_t size, int64_t offset)
 {
 	// ignore read if an error has been signalled
 	if (jio->error < 0) return jio->error;
-	if (!((0L <= offset) && ((offset+size) <= jio->filesize))) {
+	if (!((0L <= offset) && (offset <= jio->filesize))) {
 		jio->error = IO_READ_OUT_OF_RANGE;
 		return jio->error;
 	}
 	if (size == 0) return 0;
+
+	if ((offset+size) > jio->filesize) {
+		size = (jio->filesize - offset);
+	}
+	assert(size >= 0);
+	assert(size <= INT_MAX);
 
 	const int ringbuf_size_log2 = jio->ringbuf_size_log2;
 	const int64_t ringbuf_size = 1L << ringbuf_size_log2;
@@ -281,7 +289,7 @@ int jio_pread(struct jio* jio, void* ptr, int64_t size, int64_t offset)
 		}
 	}
 
-	return 0;
+	return size;
 }
 
 int jio_get_error(struct jio* jio)

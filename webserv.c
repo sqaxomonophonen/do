@@ -22,6 +22,7 @@
 #include "sha1.h"
 #include "base64.h"
 #include "stb_sprintf.h"
+#include "gig.h"
 
 #define CRLF "\r\n"
 
@@ -195,16 +196,16 @@ struct conn {
 	enum conn_state cstate;
 	int file_id;
 	int write_cursor;
-	int num_writes_pending;
 	int sendfile_src_file_id;
+	int num_inflight_writes;
 	unsigned buffer_full :1;
 	unsigned enter_websocket_after_response :1;
 	unsigned inflight_sendfile :1;
-	unsigned inflight_write    :1; // TODO
 	unsigned inflight_read     :1;
 	union {
 		struct websock websock;
 	};
+	void* free_after_write_data;
 };
 
 static struct {
@@ -291,12 +292,20 @@ static struct conn* get_conn(int id)
 	return &g.conns[id];
 }
 
-static void free_conn(struct conn* conn)
+static void conn_free_transient_data(struct conn* conn)
+{
+	if (conn->free_after_write_data == NULL) return;
+	free(conn->free_after_write_data);
+	conn->free_after_write_data = NULL;
+}
+
+static void conn_free(struct conn* conn)
 {
 	const int id = get_conn_id_by_conn(conn);
 	assert((0 <= id) && (id < MAX_CONN_COUNT));
 	assert(g.num_free < MAX_CONN_COUNT);
 	g.freelist[g.num_free++] = id;
+	conn_free_transient_data(conn);
 }
 
 static void conn_enter(struct conn* conn, enum conn_state state)
@@ -333,7 +342,7 @@ static void conn_read(struct conn* conn, void* buf, int64_t count)
 static void conn_writeall(struct conn* conn, const void* ptr, int64_t count)
 {
 	io_port_writeall(g.port_id, echo_write(get_conn_id_by_conn(conn)), conn->file_id, ptr, count);
-	++conn->num_writes_pending;
+	++conn->num_inflight_writes;
 }
 
 static void conn_sendfileall(struct conn* conn, int src_file_id, int64_t count, int64_t src_offset)
@@ -342,7 +351,7 @@ static void conn_sendfileall(struct conn* conn, int src_file_id, int64_t count, 
 	io_port_sendfileall(g.port_id, echo_write(get_conn_id_by_conn(conn)), conn->file_id, src_file_id, count, src_offset);
 	conn->sendfile_src_file_id = src_file_id;
 	conn->inflight_sendfile = 1;
-	++conn->num_writes_pending;
+	++conn->num_inflight_writes;
 }
 
 static void conn_drop(struct conn* conn)
@@ -444,6 +453,12 @@ static void conn_respond(struct conn* conn)
 	uint8_t* buf = get_conn_http_write_buffer(conn, &size);
 	assert(conn->write_cursor <= size);
 	conn_writeall(conn, buf, conn->write_cursor);
+}
+
+static void conn_set_free_after_write_data(struct conn* conn, void* data)
+{
+	assert((conn->free_after_write_data == NULL) && "already set; mistake, or need an array?");
+	conn->free_after_write_data = data;
 }
 
 static void serve405(struct conn* conn, int allow_method_set)
@@ -691,7 +706,7 @@ static void http_serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 			"<div id=\"text_input_overlay\" contenteditable>?</div>"
 			"<script src=\"/dok/%s\"></script>"
 			,
-			"toDO",
+			"waiting for toDO",
 			webpack_lookup("do.css"),
 			webpack_lookup("do.js")
 		);
@@ -708,15 +723,17 @@ static void http_serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 		#endif
 
 	} else if (ROUTE("/o/info")) {
-		const char* info = "here is some info for ya";
+		size_t size;
+		void* data = get_snapshot_data(&size);
 		conn_printf(conn,
 			"HTTP/1.1 200 OK" CRLF
-			"Content-Type: text/plain; charset=UTF-8" CRLF
+			"Content-Type: application/do-info" CRLF
 			"Content-Length: %zd" CRLF
 			CRLF
-			"%s"
-			, strlen(info), info);
+			, size);
 		conn_respond(conn);
+		conn_writeall(conn, data, size);
+		conn_set_free_after_write_data(conn, data);
 		return;
 
 	} else if (ROUTE("/o/websocket")) {
@@ -1179,7 +1196,7 @@ int webserv_tick(void)
 		} else if (is_echo_close(ev.echo, &conn_id)) {
 			struct conn* conn = get_conn(conn_id);
 			assert(conn->cstate == CLOSING);
-			free_conn(conn);
+			conn_free(conn);
 		} else if (is_echo_read(ev.echo, &conn_id)) {
 			const int conn_id = ev.echo.ib32;
 			assert((0 <= conn_id) && (conn_id < MAX_CONN_COUNT));
@@ -1215,9 +1232,10 @@ int webserv_tick(void)
 			assert((conn->cstate != HTTP_REQUEST) && "unexpected state");
 		} else if (is_echo_write(ev.echo, &conn_id)) {
 			struct conn* conn = get_conn(conn_id);
-			assert(conn->num_writes_pending > 0);
-			--conn->num_writes_pending;
-			if (conn->num_writes_pending == 0) {
+			assert(conn->num_inflight_writes > 0);
+			--conn->num_inflight_writes;
+			if (conn->num_inflight_writes == 0) {
+				conn_free_transient_data(conn);
 				if (conn->cstate == HTTP_RESPONSE) {
 					if (conn->inflight_sendfile) {
 						io_port_close(g.port_id, IGNORE_ECHO, conn->sendfile_src_file_id);
@@ -1240,7 +1258,7 @@ int webserv_tick(void)
 					assert(!conn->enter_websocket_after_response);
 				}
 			} else {
-				assert(conn->num_writes_pending > 0);
+				assert(conn->num_inflight_writes > 0);
 			}
 		}
 	}

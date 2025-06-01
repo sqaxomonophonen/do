@@ -20,6 +20,7 @@
 #include "arg.h"
 #include "utf8.h"
 #include "impl_gl.h"
+#include "gig.h"
 
 static struct {
 	//int num_cores;
@@ -265,7 +266,7 @@ bool ws_on_message(int type, const EmscriptenWebSocketMessageEvent* e, void *usr
 
 void info_on_load(void* usr, void* data, int size)
 {
-	printf("TODO loaded %d bytes of info\n", size);
+	restore_snapshot_from_data(data, size);
 }
 
 void info_on_error(void* usr)

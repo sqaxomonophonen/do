@@ -5,9 +5,9 @@
 // little-endian uint64 decode
 static inline uint64_t leu64_decode(const uint8_t* data)
 {
-	uint64_t v=0;
-	for (int i=0; i<8; ++i) v += ((uint64_t)data[i] << (i*8));
-	return v;
+	uint64_t value=0;
+	for (int i=0; i<8; ++i) value += ((uint64_t)data[i] << (i*8));
+	return value;
 }
 
 // little-endian uint64 encode
@@ -27,10 +27,10 @@ static inline uint32_t leu32_pdecode(const uint8_t** pp)
 	return val;
 }
 
-static inline void leu16_pencode(uint8_t** pp, uint16_t v)
+static inline void leu16_pencode(uint8_t** pp, uint16_t value)
 {
-	(*pp)[0] =  v     & 0xff;
-	(*pp)[1] = (v>>8) & 0xff;
+	(*pp)[0] =  value     & 0xff;
+	(*pp)[1] = (value>>8) & 0xff;
 	(*pp) += 2;
 }
 
@@ -41,6 +41,20 @@ static inline uint16_t leu16_pdecode(const uint8_t** pp)
 		+ ((*pp)[1] << 8);
 	(*pp) += 2;
 	return val;
+}
+
+static inline void leu64_pencode(uint8_t** pp, uint64_t value)
+{
+	for (int i=0; i<8; ++i) {
+		*((*pp)++) = ((value >> (i*8)) & 0xff);
+	}
+}
+
+static inline uint64_t leu64_pdecode(const uint8_t** pp)
+{
+	uint64_t value = leu64_decode(*pp);
+	*(pp) += 8;
+	return value;
 }
 
 #define BINARY_H

@@ -192,6 +192,9 @@ static struct {
 	char* text_buffer_arr;
 	int is_dragging;
 	struct draw_state state, save_state;
+
+	struct document  doc_copy;
+	struct mim_state ms_copy;
 } g;
 
 static inline int make_focus_id(void)
@@ -1418,9 +1421,9 @@ static void draw_code_pane(struct pane* pane)
 	//set_color3f(.7, 2.7, .7);
 	set_color3f(.9,2.6,.9);
 
-	struct mim_state* ms;
-	struct document* doc;
-	get_state_and_doc(pane->code.session_id, &ms, &doc);
+	struct mim_state* ms  = &g.ms_copy;
+	struct document*  doc = &g.doc_copy;
+	get_copy_of_state_and_doc(pane->code.session_id, ms, doc);
 	pane->code.splash4_cache = ms->splash4;
 
 	const int num_carets = arrlen(ms->caret_arr);

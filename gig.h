@@ -225,9 +225,13 @@ void mim8(uint8_t v);
 void mimex(const char*);
 void mimi(int tag, const char*);
 
-void get_state_and_doc(int session_id, struct mim_state** out_mim_state, struct document** out_doc);
+void get_copy_of_state_and_doc(int session_id, struct mim_state* out_mim_state, struct document* out_doc);
 
 int get_my_artist_id(void);
+
+void restore_snapshot_from_data(void* data, size_t sz);
+void* get_snapshot_data(size_t* out_size);
+// returns snapshot data. you're responsible for free()ing it when done
 
 #define GIG_H
 #endif
