@@ -62,7 +62,7 @@ Todepond (https://www.todepond.com/lab/splash/)
 
 : webpack
 web/emscripten build of the do application that can be served from the desktop
-application (and TODO dojo.go?). it's built with webpack.bash.
+application. it's built with webpack.bash.
 
 ===============================================================================
 

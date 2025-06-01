@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# TODO the "internet pack" version is probably significantly different? it
+# needs the audio engine whereas the LAN-pack doesn't, etc..?
 set -e
 cd $(dirname $0)
 which emcc || ( echo "ERROR: no emcc; Emscripten is not set up? HINT: run $ . /path/to/emsdk_env.sh" ; exit 1 )

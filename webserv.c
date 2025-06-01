@@ -745,9 +745,9 @@ static void http_serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 			}
 			const char* ext = p+65;
 
-			// XXX code assumes to find the same file under dok/... relative to
-			// current directory, but we might want to make the dok-path
-			// configurable
+			// TODO allow override of "dok/", but probably also "shadow dok's".
+			// one use is to serve the web app, and not contaminate your main
+			// "dok"
 			p = (char*)path0;
 			while (*p=='/') ++p;
 			int64_t size;
