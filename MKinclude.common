@@ -22,7 +22,7 @@ OBJS+=utf8.o allocator.o arg.o jio.o path.o gig.o mie.o selftest.o # common deps
 LDFLAGS+=-lm
 
 $(ARTIFACT): $(OBJS)
-	$(CC) -o $(ARTIFACT) $(OBJS) $(LDFLAGS)
+	$(CC) $(LDLIBS) $(OBJS) $(LDFLAGS) -o $(ARTIFACT)
 
 clean:
 	rm -f *.o *.wasm $(ARTIFACT)

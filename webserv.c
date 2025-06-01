@@ -677,7 +677,7 @@ static void http_serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 	#define IS(M)    (assert(!(method_set&(1<<(M)))), (method_set|=(1<<(M))), method==(M))
 	#define DO405_AND_RETURN {assert(method_set);serve405(conn,method_set);return;}
 
-	if (ROUTE("/o")) {
+	if (ROUTE("/o")) { // the "web app"; disabled if NO_WEBPACK is defined
 		#ifdef NO_WEBPACK
 		SERVE_STATIC_AND_RETURN(conn, R404)
 		#else
@@ -708,8 +708,17 @@ static void http_serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 		#endif
 
 	} else if (ROUTE("/o/info")) {
-		TODO(web/info)
-		SERVE_STATIC_AND_RETURN(conn, R404)
+		const char* info = "here is some info for ya";
+		conn_printf(conn,
+			"HTTP/1.1 200 OK" CRLF
+			"Content-Type: text/plain; charset=UTF-8" CRLF
+			"Content-Length: %zd" CRLF
+			CRLF
+			"%s"
+			, strlen(info), info);
+		conn_respond(conn);
+		return;
+
 	} else if (ROUTE("/o/websocket")) {
 		if (IS(GET)) {
 			upgrade_to_websocket = 1;

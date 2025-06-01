@@ -7,8 +7,8 @@
 /do
 /temporary_httpd
 /webpack.gen.h
-
-# test artifacts
+/.buildhackartifactsnapshot-*
+/dojo
 /_*
 
 # dok file store

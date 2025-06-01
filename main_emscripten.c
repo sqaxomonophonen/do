@@ -2,7 +2,9 @@
 #include <assert.h>
 
 #include <emscripten.h>
-#include <emscripten/webaudio.h>
+#include <emscripten/wget.h>
+#include <emscripten/websocket.h>
+//#include <emscripten/webaudio.h>
 #include <emscripten/wasm_worker.h>
 #include <emscripten/em_math.h>
 //#include <emscripten/atomic.h>
@@ -20,11 +22,30 @@
 #include "impl_gl.h"
 
 static struct {
-	int num_cores;
+	//int num_cores;
 	double start_time;
 	char* text_buffer_arr;
 	int*  key_buffer_arr;
 } g;
+
+EM_JS(char*, get_websocket_url, (void), {
+	let loc = window.location;
+	let url = ((loc.protocol==="https:") ? "wss:" : "ws:");
+	url += "//";
+	url += loc.hostname;
+	if (loc.port) url += (":"+loc.port);
+	url += (loc.pathname + "/websocket");
+	return stringToNewUTF8(url);
+})
+
+EM_JS(char*, get_info_url, (void), {
+
+	let loc = window.location;
+	let url = loc.protocol + "//" + loc.hostname;
+	if (loc.port) url += (":"+loc.port);
+	url += (loc.pathname + "/info");
+	return stringToNewUTF8(url);
+})
 
 EM_JS(int, canvas_get_width, (void), {
 	const e = document.getElementById("canvas");
@@ -213,10 +234,69 @@ static void gig_thread_run(void)
 }
 #endif
 
+static char *WS_URL, *INFO_URL;
+static EMSCRIPTEN_WEBSOCKET_T socket;
+
+bool ws_on_open(int type, const EmscriptenWebSocketOpenEvent* e, void* usr)
+{
+	printf("WS OPEN!\n");
+	emscripten_websocket_send_utf8_text(e->socket, "hiya!");
+	return 0;
+}
+
+bool ws_on_close(int type, const EmscriptenWebSocketCloseEvent* e, void *usr)
+{
+	printf("WS CLOSE!\n");
+	return 0;
+}
+
+bool ws_on_error(int type, const EmscriptenWebSocketErrorEvent* e, void *usr)
+{
+	printf("WS ERROR!\n");
+	return 0;
+}
+
+bool ws_on_message(int type, const EmscriptenWebSocketMessageEvent* e, void *usr)
+{
+	printf("WS MESSAGE!\n");
+	return 0;
+}
+
+
+void info_on_load(void* usr, void* data, int size)
+{
+	printf("TODO loaded %d bytes of info\n", size);
+}
+
+void info_on_error(void* usr)
+{
+	assert(!"failed to load info");
+}
+
 int main(int argc, char** argv)
 {
+	WS_URL = get_websocket_url();
+	INFO_URL = get_info_url();
+	printf("WS_URL=[%s] INFO_URL=[%s]\n", WS_URL, INFO_URL);
+
 	//g.num_cores = emscripten_navigator_hardware_concurrency();
 	g.start_time = emscripten_get_now();
+
+	emscripten_async_wget_data(INFO_URL, NULL, info_on_load, info_on_error);
+
+	{
+		assert(emscripten_websocket_is_supported());
+		EmscriptenWebSocketCreateAttributes attr = {0};
+		emscripten_websocket_init_create_attributes(&attr);
+		attr.url = WS_URL;
+		//attr.protocols = "binary,base64";
+		socket = emscripten_websocket_new(&attr);
+
+		emscripten_websocket_set_onopen_callback(socket, NULL,    ws_on_open);
+		emscripten_websocket_set_onclose_callback(socket, NULL,   ws_on_close);
+		emscripten_websocket_set_onerror_callback(socket, NULL,   ws_on_error);
+		emscripten_websocket_set_onmessage_callback(socket, NULL, ws_on_message);
+	}
 
 	open_window();
 	get_window(0)->state = WINDOW_IS_OPEN;
@@ -225,9 +305,9 @@ int main(int argc, char** argv)
 	emscripten_set_keydown_callback(window, NULL, false, handle_key_event);
 	emscripten_set_keyup_callback  (window, NULL, false, handle_key_event);
 
-	#if 1
-	printf("g.num_cores=%d\n", g.num_cores);
-	#endif
+	//#if 1
+	//printf("g.num_cores=%d\n", g.num_cores);
+	//#endif
 
 	gl_init();
 	run_selftest();

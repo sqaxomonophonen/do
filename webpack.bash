@@ -5,7 +5,6 @@ set -e
 cd $(dirname $0)
 which emcc || ( echo "ERROR: no emcc; Emscripten is not set up? HINT: run $ . /path/to/emsdk_env.sh" ; exit 1 )
 which gmake || ( echo "ERROR: no gmake; GNU Make is not installed?" ; exit 1 )
-gmake -f Makefile.emscripten clean
 OPT=-O3 gmake -f Makefile.emscripten -j$(nproc)
 ART="do.wasm do.js do.css"
 ls -l $ART
@@ -35,4 +34,3 @@ done
 echo >> $GEN
 echo "codegen'd $GEN"
 rm -f _tmp_*
-gmake -f Makefile.emscripten clean
