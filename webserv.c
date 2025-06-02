@@ -22,7 +22,11 @@
 #include "sha1.h"
 #include "base64.h"
 #include "stb_sprintf.h"
+#include "stb_ds_sysalloc.h"
 #include "gig.h"
+#include "bufstream.h"
+#include "protocol.h"
+#include "bb.h"
 
 #define CRLF "\r\n"
 
@@ -167,7 +171,8 @@ static const char R503[]=
 	;
 
 enum conn_state {
-	HTTP_REQUEST = 1,
+	NOT_ALLOCATED = 0,
+	HTTP_REQUEST,
 	HTTP_RESPONSE,
 	WEBSOCKET,
 	CLOSING,
@@ -182,14 +187,20 @@ enum websock_state {
 	PAYLOAD,
 };
 
+struct conndo {
+	int64_t journal_cursor;
+};
+
 struct websock {
 	enum websock_state wstate;
 	int header_cursor;
 	int64_t payload_length;
 	int64_t remaining;
+	uint8_t* msgbuf_arr;
 	uint8_t mask_key[4];
 	unsigned  fin    :1;
 	unsigned  opcode :4;
+	struct conndo conndo;
 };
 
 struct conn {
@@ -218,7 +229,6 @@ static struct {
 	int num_free;
 	int next;
 } g;
-
 
 static int alloc_conn(void)
 {
@@ -306,6 +316,7 @@ static void conn_free(struct conn* conn)
 	assert(g.num_free < MAX_CONN_COUNT);
 	g.freelist[g.num_free++] = id;
 	conn_free_transient_data(conn);
+	conn->cstate = NOT_ALLOCATED;
 }
 
 static void conn_enter(struct conn* conn, enum conn_state state)
@@ -677,7 +688,9 @@ static void http_serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 
 	const size_t remaining = (pend-p);
 
-	if ((remaining > 0) && method==GET) SERVE_STATIC_CLOSE_AND_RETURN(conn, R400proto)
+	if ((remaining > 0) && (method==HEAD || method==GET)) {
+		SERVE_STATIC_CLOSE_AND_RETURN(conn, R400proto)
+	}
 
 	assert((remaining == 0) && "XXX we're not handling POST/PUT bodies yet");
 
@@ -691,36 +704,41 @@ static void http_serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 	#define ROUTE(R) (method_set=0 , is_route(R,(char*)path0,&tail))
 	#define IS(M)    (assert(!(method_set&(1<<(M)))), (method_set|=(1<<(M))), method==(M))
 	#define DO405_AND_RETURN {assert(method_set);serve405(conn,method_set);return;}
-
 	if (ROUTE("/o")) { // the "web app"; disabled if NO_WEBPACK is defined
-		#ifdef NO_WEBPACK
-		SERVE_STATIC_AND_RETURN(conn, R404)
-		#else
-		char html[1<<12];
+		if (IS(HEAD) || IS(GET)) {
+			#ifdef NO_WEBPACK
+			SERVE_STATIC_AND_RETURN(conn, R404)
+			#else
+			char html[1<<12];
 
-		const int n = stbsp_snprintf(html, sizeof html,
-			"<!DOCTYPE html>\n"
-			"<title>%s</title>"
-			"<link rel=\"stylesheet\" type=\"text/css\" href=\"/dok/%s\"/>"
-			"<canvas id=\"canvas\"></canvas>"
-			"<div id=\"text_input_overlay\" contenteditable>?</div>"
-			"<script src=\"/dok/%s\"></script>"
-			,
-			"waiting for toDO",
-			webpack_lookup("do.css"),
-			webpack_lookup("do.js")
-		);
+			const int n = stbsp_snprintf(html, sizeof html,
+				"<!DOCTYPE html>\n"
+				"<title>%s</title>"
+				"<link rel=\"stylesheet\" type=\"text/css\" href=\"/dok/%s\"/>"
+				"<canvas id=\"canvas\"></canvas>"
+				"<div id=\"text_input_overlay\" contenteditable>?</div>"
+				"<script src=\"/dok/%s\"></script>"
+				,
+				"waiting for toDO",
+				webpack_lookup("do.css"),
+				webpack_lookup("do.js")
+			);
 
-		conn_printf(conn,
-			"HTTP/1.1 200 OK" CRLF
-			"Content-Type: text/html; charset=UTF-8" CRLF
-			"Content-Length: %d" CRLF
-			CRLF
-			"%s"
-			, n, html);
-		conn_respond(conn);
-		return;
-		#endif
+			conn_printf(conn,
+				"HTTP/1.1 200 OK" CRLF
+				"Content-Type: text/html; charset=UTF-8" CRLF
+				"Content-Length: %d" CRLF
+				CRLF
+				, n);
+			conn_respond(conn);
+			if (method==GET) {
+				conn_writeall(conn, html, n);
+			} else assert(method==HEAD);
+			return;
+			#endif
+		} else {
+			DO405_AND_RETURN
+		}
 
 	} else if (ROUTE("/o/info")) {
 		size_t size;
@@ -1068,6 +1086,7 @@ static int websocket_read_header_u8(struct conn* conn, uint8_t b)
 static int websocket_send0(struct conn* conn, void* payload, int payload_size)
 {
 	assert(conn->cstate == WEBSOCKET);
+	assert((0 == conn->num_inflight_writes) && "cannot handle multiple inflight writes: buffer already in use");
 
 	size_t bufsize;
 	uint8_t* buf = get_conn_ws_write_buffer(conn, &bufsize);
@@ -1093,7 +1112,8 @@ static int websocket_send0(struct conn* conn, void* payload, int payload_size)
 	assert(payload_space > 0);
 	const int fin = payload_size <= payload_space;
 
-	const int opcode = WS_TEXT_FRAME; // XXX binary?
+	//const int opcode = WS_TEXT_FRAME; // XXX binary?
+	const int opcode = WS_BINARY_FRAME;
 	buf[0] = (fin ? 0x80 : 0) + opcode;
 
 	uint8_t* p = &buf[1];
@@ -1125,8 +1145,51 @@ static int websocket_send0(struct conn* conn, void* payload, int payload_size)
 	return num;
 }
 
+static void websocket_handle_msg(struct conn* conn, uint8_t* data, int count)
+{
+	assert(conn->cstate == WEBSOCKET);
+	struct websock* ws = &conn->websock;
+	struct conndo* cdo = &ws->conndo;
+
+	struct bufstream bs;
+	bufstream_init_from_memory(&bs, data, count);
+	while (bs.offset < count) {
+		uint8_t op = bs_read_u8(&bs);
+		switch (op) {
+
+		case WS0_SET_JOURNAL_CURSOR: {
+			cdo->journal_cursor = bs_read_leb128(&bs);
+		}	break;
+
+		case WS0_MIM: {
+			TODO(handle mim from peer)
+			conn_drop(conn);
+		}	break;
+
+		default: {
+			fprintf(stderr, "unhandled op (%d); dropping ws conn\n", op);
+			conn_drop(conn);
+		}	break;
+
+		}
+	}
+}
+
+static void websocket_handle_data(struct conn* conn, int fin, uint8_t* data, int count)
+{
+	assert(conn->cstate == WEBSOCKET);
+	struct websock* ws = &conn->websock;
+	uint8_t* p = arraddnptr(ws->msgbuf_arr, count);
+	memcpy(p, data, count);
+	if (fin) {
+		websocket_handle_msg(conn, ws->msgbuf_arr, arrlen(ws->msgbuf_arr));
+		arrreset(ws->msgbuf_arr);
+	}
+}
+
 static void websocket_serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 {
+	assert(conn->cstate == WEBSOCKET);
 	struct websock* ws = &conn->websock;
 	uint8_t* p = pstart;
 	while (p < pend) {
@@ -1142,11 +1205,7 @@ static void websocket_serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 				p[i] ^= ws->mask_key[(o0+i)&3];
 			}
 
-			printf("TODO websocket num_bytes=%ld fin=%d [", r, ws->fin); // TODO
-
-			if (conn->cstate == WEBSOCKET) {
-				assert(5 == websocket_send0(conn, "howdy", 5));
-			}
+			websocket_handle_data(conn, ws->fin, p, r);
 
 			for (int i=0; i<r; ++i) printf("%c", p[i]);
 			printf("]\n");
@@ -1263,6 +1322,28 @@ int webserv_tick(void)
 		}
 	}
 	return did_work;
+}
+
+void webserv_broadcast_journal(int64_t until_journal_cursor)
+{
+	for (int i=0; i<g.next; ++i) {
+		struct conn* conn = &g.conns[i];
+		if (conn->cstate != WEBSOCKET) continue;
+		if (conn->num_inflight_writes) continue;
+		struct websock* ws = &conn->websock;
+		struct conndo* cdo = &ws->conndo;
+		int64_t count = (until_journal_cursor - cdo->journal_cursor);
+		if (count <= 0) continue;
+
+		static uint8_t* bb;
+		arrreset(bb);
+		bb_append_u8(&bb, WS1_JOURNAL_UPDATE);
+		bb_append_leb128(&bb, count);
+		uint8_t* p = arraddnptr(bb, count);
+		copy_journal(p, count, cdo->journal_cursor);
+		cdo->journal_cursor = until_journal_cursor;
+		websocket_send0(conn, bb, arrlen(bb));
+	}
 }
 
 void webserv_selftest(void)

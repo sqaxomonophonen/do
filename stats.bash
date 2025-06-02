@@ -8,6 +8,7 @@ echo -n "lines of code: "
 cat $(git ls-files | filter) | wc -l
 echo -n "asserts: "
 git grep -nw assert | filter | wc -l
+echo "lines per assert $(( $(cat $(git ls-files | filter) | wc -l) / $(git grep -nw assert | filter | wc -l)  ))"
 echo -n "bounds checked array accesses: "
 git grep -nF arrchk | filter | wc -l
 echo -n "XXXs: "

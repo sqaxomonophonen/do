@@ -19,6 +19,10 @@
 #include "arg.h"
 #include "bufstream.h"
 
+#ifndef __EMSCRIPTEN__ // XXX not totally right?
+#include "webserv.h"
+#endif
+
 #define DOJO_MAGIC ("DOJO0001")
 #define DOSI_MAGIC ("DOSI0001")
 #define DOSD_MAGIC ("DOSD0001")
@@ -1499,6 +1503,12 @@ void* get_snapshot_data(size_t* out_size)
 	return data;
 }
 
+int copy_journal(void* dst, int64_t count, int64_t offset)
+{
+	struct jio* jj = gst.jio_journal;
+	return jio_pread_memonly(jj, dst, count, offset);
+}
+
 static void snapshotcache_push(struct snapshot* snap, uint64_t journal_offset)
 {
 	struct jio* jdat = gst.jio_snapshotcache_data;
@@ -1561,6 +1571,13 @@ static void snapshotcache_push(struct snapshot* snap, uint64_t journal_offset)
 	gst.journal_offset_at_last_snapshotcache_push = journal_offset;
 }
 
+static void broadcast_journal(int64_t until_journal_cursor)
+{
+	#ifndef __EMSCRIPTEN__ // XXX not totally right?
+	webserv_broadcast_journal(until_journal_cursor);
+	#endif
+}
+
 void end_mim(void)
 {
 	assert(g.in_mim);
@@ -1590,7 +1607,10 @@ void end_mim(void)
 			snapshotcache_push(snap, s);
 		}
 	}
+	const int64_t jcnow = jio_get_size(gst.jio_journal);
 	S_UNLOCK();
+
+	broadcast_journal(jcnow);
 
 	#if 0
 	// old command stream/ringbuf stuff. relavant for network? or throw out?
@@ -1842,7 +1862,7 @@ static int unpack_mim_state(struct mim_state* ms, struct bufstream* bs)
 	return 0;
 }
 
-int restore_a_snapshot_from_data(struct snapshot* snap, void* data, size_t sz)
+int restore_a_snapshot_from_data(struct snapshot* snap, void* data, size_t sz, int64_t* out_journal_offset)
 {
 	#if 0
 	printf("DATA");
@@ -1856,6 +1876,7 @@ int restore_a_snapshot_from_data(struct snapshot* snap, void* data, size_t sz)
 	if (sync != SYNC) return FMTERR0("expected SYNC");
 
 	const int64_t journal_offset = bs_read_leb128(&bs);
+	if (out_journal_offset) *out_journal_offset = journal_offset;
 	int e;
 
 	// see also pack_book()
@@ -1888,13 +1909,15 @@ int restore_a_snapshot_from_data(struct snapshot* snap, void* data, size_t sz)
 	return 0;
 }
 
-void restore_snapshot_from_data(void* data, size_t sz)
+int64_t restore_snapshot_from_data(void* data, size_t sz)
 {
 	struct snapshot* snap = &gst.cool_snapshot; // XXX
-	if (restore_a_snapshot_from_data(snap, data, sz) < 0) {
+	int64_t journal_cursor;
+	if (restore_a_snapshot_from_data(snap, data, sz, &journal_cursor) < 0) {
 		dumperr();
 		TODO(handle snapshot restore error)
 	}
+	return journal_cursor;
 }
 
 static int restore_snapshot_from_disk(struct snapshot* snap, uint64_t snapshot_manifest_offset)
@@ -2058,6 +2081,44 @@ static void snapshot_init(struct snapshot* snap)
 	arrinit(snap->mim_state_arr , &system_allocator);
 }
 
+static int spool_raw_journal_bs(struct snapshot* snap, struct bufstream* bs, int64_t until_offset)
+{
+	static uint8_t* mimbuf_arr = NULL;
+	if (mimbuf_arr == NULL) arrinit(mimbuf_arr, &system_allocator);
+
+	while (bs->offset < until_offset) {
+		const uint8_t sync = bs_read_u8(bs);
+		if (sync != SYNC) {
+			return FMTERR(FILENAME_JOURNAL, "expected SYNC");
+		}
+		const int64_t timestamp_us = bs_read_leb128(bs);
+		(void)timestamp_us; // XXX? remove?
+		const int64_t artist_id = bs_read_leb128(bs);
+		const int64_t session_id = bs_read_leb128(bs);
+		const int64_t num_bytes = bs_read_leb128(bs);
+		arrsetlen(mimbuf_arr, num_bytes);
+		bs_read(bs, mimbuf_arr, num_bytes);
+		//printf("going to spool [");for(int i=0;i<num_bytes;++i)printf("%c",mimbuf_arr[i]);printf("]\n");
+		snapshot_spool_ex(snap, mimbuf_arr, num_bytes, artist_id, session_id);
+	}
+
+	if (bs->offset != until_offset) {
+		return FMTERR(FILENAME_JOURNAL, "expected to spool journal until end-of-file");
+	}
+	return 0;
+}
+
+void spool_raw_journal(void* data, int64_t count)
+{
+	struct bufstream bs;
+	bufstream_init_from_memory(&bs, data, count);
+	const int e = spool_raw_journal_bs(&gst.cool_snapshot, &bs, count);
+	if (e<0) {
+		dumperr();
+		fprintf(stderr, "spool_raw_journal_bs() of %d bytes => %d\n", (int)count, e);
+	}
+}
+
 static int host_dir(const char* dir)
 {
 	char pathbuf[1<<14];
@@ -2129,9 +2190,6 @@ static int host_dir(const char* dir)
 			}
 		}
 
-		static uint8_t* mimbuf_arr = NULL;
-		if (mimbuf_arr == NULL) arrinit(mimbuf_arr, &system_allocator);
-
 		const int64_t jjsz = jio_get_size(jj);
 		if (journal_spool_offset > 0) {
 			if (journal_spool_offset  > jjsz) {
@@ -2141,31 +2199,13 @@ static int host_dir(const char* dir)
 			bufstream_init_from_jio(&bs0, jj, journal_spool_offset, buf0, sizeof buf0);
 		}
 
-		while (bs0.offset < jjsz) {
-			const uint8_t sync = bs_read_u8(&bs0);
-			if (sync != SYNC) {
-				S_UNLOCK();
-				return FMTERR(FILENAME_JOURNAL, "expected SYNC");
-			}
-			const int64_t timestamp_us = bs_read_leb128(&bs0);
-			(void)timestamp_us; // XXX? remove?
-			const int64_t artist_id = bs_read_leb128(&bs0);
-			const int64_t session_id = bs_read_leb128(&bs0);
-			const int64_t num_bytes = bs_read_leb128(&bs0);
-			arrsetlen(mimbuf_arr, num_bytes);
-			bs_read(&bs0, mimbuf_arr, num_bytes);
-			//printf("going to spool [");for(int i=0;i<num_bytes;++i)printf("%c",mimbuf_arr[i]);printf("]\n");
-			snapshot_spool_ex(snap, mimbuf_arr, num_bytes, artist_id, session_id);
-		}
-		if (bs0.offset != jjsz) {
+		if (spool_raw_journal_bs(snap, &bs0, jjsz) < 0) {
 			S_UNLOCK();
-			return FMTERR(FILENAME_JOURNAL, "expected to spool journal until end-of-file");
+			return bs0.error;
 		}
-
-		err = bs0.error;
-		if (err<0) {
+		if (bs0.error<0) {
 			S_UNLOCK();
-			return IOERR(FILENAME_JOURNAL, err);
+			return IOERR(FILENAME_JOURNAL, bs0.error);
 		}
 	}
 

@@ -202,8 +202,7 @@ int jio_append(struct jio* jio, const void* ptr, int64_t size)
 	return 0;
 }
 
-
-int jio_pread(struct jio* jio, void* ptr, int64_t size, int64_t offset)
+int pread_ex(struct jio* jio, void* ptr, int64_t size, int64_t offset, int memonly)
 {
 	// ignore read if an error has been signalled
 	if (jio->error < 0) return jio->error;
@@ -223,7 +222,7 @@ int jio_pread(struct jio* jio, void* ptr, int64_t size, int64_t offset)
 	const int64_t ringbuf_size = 1L << ringbuf_size_log2;
 	// ring buffer file position interval [rb0;rb1[
 	int64_t rb0 = jio->filesize0;
-	const int64_t rb1 = rb0 + jio->filesize;
+	const int64_t rb1 = jio->filesize;
 	{
 		const int64_t rbn = (rb1-rb0);
 		assert(rbn >= 0);
@@ -263,7 +262,14 @@ int jio_pread(struct jio* jio, void* ptr, int64_t size, int64_t offset)
 		read_from_backend = 1;
 	}
 
+	if (read_from_backend && memonly) {
+		assert(!"FWEFEWFA");
+		jio->error = IO_READ_ERROR;
+		return jio->error;
+	}
+
 	if (read_from_backend) {
+		assert(!memonly);
 		assert(rr1>rr0);
 		if (0 > io_pread(jio->file_id, rrp, (rr1-rr0), rr0)) {
 			jio->error = IO_READ_ERROR;
@@ -290,6 +296,16 @@ int jio_pread(struct jio* jio, void* ptr, int64_t size, int64_t offset)
 	}
 
 	return size;
+}
+
+int jio_pread(struct jio* jio, void* ptr, int64_t size, int64_t offset)
+{
+	return pread_ex(jio, ptr, size, offset, 0);
+}
+
+int jio_pread_memonly(struct jio* jio, void* ptr, int64_t size, int64_t offset)
+{
+	return pread_ex(jio, ptr, size, offset, 1);
 }
 
 int jio_get_error(struct jio* jio)

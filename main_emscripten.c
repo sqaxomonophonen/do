@@ -21,12 +21,19 @@
 #include "utf8.h"
 #include "impl_gl.h"
 #include "gig.h"
+#include "bb.h"
+#include "protocol.h"
+#include "bufstream.h"
 
 static struct {
 	//int num_cores;
 	double start_time;
 	char* text_buffer_arr;
 	int*  key_buffer_arr;
+	int running;
+	int64_t journal_cursor;
+	uint8_t* bb;
+	EMSCRIPTEN_WEBSOCKET_T socket;
 } g;
 
 EM_JS(char*, get_websocket_url, (void), {
@@ -185,6 +192,8 @@ void set_drag_state(int is_dragging)
 
 static void main_loop(void)
 {
+	if (!g.running) return;
+
 	gui_begin_frame();
 
 	if (arrlen(g.text_buffer_arr) > 0) {
@@ -236,12 +245,21 @@ static void gig_thread_run(void)
 #endif
 
 static char *WS_URL, *INFO_URL;
-static EMSCRIPTEN_WEBSOCKET_T socket;
+
+static void request_journal(void)
+{
+	uint8_t** bb = &g.bb;
+	arrreset(*bb);
+	bb_append_u8(bb, WS0_SET_JOURNAL_CURSOR);
+	bb_append_leb128(bb, g.journal_cursor);
+	emscripten_websocket_send_binary(g.socket, *bb, arrlen(*bb));
+}
 
 bool ws_on_open(int type, const EmscriptenWebSocketOpenEvent* e, void* usr)
 {
 	printf("WS OPEN!\n");
-	emscripten_websocket_send_utf8_text(e->socket, "hiya!");
+	request_journal();
+	g.running = 1;
 	return 0;
 }
 
@@ -259,14 +277,48 @@ bool ws_on_error(int type, const EmscriptenWebSocketErrorEvent* e, void *usr)
 
 bool ws_on_message(int type, const EmscriptenWebSocketMessageEvent* e, void *usr)
 {
-	printf("WS MESSAGE!\n");
+	printf("WS MESSAGE (n=%d)!\n", e->numBytes);
+	//e->data // TODO
+	struct bufstream bs;
+	bufstream_init_from_memory(&bs, e->data, e->numBytes);
+	while (bs.offset < e->numBytes) {
+		const uint8_t op = bs_read_u8(&bs);
+		switch (op) {
+		case WS1_JOURNAL_UPDATE: {
+			const int64_t count = bs_read_leb128(&bs);
+			spool_raw_journal(e->data + bs.offset, count);
+			bufstream_skip(&bs, count);
+			g.journal_cursor += count;
+		}	break;
+		default: {
+			printf("bad opcode (%d) received\n", op);
+			emscripten_websocket_close(e->socket, 1, "bad opcode");
+		}	break;
+		}
+	}
+
+	if (bs.offset != e->numBytes) {
+		printf("bad alignment? offset=%lld numBytes=%d\n", bs.offset, e->numBytes);
+		emscripten_websocket_close(e->socket, 2, "bad alignment");
+	}
+
 	return 0;
 }
 
-
 void info_on_load(void* usr, void* data, int size)
 {
-	restore_snapshot_from_data(data, size);
+	g.journal_cursor = restore_snapshot_from_data(data, size);
+
+	EmscriptenWebSocketCreateAttributes attr = {0};
+	emscripten_websocket_init_create_attributes(&attr);
+	attr.url = WS_URL;
+	//attr.protocols = "binary,base64";
+	g.socket = emscripten_websocket_new(&attr);
+
+	emscripten_websocket_set_onopen_callback(g.socket, NULL,    ws_on_open);
+	emscripten_websocket_set_onclose_callback(g.socket, NULL,   ws_on_close);
+	emscripten_websocket_set_onerror_callback(g.socket, NULL,   ws_on_error);
+	emscripten_websocket_set_onmessage_callback(g.socket, NULL, ws_on_message);
 }
 
 void info_on_error(void* usr)
@@ -279,25 +331,20 @@ int main(int argc, char** argv)
 	WS_URL = get_websocket_url();
 	INFO_URL = get_info_url();
 	printf("WS_URL=[%s] INFO_URL=[%s]\n", WS_URL, INFO_URL);
-
 	//g.num_cores = emscripten_navigator_hardware_concurrency();
 	g.start_time = emscripten_get_now();
+	assert(emscripten_websocket_is_supported());
+
+	gl_init();
+	run_selftest();
+	mie_thread_init();
+	gig_init();
+	//gig_host(arg_dir ? arg_dir : "."); // XXX?!
+	gig_host_no_jio();
+	gig_maybe_setup_stub();
+	gui_init();
 
 	emscripten_async_wget_data(INFO_URL, NULL, info_on_load, info_on_error);
-
-	{
-		assert(emscripten_websocket_is_supported());
-		EmscriptenWebSocketCreateAttributes attr = {0};
-		emscripten_websocket_init_create_attributes(&attr);
-		attr.url = WS_URL;
-		//attr.protocols = "binary,base64";
-		socket = emscripten_websocket_new(&attr);
-
-		emscripten_websocket_set_onopen_callback(socket, NULL,    ws_on_open);
-		emscripten_websocket_set_onclose_callback(socket, NULL,   ws_on_close);
-		emscripten_websocket_set_onerror_callback(socket, NULL,   ws_on_error);
-		emscripten_websocket_set_onmessage_callback(socket, NULL, ws_on_message);
-	}
 
 	open_window();
 	get_window(0)->state = WINDOW_IS_OPEN;
@@ -310,14 +357,6 @@ int main(int argc, char** argv)
 	//printf("g.num_cores=%d\n", g.num_cores);
 	//#endif
 
-	gl_init();
-	run_selftest();
-	mie_thread_init();
-	gig_init();
-	//gig_host(arg_dir ? arg_dir : "."); // XXX?!
-	gig_host_no_jio();
-	gig_maybe_setup_stub();
-	gui_init();
 	//emscripten_wasm_worker_post_function_v(emscripten_malloc_wasm_worker(1L<<20), gig_thread_run);
 	emscripten_set_main_loop(main_loop, 0, false);
 

@@ -58,5 +58,13 @@ static inline int bounds_check(int index, int length, const char* location)
 #define XXX(S)       fprintf(stderr,"XXX(" #S ") at %s:%d\n",__FILE__,__LINE__);
 #define XXX_NOW(S)   {XXX(S);abort();}
 
+#define HEXDUMP(DATA,COUNT) { \
+	fprintf(stderr, "HEX(n=%d) >>",(int)(COUNT)); \
+	for(int i=0;i<(int)(COUNT);++i) { \
+		fprintf(stderr, " %.2x", ((uint8_t*)(DATA))[i]); \
+	} \
+	fprintf(stderr, "\n"); \
+}
+
 #define UTIL_H
 #endif

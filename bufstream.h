@@ -58,6 +58,11 @@ static inline void bufstream_read(struct bufstream* bs, uint8_t* data, size_t co
 	for (size_t i=0; i<count; ++i) data[i] = bufstream_read_u8(bs);
 }
 
+static inline void bufstream_skip(struct bufstream* bs, size_t count)
+{
+	for (size_t i=0; i<count; ++i) bufstream_read_u8(bs);
+}
+
 static inline uint16_t bufstream_read_leu16(struct bufstream* bs)
 {
 	uint8_t raw[2];

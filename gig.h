@@ -229,8 +229,11 @@ void get_copy_of_state_and_doc(int session_id, struct mim_state* out_mim_state, 
 
 int get_my_artist_id(void);
 
-void restore_snapshot_from_data(void* data, size_t sz);
+int64_t restore_snapshot_from_data(void* data, size_t sz);
 void* get_snapshot_data(size_t* out_size);
+int copy_journal(void* dst, int64_t count, int64_t offset);
+void spool_raw_journal(void* data, int64_t count);
+
 // returns snapshot data. you're responsible for free()ing it when done
 
 #define GIG_H
