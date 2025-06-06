@@ -1,7 +1,8 @@
-// XXX SHA-1 is considered broken! nevertheless, SHA-1 is (pointlessly) used by
-// the WebSocket protocol; RFC6455 states: "The WebSocket handshake described
-// in this document doesn't depend on any security properties of SHA-1, such as
-// collision resistance or resistance to the second pre-image attack"
+// XXX ONLY FOR WEBSOCKET XXX -- SHA-1 is considered broken! nevertheless,
+// SHA-1 is (pointlessly) needed by the WebSocket protocol; RFC6455 states:
+// "The WebSocket handshake described in this document doesn't depend on any
+// security properties of SHA-1, such as collision resistance or resistance to
+// the second pre-image attack"
 
 /*
 SHA-1 in C

@@ -30,7 +30,7 @@ int jio_close(struct jio*);
 int64_t jio_get_size(struct jio*);
 int jio_append(struct jio*, const void* ptr, int64_t size);
 int jio_pread(struct jio*, void* ptr, int64_t size, int64_t offset);
-int jio_pread_memonly(struct jio*, void* ptr, int64_t size, int64_t offset);
+//int jio_pread_memonly(struct jio*, void* ptr, int64_t size, int64_t offset);
 int jio_get_error(struct jio*);
 void jio_clear_error(struct jio*);
 

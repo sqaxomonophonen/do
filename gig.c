@@ -7,7 +7,7 @@
 #include <stdio.h> // XXX
 #include <threads.h>
 
-#include "stb_ds.h"
+#include "stb_ds_sysalloc.h"
 #include "stb_sprintf.h"
 #include "jio.h"
 #include "gig.h"
@@ -26,7 +26,7 @@
 #define DOJO_MAGIC ("DOJO0001")
 #define DOSI_MAGIC ("DOSI0001")
 #define DOSD_MAGIC ("DOSD0001")
-#define DO_FORMAT_VERSION (1)
+#define DO_FORMAT_VERSION (10000)
 #define SYNC (0xfa)
 #define FILENAME_JOURNAL              "DO_JAM_JOURNAL"
 #define FILENAME_SNAPSHOTCACHE_DATA   "snapshotcache.data"
@@ -40,47 +40,13 @@ static int match_fundament(const char* s)
 	return _NO_FUNDAMENT_;
 }
 
-#define ARRINIT0(P,A) { assert((P)==NULL && "bad scrallox memory corruption bugs may happen if P is not NULL"); arrinit(P,A); }
-
-static int document_equal(struct document* a, struct document* b)
-{
-	if (a->book_id != b->book_id) return 0;
-	if (a->doc_id != b->doc_id) return 0;
-	const int nna = arrlen(a->name_arr);
-	const int nnb = arrlen(b->name_arr);
-	if (nna != nnb) return 0;
-	if (0 != memcmp(a->name_arr, b->name_arr, nna)) return 0;
-	const int nda = arrlen(a->docchar_arr);
-	const int ndb = arrlen(b->docchar_arr);
-	if (nda != ndb) return 0;
-	if (0 != memcmp(a->docchar_arr, b->docchar_arr, nda*sizeof(a->docchar_arr[0]))) return 0;
-	return 1;
-}
-
-static int mim_state_equal(struct mim_state* a, struct mim_state* b)
-{
-	if (a->artist_id != b->artist_id) return 0;
-	if (a->session_id != b->session_id) return 0;
-	if (a->book_id != b->book_id) return 0;
-	if (a->doc_id != b->doc_id) return 0;
-	if (a->splash4 != b->splash4) return 0;
-	const int na = arrlen(a->caret_arr);
-	const int nb = arrlen(b->caret_arr);
-	if (na != nb) return 0;
-	if (0 != memcmp(a->caret_arr, b->caret_arr, na*sizeof(a->caret_arr[0]))) return 0;
-	return 1;
-}
-
 static void document_copy(struct document* dst, struct document* src)
 {
 	struct document tmp = *dst;
 	*dst = *src;
 	dst->docchar_arr = tmp.docchar_arr;
-	if (dst->docchar_arr == NULL) arrinit(dst->docchar_arr, &system_allocator);
-	///printf("%zd / %zd\n", arrlen(dst->docchar_arr), arrlen(src->docchar_arr));
 	arrcpy(dst->docchar_arr, src->docchar_arr);
 	dst->name_arr = tmp.name_arr;
-	if (dst->name_arr == NULL) arrinit(dst->name_arr, &system_allocator);
 	arrcpy(dst->name_arr, src->name_arr);
 }
 
@@ -89,8 +55,68 @@ static void mim_state_copy(struct mim_state* dst, struct mim_state* src)
 	struct mim_state tmp = *dst;
 	*dst = *src;
 	dst->caret_arr = tmp.caret_arr;
-	if (dst->caret_arr == NULL) arrinit(dst->caret_arr, &system_allocator);
 	arrcpy(dst->caret_arr, src->caret_arr);
+}
+
+struct snapshot {
+	struct book*      book_arr;
+	struct document*  document_arr;
+	struct mim_state* mim_state_arr;
+};
+
+static void snapshot_copy(struct snapshot* dst, struct snapshot* src)
+{
+	// books
+	arrcpy(dst->book_arr, src->book_arr);
+
+	// documents
+	const int num_src_docs = arrlen(src->document_arr);
+	const int num_dst_docs = arrlen(dst->document_arr);
+	if (num_dst_docs < num_src_docs) {
+		arrsetlen(dst->document_arr, num_src_docs);
+		memset(&dst->document_arr[num_dst_docs], 0, sizeof(*dst->document_arr)*(num_src_docs-num_dst_docs));
+	}
+	for (int i=0; i<num_src_docs; ++i) {
+		struct document* dstdoc = &dst->document_arr[i];
+		struct document* srcdoc = &src->document_arr[i];
+		struct document tmp = *dstdoc;
+		*dstdoc = *srcdoc;
+		dstdoc->name_arr = tmp.name_arr;
+		arrcpy(dstdoc->name_arr, srcdoc->name_arr);
+		dstdoc->docchar_arr = tmp.docchar_arr;
+		arrcpy(dstdoc->docchar_arr , srcdoc->docchar_arr);
+	}
+	for (int i=num_src_docs; i<num_dst_docs; ++i) {
+		struct document* doc = &dst->document_arr[i];
+		arrfree(doc->name_arr);
+		arrfree(doc->docchar_arr);
+	}
+	if (num_dst_docs > num_src_docs) {
+		arrsetlen(dst->document_arr, num_src_docs);
+	}
+
+	// mim states
+	const int num_src_ms = arrlen(src->mim_state_arr);
+	const int num_dst_ms = arrlen(dst->mim_state_arr);
+	if (num_dst_ms < num_src_ms) {
+		arrsetlen(dst->mim_state_arr, num_src_ms);
+		memset(&dst->mim_state_arr[num_dst_ms], 0, sizeof(*dst->mim_state_arr)*(num_src_ms-num_dst_ms));
+	}
+	for (int i=0; i<num_src_ms; ++i) {
+		struct mim_state* dstms = &dst->mim_state_arr[i];
+		struct mim_state* srcms = &src->mim_state_arr[i];
+		struct mim_state tmp = *dstms;
+		*dstms = *srcms;
+		dstms->caret_arr = tmp.caret_arr;
+		arrcpy(dstms->caret_arr, srcms->caret_arr);
+	}
+	for (int i=num_src_ms; i<num_dst_ms; ++i) {
+		struct mim_state* ms = &dst->mim_state_arr[i];
+		arrfree(ms->caret_arr);
+	}
+	if (num_dst_ms > num_src_ms) {
+		arrsetlen(dst->mim_state_arr, num_src_ms);
+	}
 }
 
 static int document_locate(struct document* doc, struct location* loc)
@@ -100,17 +126,6 @@ static int document_locate(struct document* doc, struct location* loc)
 	return it.offset;
 }
 
-struct snapshot {
-	struct book* book_arr;
-	struct document*  document_arr;
-	struct mim_state* mim_state_arr;
-};
-
-static int snapshot_get_num_documents(struct snapshot* snap)
-{
-	return arrlen(snap->document_arr);
-}
-
 static struct document* snapshot_get_document_by_index(struct snapshot* snap, int index)
 {
 	return arrchkptr(snap->document_arr, index);
@@ -118,8 +133,8 @@ static struct document* snapshot_get_document_by_index(struct snapshot* snap, in
 
 static struct document* snapshot_lookup_document_by_ids(struct snapshot* snap, int book_id, int doc_id)
 {
-	const int n = snapshot_get_num_documents(snap);
-	for (int i=0; i<n; ++i) {
+	const int num_docs = arrlen(snap->document_arr);
+	for (int i=0; i<num_docs; ++i) {
 		struct document* doc = snapshot_get_document_by_index(snap, i);
 		if ((doc->book_id == book_id) && (doc->doc_id == doc_id)) {
 			return doc;
@@ -139,23 +154,24 @@ static struct document* snapshot_get_document_by_ids(struct snapshot* snap, int 
 
 static struct mim_state* snapshot_lookup_mim_state_by_ids(struct snapshot* snap, int artist_id, int session_id)
 {
-	const int n = arrlen(snap->mim_state_arr);
-	for (int i=0; i<n; ++i) {
+	const int num_ms = arrlen(snap->mim_state_arr);
+	for (int i=0; i<num_ms; ++i) {
 		struct mim_state* s = arrchkptr(snap->mim_state_arr, i);
 		if ((s->artist_id == artist_id) &&  (s->session_id == session_id)) {
 			return s;
 		}
 	}
 	return NULL;
-	assert(!"not found");
 }
 
+#if 0
 static struct mim_state* snapshot_get_mim_state_by_ids(struct snapshot* snap, int artist_id, int session_id)
 {
 	struct mim_state* ms = snapshot_lookup_mim_state_by_ids(snap, artist_id, session_id);
 	assert(ms != NULL);
 	return ms;
 }
+#endif
 
 static struct mim_state* snapshot_get_or_create_mim_state_by_ids(struct snapshot* snap, int artist_id, int session_id)
 {
@@ -164,214 +180,247 @@ static struct mim_state* snapshot_get_or_create_mim_state_by_ids(struct snapshot
 	ms = arraddnptr(snap->mim_state_arr, 1);
 	memset(ms, 0, sizeof *ms);
 	ms->artist_id  = artist_id,
-	ms->session_id = session_id,
-	arrinit(ms->caret_arr, &system_allocator);
+	ms->session_id = session_id;
 	return ms;
 }
 
-// "cow" stands for "copy-on-write". moo! it represents pending changes to a
-// snapshot, and only contains the changed documents and mim states
-struct cow_snapshot {
-	struct allocator* allocator;
-	struct snapshot* ref;
-	struct document* cow_document_arr;
-	struct book* new_book_arr;
-	int* delete_book_arr;
-	struct mim_state mim_state;
+struct ringbuf {
+	int size_log2;
+	uint8_t* buf;
+	_Atomic(int64_t) head, tail;
 };
 
-static void init_cow_snapshot(struct cow_snapshot* cows, struct snapshot* ref, struct mim_state* ms, struct allocator* a)
+static void ringbuf_init(struct ringbuf* rb, int size_log2)
 {
-	memset(cows, 0, sizeof *cows);
-	cows->allocator = a;
-	cows->ref = ref;
-	ARRINIT0(cows->cow_document_arr , cows->allocator);
-	ARRINIT0(cows->new_book_arr     , cows->allocator);
-	ARRINIT0(cows->delete_book_arr  , cows->allocator);
-	struct mim_state* cms = &cows->mim_state;
-	ARRINIT0(cms->caret_arr, cows->allocator);
-	mim_state_copy(cms, ms);
+	memset(rb, 0, sizeof *rb);
+	rb->size_log2 = size_log2;
+	rb->buf = calloc(1L << size_log2, sizeof *rb->buf);
 }
 
-static struct document* cow_snapshot_lookup_cow_document_by_ids(struct cow_snapshot* cows, int book_id, int doc_id)
+static void ringbuf_free(struct ringbuf* rb)
 {
-	const int n = arrlen(cows->cow_document_arr);
-	for (int i=0; i<n; ++i) {
-		struct document* doc = &cows->cow_document_arr[i];
-		if ((doc->book_id == book_id) && (doc->doc_id == doc_id)) {
-			return doc;
-		}
-	}
-	return NULL;
+	assert(rb->buf != NULL);
+	free(rb->buf);
+	memset(rb, 0, sizeof *rb);
 }
 
-static struct document* cow_snapshot_lookup_readonly_document_by_ids(struct cow_snapshot* cows, int book_id, int doc_id)
+static int ringbuf_write(struct ringbuf* rb, const uint8_t* data, int count)
 {
-	struct document* doc = cow_snapshot_lookup_cow_document_by_ids(cows, book_id, doc_id);
-	if (doc != NULL) return doc;
-	return snapshot_lookup_document_by_ids(cows->ref, book_id, doc_id);
-}
+	assert(rb->buf != NULL);
+	const int size_log2 = rb->size_log2;
+	const unsigned size = 1L << size_log2;
+	const uint64_t mask = size-1;
 
-static struct document* cow_snapshot_get_readonly_document_by_ids(struct cow_snapshot* cows, int book_id, int doc_id)
-{
-	struct document* doc = cow_snapshot_lookup_readonly_document_by_ids(cows, book_id, doc_id);
-	assert(doc != NULL);
-	return doc;
-}
-
-static struct document* cow_snapshot_lookup_readwrite_document_by_ids(struct cow_snapshot* cows, int book_id, int doc_id)
-{
-	struct document* doc = cow_snapshot_lookup_cow_document_by_ids(cows, book_id, doc_id);
-	if (doc != NULL) return doc;
-
-	struct document* src_doc = snapshot_lookup_document_by_ids(cows->ref, book_id, doc_id);
-	if (src_doc == NULL) return NULL;
-
-	if (cows->cow_document_arr == NULL) {
-		ARRINIT0(cows->cow_document_arr, cows->allocator);
+	const int64_t tail = atomic_load(&rb->tail);
+	const int64_t head = atomic_load(&rb->head);
+	const int64_t writable_count = (size - (head-tail));
+	if (count > writable_count) {
+		// write all or nothing
+		return -1;
 	}
 
-	struct document* dst_doc = arraddnptr(cows->cow_document_arr, 1);
-	memcpy(dst_doc, src_doc, sizeof *dst_doc);
+	const int64_t new_head = head + count;
+	const int cycle0 = head         >> size_log2;
+	const int cycle1 = (new_head-1) >> size_log2;
+	if (cycle1 == cycle0) {
+		memcpy(rb->buf + (head&mask), data, count);
+	} else {
+		const int64_t n0 = (size - (head&mask));
+		assert(n0 > 0);
+		memcpy(rb->buf + (head&mask) , data    , n0);
+		memcpy(rb->buf               , data+n0 , count-n0);
+	}
 
-	dst_doc->name_arr = NULL;
-	ARRINIT0(dst_doc->name_arr, cows->allocator);
-	arrcpy(dst_doc->name_arr, src_doc->name_arr);
+	atomic_store(&rb->head, new_head);
 
-	dst_doc->docchar_arr = NULL;
-	ARRINIT0(dst_doc->docchar_arr, cows->allocator);
-	arrcpy(dst_doc->docchar_arr, src_doc->docchar_arr);
-
-	return dst_doc;
+	return 0;
 }
 
-static struct document* cow_snapshot_get_readwrite_document_by_ids(struct cow_snapshot* cows, int book_id, int doc_id)
+static void ringbuf_get_readable_range(struct ringbuf* rb, int64_t* out_p0, int64_t* out_p1)
 {
-	struct document* doc = cow_snapshot_lookup_readwrite_document_by_ids(cows, book_id, doc_id);
-	assert(doc != NULL);
-	return doc;
+	assert(rb->buf != NULL);
+	const int64_t head = atomic_load(&rb->head);
+	const int64_t tail = atomic_load(&rb->tail);
+	if (out_p0) *out_p0 = tail;
+	if (out_p1) *out_p1 = head;
 }
 
-static void cow_snapshot_commit(struct cow_snapshot* cows)
+static void ringbuf_read_range(struct ringbuf* rb, uint8_t* data, int64_t p0, int64_t p1)
 {
-	assert((arrlen(cows->delete_book_arr) == 0) && "TODO delete books");
-
-	const int num_new_books = arrlen(cows->new_book_arr);
-	for (int i=0; i<num_new_books; ++i) {
-		struct book* new_book = &cows->new_book_arr[i];
-		const int num_books = arrlen(cows->ref->book_arr);
-		for (int ii=0; ii<num_books; ++ii) {
-			struct book* book = &cows->ref->book_arr[ii];
-			assert((new_book->book_id != book->book_id) && "book id clash should've been resolved earlier");
-		}
-		arrput(cows->ref->book_arr, *new_book);
+	assert(rb->buf != NULL);
+	const int size_log2 = rb->size_log2;
+	const unsigned size = 1L << size_log2;
+	const uint64_t mask = size-1;
+	const int cycle0 =  p0    >> size_log2;
+	const int cycle1 = (p1-1) >> size_log2;
+	const int64_t num_bytes = p1-p0;
+	if (cycle0 == cycle1) {
+		memcpy(data, rb->buf + (p0&mask), num_bytes);
+	} else {
+		const int64_t n0 = num_bytes - (p0&mask);
+		assert(n0 > 0);
+		memcpy(data    , rb->buf+(p0&mask) , n0);
+		memcpy(data+n0 , rb->buf           , num_bytes-n0);
 	}
-
-	const int num_cow_doc = arrlen(cows->cow_document_arr);
-	for (int i=0; i<num_cow_doc; ++i) {
-		struct document* src_doc = &cows->cow_document_arr[i];
-		struct document* dst_doc = snapshot_lookup_document_by_ids(cows->ref, src_doc->book_id, src_doc->doc_id);
-		if (dst_doc) {
-			if (!document_equal(dst_doc, src_doc)) {
-				document_copy(dst_doc, src_doc);
-				dst_doc->snapshotcache_offset = 0;
-			}
-		} else {
-			struct document new_doc = *src_doc;
-			new_doc.name_arr = NULL;
-			arrinit(new_doc.name_arr, &system_allocator);
-			arrcpy(new_doc.name_arr, src_doc->name_arr);
-			new_doc.docchar_arr = NULL;
-			arrinit(new_doc.docchar_arr, &system_allocator);
-			arrcpy(new_doc.docchar_arr, src_doc->docchar_arr);
-			arrput(cows->ref->document_arr, new_doc);
-		}
-	}
-	if (num_cow_doc>0) arrsetlen(cows->cow_document_arr, 0);
-
-	struct mim_state* src_ms = &cows->mim_state;
-	struct mim_state* dst_ms = snapshot_get_mim_state_by_ids(cows->ref, src_ms->artist_id, src_ms->session_id);
-	if (!mim_state_equal(dst_ms, src_ms)) {
-		mim_state_copy(dst_ms, src_ms);
-		dst_ms->snapshotcache_offset = 0;
-	}
+	atomic_store(&rb->tail, p1);
 }
 
-static struct state {
-	mtx_t snap_mutex;
-	struct snapshot cool_snapshot;
-	//struct snapshot cool_snapshot, hot_snapshot;
-	int my_artist_id;
-	uint64_t journal_insignia;
+static struct {
+	unsigned is_configured :1;
+	unsigned is_host       :1;
+	unsigned is_peer       :1;
+	struct ringbuf peer2host_mim_ringbuf;
+} g; // globals
+
+static struct {
+	int io_port_id;
 	int64_t journal_offset_at_last_snapshotcache_push;
 	struct jio* jio_journal;
 	struct jio* jio_snapshotcache_data;
 	struct jio* jio_snapshotcache_index;
 	int64_t journal_timestamp_start;
-} gst;
+	int journal_snapshot_growth_threshold;
+} igo; // I/O globals
 
-static void S_LOCK(void)
-{
-	assert(thrd_success == mtx_lock(&gst.snap_mutex));
-}
+struct peer_state {
+	int artist_id;
+	uint8_t* cmdbuf_arr;
+	//int64_t cmd_ack_cursor;
+};
 
-static void S_UNLOCK(void)
+static struct {
+	struct snapshot present_snapshot;
+	// "present snapshot" is the "snapshot in effect"; it's always in sync with
+	// the latest data added to the journal
+	uint8_t* bb_arr;
+	int next_artist_id;
+	struct peer_state* peer_state_arr;
+} hg; // host globals
+
+static struct peer_state* host_get_or_create_peer_state_by_artist_id(int artist_id)
 {
-	assert(thrd_success == mtx_unlock(&gst.snap_mutex));
+	const int num = arrlen(hg.peer_state_arr);
+	for (int i=0; i<num; ++i) {
+		struct peer_state* ps = &hg.peer_state_arr[i];
+		if (ps->artist_id == artist_id) {
+			return ps;
+		}
+	}
+	struct peer_state* ps = arraddnptr(hg.peer_state_arr, 1);
+	memset(ps, 0, sizeof *ps);
+	ps->artist_id = artist_id;
+	return ps;
 }
 
 static struct {
-	int journal_snapshot_growth_threshold;
-	uint8_t* mim_buffer_arr;
-	int using_mim_session_id;
-	int in_mim;
+	int my_artist_id;
+	uint8_t* bb_arr;
+	int mim_session_id;
+	struct snapshot upstream_snapshot;
+	// "upstream snapshot" is the latest snapshot received from the host
+	struct snapshot fiddle_snapshot;
+	// "fiddle snapshot" is based on "upstream snapshot" but used for applying
+	// edits; to run&verify code edits before pushing them to the host, but
+	// also (optionally?) to see edits before receiving confirmation from the
+	// host (waiting for roundtrip latency and all)
+	int64_t journal_cursor;
+	unsigned  fiddle_ahead  :1;
+	double artificial_mim_latency_mean;
+	double artificial_mim_latency_variance;
+	//_Atomic(int64_t) ackd_cmd_cursor;
+	int64_t tracer_sequence;
+	uint8_t* unackd_mimbuf_arr;
+} pg; // peer globals
+
+THREAD_LOCAL static struct {
 	char errormsg[1<<14];
-	int io_port_id;
-	uint8_t* io_bb_arr;
-} g;
+	int in_mim;
+	//int mim_header_size;
+	uint8_t* mim_buffer_arr;
+	char* mimex_buffer_arr;
+} tlg; // thread local globals
 
 static void dumperr(void)
 {
-	if (strlen(g.errormsg) == 0) return;
-	fprintf(stderr, "ERROR [%s]\n", g.errormsg);
+	if (strlen(tlg.errormsg) == 0) return;
+	fprintf(stderr, "ERROR [%s]\n", tlg.errormsg);
 }
 
-void gig_tick(void)
+FORMATPRINTF1
+static int errf(const char* fmt, ...)
 {
-	#ifndef __EMSCRIPTEN__
-	struct io_event ev = {0};
-	while (io_port_poll(g.io_port_id, &ev)) {
-		io_echo ec = ev.echo;
-		if (gst.jio_journal             && jio_ack(gst.jio_journal             , ec)) continue;
-		if (gst.jio_snapshotcache_data  && jio_ack(gst.jio_snapshotcache_data  , ec)) continue;
-		if (gst.jio_snapshotcache_index && jio_ack(gst.jio_snapshotcache_index , ec)) continue;
-		assert(!"unhandled event");
+	va_list va;
+	va_start(va, fmt);
+	stbsp_vsnprintf(tlg.errormsg, sizeof tlg.errormsg, fmt, va);
+	va_end(va);
+	return -1;
+}
+
+#define FMTERR0(MSG)    errf("(format error): %s (at %s:%d)", (MSG), __FILE__, __LINE__)
+#define FMTERR(PATH,MSG)    errf("%s (format error): %s (at %s:%d)", (PATH), (MSG), __FILE__, __LINE__)
+#define IOERR(PATH,ERRCODE) errf("%s (jio error): %s (at %s:%d)", (PATH), io_error_to_string_safe(ERRCODE), __FILE__, __LINE__)
+
+void peer_tick(void)
+{
+	assert(g.is_peer);
+
+	if (pg.journal_cursor == 0) {
+		pg.journal_cursor = 8*3; // XXX hack to skip header...
 	}
-	#endif
+	const int64_t jc0 = pg.journal_cursor;
+	if (g.is_peer && g.is_host) {
+		const int64_t jc1 = jio_get_size(igo.jio_journal);
+		if (jc1 > jc0) {
+			const int64_t size = (jc1 - jc0);
+			uint8_t** bb = &pg.bb_arr;
+			arrsetlen(*bb, size);
+			if (jio_pread(igo.jio_journal, *bb, size, jc0) < 0) {
+				FIXME(handle peer_tick journal read error)
+				return;
+			}
+
+			peer_spool_raw_journal_into_upstream_snapshot(*bb, size);
+			pg.fiddle_ahead = 0;
+			pg.journal_cursor = jc1;
+		}
+	} else if (g.is_peer && !g.is_host) {
+		// already handled elsewhere, no?
+		// or XXX should we read from savedir journal here?
+	} else {
+		assert(!"unreachable");
+	}
+
+	struct snapshot* snap = &pg.fiddle_snapshot;
+	if (!pg.fiddle_ahead) {
+		snapshot_copy(snap, &pg.upstream_snapshot);
+		pg.fiddle_ahead = 1;
+	}
 }
 
 static char* get_mim_buffer_top(void)
 {
-	arrsetmincap(g.mim_buffer_arr, arrlen(g.mim_buffer_arr) + STB_SPRINTF_MIN);
-	return (char*)g.mim_buffer_arr + arrlen(g.mim_buffer_arr);
+	assert(tlg.in_mim);
+	arrsetmincap(tlg.mim_buffer_arr, arrlen(tlg.mim_buffer_arr) + STB_SPRINTF_MIN);
+	return (char*)tlg.mim_buffer_arr + arrlen(tlg.mim_buffer_arr);
 }
 
 static void mimsrc(uint8_t* src, size_t n)
 {
-	uint8_t* dst = arraddnptr(g.mim_buffer_arr, n);
+	assert(tlg.in_mim);
+	uint8_t* dst = arraddnptr(tlg.mim_buffer_arr, n);
 	memcpy(dst, src, n);
 	(void)get_mim_buffer_top();
 }
 
 static char* wrote_mim_cb(const char* buf, void* user, int len)
 {
-	arrsetlen(g.mim_buffer_arr, arrlen(g.mim_buffer_arr)+len);
+	assert(tlg.in_mim);
+	arrsetlen(tlg.mim_buffer_arr, arrlen(tlg.mim_buffer_arr)+len);
 	return get_mim_buffer_top();
 }
 
 void mimf(const char* fmt, ...)
 {
-	assert(g.in_mim);
 	va_list va;
 	va_start(va, fmt);
 	stbsp_vsprintfcb(wrote_mim_cb, NULL, get_mim_buffer_top(), fmt, va);
@@ -395,40 +444,73 @@ void mimi(int tag, const char* text)
 
 int get_my_artist_id(void)
 {
-	assert((gst.my_artist_id>0) && "artist id not initialized");
-	return gst.my_artist_id;
+	assert((pg.my_artist_id>0) && "artist id not initialized");
+	return pg.my_artist_id;
 }
 
-void get_copy_of_state_and_doc(int session_id, struct mim_state* out_mim_state, struct document* out_doc)
+void set_my_artist_id(int artist_id)
 {
-	S_LOCK();
-	struct snapshot* snap = &gst.cool_snapshot;
+	pg.my_artist_id = artist_id;
+}
+
+int alloc_artist_id(void)
+{
+	assert((hg.next_artist_id >= 1) && "alloc_artist_id() not allowed");
+	return hg.next_artist_id++;
+}
+
+void free_artist_id(int artist_id)
+{
+	TODO(free artist id)
+}
+
+int get_copy_of_state(int session_id, struct mim_state* out_mim_state)
+{
+	struct snapshot* snap = &pg.fiddle_snapshot;
 	const int artist_id = get_my_artist_id();
 	const int num_states = arrlen(snap->mim_state_arr);
 	for (int i=0; i<num_states; ++i) {
 		struct mim_state* ms = arrchkptr(snap->mim_state_arr, i);
-		if ((ms->artist_id==artist_id) && (ms->session_id==session_id)) {
-			const int book_id = ms->book_id;
-			assert((book_id > 0) && "invalid book id in mim state");
-			const int doc_id = ms->doc_id;
-			assert((doc_id > 0) && "invalid document id in mim state");
-			struct document* doc = NULL;
-			const int num_documents = arrlen(snap->document_arr);
-			for (int i=0; i<num_documents; ++i) {
-				struct document* d = arrchkptr(snap->document_arr, i);
-				if ((d->book_id == book_id) && (d->doc_id == doc_id)) {
-					doc = d;
-					break;
-				}
-			}
-			assert((doc != NULL) && "invalid document id (not found) in mim state");
-			if (out_mim_state) mim_state_copy(out_mim_state, ms);
-			if (out_doc)        document_copy(out_doc, doc);
-			S_UNLOCK();
-			return;
+		if ((ms->artist_id!=artist_id) || (ms->session_id!=session_id)) {
+			continue;
 		}
+		if (out_mim_state) mim_state_copy(out_mim_state, ms);
+		return 1;
 	}
-	assert(!"state not found");
+	return 0;
+}
+
+int get_copy_of_state_and_doc(int session_id, struct mim_state* out_mim_state, struct document* out_doc)
+{
+	struct snapshot* snap = &pg.fiddle_snapshot;
+	const int artist_id = get_my_artist_id();
+	const int num_states = arrlen(snap->mim_state_arr);
+	for (int i=0; i<num_states; ++i) {
+		struct mim_state* ms = arrchkptr(snap->mim_state_arr, i);
+		if ((ms->artist_id!=artist_id) || (ms->session_id!=session_id)) {
+			continue;
+		}
+		const int book_id = ms->book_id;
+		if (book_id == 0) return 0;
+		//assert((book_id > 0) && "invalid book id in mim state");
+		const int doc_id = ms->doc_id;
+		if (doc_id == 0) return 0;
+		//assert((doc_id > 0) && "invalid document id in mim state");
+		struct document* doc = NULL;
+		const int num_documents = arrlen(snap->document_arr);
+		for (int i=0; i<num_documents; ++i) {
+			struct document* d = arrchkptr(snap->document_arr, i);
+			if ((d->book_id == book_id) && (d->doc_id == doc_id)) {
+				doc = d;
+				break;
+			}
+		}
+		assert((doc != NULL) && "invalid document id (not found) in mim state");
+		if (out_mim_state) mim_state_copy(out_mim_state, ms);
+		if (out_doc)        document_copy(out_doc, doc);
+		return 1;
+	}
+	return 0;
 }
 
 FORMATPRINTF1
@@ -451,71 +533,83 @@ static void doc_location_constraint(struct document* doc, struct location* loc)
 }
 
 struct mimop {
-	struct cow_snapshot* cows;
+	struct snapshot* snap;
+	struct mim_state* ms;
 };
 
-static int mimop_get_book_id(struct mimop* mo)
+static void mimop_set_ms(struct mimop* mo, int artist_id, int session_id)
 {
-	return mo->cows->mim_state.book_id;
-}
+	assert(artist_id>0);
+	assert(session_id>0);
+	const int num_ms = arrlen(mo->snap->mim_state_arr);
+	for (int i=0; i<num_ms; ++i) {
+		struct mim_state* ms = &mo->snap->mim_state_arr[i];
+		if ((ms->artist_id==artist_id) && (ms->session_id==session_id)) {
+			mo->ms = ms;
+			return;
+		}
+	}
 
-static int mimop_get_doc_id(struct mimop* mo)
-{
-	return mo->cows->mim_state.doc_id;
-}
-
-static int mimop_has_doc(struct mimop* mo)
-{
-	const int book_id = mimop_get_book_id(mo);
-	const int doc_id  = mimop_get_doc_id(mo);
-	if ((book_id <= 0) || (doc_id <= 0)) return 0;
-	return (NULL != cow_snapshot_lookup_readonly_document_by_ids(mo->cows, book_id, doc_id));
-}
-
-static struct document* mimop_get_readonly_doc(struct mimop* mo)
-{
-	const int book_id = mimop_get_book_id(mo);
-	const int doc_id  = mimop_get_doc_id(mo);
-	return cow_snapshot_get_readonly_document_by_ids(mo->cows, book_id, doc_id);
-}
-
-static struct document* mimop_get_readwrite_doc(struct mimop* mo)
-{
-	const int book_id = mimop_get_book_id(mo);
-	const int doc_id  = mimop_get_doc_id(mo);
-	return cow_snapshot_get_readwrite_document_by_ids(mo->cows, book_id, doc_id);
+	mo->ms = arraddnptr(mo->snap->mim_state_arr, 1);
+	memset(mo->ms, 0, sizeof *mo->ms);
+	mo->ms->artist_id = artist_id;
+	mo->ms->session_id = session_id;
 }
 
 static struct mim_state* mimop_ms(struct mimop* mo)
 {
-	return &mo->cows->mim_state;
+	assert((mo->ms != NULL) && "missing mimop_set_ms()-call?");
+	return mo->ms;
+}
+
+static struct document* mimop_lookup_doc(struct mimop* mo)
+{
+	if (mo->ms == NULL) return NULL;
+	const int book_id = mimop_ms(mo)->book_id;
+	const int doc_id  = mimop_ms(mo)->doc_id;
+	if ((book_id <= 0) || (doc_id <= 0)) return NULL;
+	return snapshot_lookup_document_by_ids(mo->snap, book_id, doc_id);
+}
+
+static struct document* mimop_get_doc(struct mimop* mo)
+{
+	struct document* doc = mimop_lookup_doc(mo);
+	assert(doc != NULL);
+	return doc;
+}
+
+static int mimop_has_doc(struct mimop* mo)
+{
+	return (mo->ms != NULL) && (mimop_lookup_doc(mo) != NULL);
 }
 
 static void mimop_delete(struct mimop* mo, struct location* loc0, struct location* loc1)
 {
-	struct document* doc = mimop_get_readwrite_doc(mo);
+	struct document* rw_doc = mimop_get_doc(mo);
 	location_sort2(&loc0, &loc1);
-	const int o0 = document_locate(doc, loc0);
-	int o1 = document_locate(doc, loc1);
+	const int o0 = document_locate(rw_doc, loc0);
+	int o1 = document_locate(rw_doc, loc1);
+	if (o1==o0) return;
 	for (int o=o0; o<o1; ++o) {
-		struct docchar* fc = arrchkptr(doc->docchar_arr, o);
+		struct docchar* fc = arrchkptr(rw_doc->docchar_arr, o);
 		if (fc->flags & FC_IS_INSERT) {
-			arrdel(doc->docchar_arr, arrchk(doc->docchar_arr, o));
+			arrdel(rw_doc->docchar_arr, arrchk(rw_doc->docchar_arr, o));
 			--o;
 			--o1;
-		} else {
+		} else if (!(fc->flags & FC_IS_DELETE)) {
 			fc->flags |= FC_IS_DELETE;
 		}
 	}
 }
 
 struct mimexscanner {
-	struct allocator* alloc;
-	char* all;
-	const char* cmd;
-	const char* err;
+	char* all0;
+	char* all1;
+	char* cmd;
+	char* arg;
+	char* err;
 	char* cur;
-	const char* end;
+	char* end;
 	int cmdlen;
 	unsigned did_match :1;
 	unsigned has_error :1;
@@ -523,46 +617,40 @@ struct mimexscanner {
 
 static int mimexscanner_errorf(struct mimexscanner* s, const char* fmt, ...)
 {
-	const size_t max = 1L<<12;
-	char* err = allocator_malloc(s->alloc, max);
 	va_list va;
 	va_start(va, fmt);
-	stbsp_vsnprintf(err, max, fmt, va);
+	stbsp_vsnprintf(tlg.errormsg, sizeof tlg.errormsg, fmt, va);
 	va_end(va);
-	s->err = err;
 	s->has_error = 1;
+	s->err = tlg.errormsg;
 	return -1;
 }
 
-static int mimexscanner_init(struct mimexscanner* s, struct allocator* alloc, const char* c0, const char* c1)
+static int mimexscanner_init(struct mimexscanner* s, const char* c0, const char* c1)
 {
 	memset(s, 0, sizeof *s);
-	s->alloc = alloc;
-
 	const size_t num_bytes = (c1-c0);
-	s->all = allocator_malloc(alloc, num_bytes+1);
-	memcpy(s->all, c0, num_bytes);
-
+	arrsetlen(tlg.mimex_buffer_arr, num_bytes);
+	memcpy(tlg.mimex_buffer_arr, c0, num_bytes);
+	s->all0=tlg.mimex_buffer_arr;
+	s->all1=s->all0 + num_bytes;
 	// search for space in command if it exists, so whether
 	// input is ":foo" or ":foo 42" we want the "foo" part
 	// (which is the "ex" command, and the rest is arguments)
 	int cmdlen=0;
-	const char* p=c0;
-	for (p=c0; p<c1; ++cmdlen, ++p) {
-		if (*p == ' ') break;
-	}
+	char* p=s->all0;
+	for (p=s->all0; p<s->all1; ++cmdlen, ++p) if (*p == ' ') break;
 	if (cmdlen == 0) return mimexscanner_errorf(s, "empty command");
-	s->all[cmdlen] = 0;
-	s->cmd = s->all;
-	s->cmdlen = cmdlen;
-	s->cur = s->all + cmdlen + 1;
-	s->end = s->all + num_bytes;
+	*p=0; // add NUL-terminator
+	s->cmd = s->all0;
+	s->cur = s->all0 + cmdlen + 1;
+	s->end = s->all0 + num_bytes;
 	return 0;
 }
 
-static const char* mimexscanner_next_arg(struct mimexscanner* s)
+static char* mimexscanner_next_arg(struct mimexscanner* s)
 {
-	const char* p0 = s->cur;
+	char* arg = s->cur;
 	int num=0;
 	for (; s->cur < s->end; ++s->cur) {
 		if (*s->cur == ' ') {
@@ -577,7 +665,7 @@ static const char* mimexscanner_next_arg(struct mimexscanner* s)
 	}
 	*s->cur = 0;
 	++s->cur;
-	return p0;
+	return arg;
 }
 
 static int parse_nonnegative_int(const char* s)
@@ -600,7 +688,7 @@ static int mimex_matches(struct mimexscanner* s, const char* cmd, const char* fm
 {
 	// don't continue scanning if there's an error or we already found a match
 	if ((s->did_match) || (s->has_error)) return 0;
-	if (strcmp(cmd, s->cmd) != 0) return 0;
+	if (strcmp(s->cmd, cmd) != 0) return 0;
 
 	s->did_match = 1;
 
@@ -612,7 +700,7 @@ static int mimex_matches(struct mimexscanner* s, const char* cmd, const char* fm
 		switch (fmt[i]) {
 
 		case 'i': {
-			const char* arg = mimexscanner_next_arg(s);
+			char* arg = mimexscanner_next_arg(s);
 			if (s->has_error) break;
 			assert(arg != NULL);
 			int* p = va_arg(va, int*);
@@ -624,7 +712,7 @@ static int mimex_matches(struct mimexscanner* s, const char* cmd, const char* fm
 		}	break;
 
 		case 's': {
-			const char* arg = mimexscanner_next_arg(s);
+			char* arg = mimexscanner_next_arg(s);
 			if (s->has_error) break;
 			assert(arg != NULL);
 			const char** p = va_arg(va, const char**);
@@ -645,7 +733,6 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 	int remaining = num_input_bytes;
 
 	static int* number_stack_arr = NULL;
-	if (number_stack_arr == NULL) arrinit(number_stack_arr, &system_allocator);
 	arrreset(number_stack_arr);
 
 	enum {
@@ -735,9 +822,9 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 
 					if (!mimop_has_doc(mo)) return mimerr("command '%c' requires doc; mim state has none", chr);
 
-					struct document* doc = mimop_get_readwrite_doc(mo);
+					struct document* rw_doc = mimop_get_doc(mo);
 					struct mim_state* ms = mimop_ms(mo);
-					int num_chars = arrlen(doc->docchar_arr);
+					int num_chars = arrlen(rw_doc->docchar_arr);
 					const int num_carets = arrlen(ms->caret_arr);
 					for (int i=0; i<num_carets; ++i) {
 						struct caret* car = arrchkptr(ms->caret_arr, i);
@@ -745,8 +832,8 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 						struct location* loc0 = &car->caret_loc;
 						struct location* loc1 = &car->anchor_loc;
 						location_sort2(&loc0, &loc1);
-						const int off0 = document_locate(doc, loc0);
-						const int off1 = document_locate(doc, loc1);
+						const int off0 = document_locate(rw_doc, loc0);
+						const int off1 = document_locate(rw_doc, loc1);
 						for (int off=off0; off<=off1; ++off) {
 							for (int dir=0; dir<2; ++dir) {
 								int d,o;
@@ -754,10 +841,12 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 								else if (dir==1) { d=-1; o=off-1; }
 								else assert(!"unreachable");
 								while ((0 <= o) && (o < num_chars)) {
-									struct docchar* fc = arrchkptr(doc->docchar_arr, o);
+									struct docchar* fc = arrchkptr(rw_doc->docchar_arr, o);
 									const int is_fillable = fc->flags & (FC_IS_INSERT | FC_IS_DELETE);
 									if ((fc->flags & (FC__FILL | FC_IS_DEFER)) || !is_fillable) break;
-									if (is_fillable) fc->flags |= FC__FILL;
+									if (is_fillable) {
+										fc->flags |= FC__FILL;
+									}
 									o += d;
 								}
 							}
@@ -766,7 +855,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 					}
 
 					for (int i=0; i<num_chars; ++i) {
-						struct docchar* fc = arrchkptr(doc->docchar_arr, i);
+						struct docchar* fc = arrchkptr(rw_doc->docchar_arr, i);
 						if (!(fc->flags & FC__FILL)) continue;
 
 						if (chr=='!') {
@@ -774,13 +863,13 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 								fc->flags &= ~(FC__FILL | FC_IS_INSERT);
 							}
 							if (fc->flags & FC_IS_DELETE) {
-								arrdel(doc->docchar_arr, arrchk(doc->docchar_arr, i));
+								arrdel(rw_doc->docchar_arr, arrchk(rw_doc->docchar_arr, i));
 								--i;
 								--num_chars;
 							}
 						} else if (chr=='/') { // cancel
 							if (fc->flags & FC_IS_INSERT) {
-								arrdel(doc->docchar_arr, arrchk(doc->docchar_arr, i));
+								arrdel(rw_doc->docchar_arr, arrchk(rw_doc->docchar_arr, i));
 								--i;
 								--num_chars;
 							}
@@ -816,7 +905,6 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 					const int column = arrchkget(number_stack_arr, 2);
 					arrreset(number_stack_arr);
 					struct mim_state* ms = mimop_ms(mo);
-					assert(ms->caret_arr != NULL);
 					arrput(ms->caret_arr, ((struct caret) {
 						.tag = arg_tag,
 						.caret_loc  = { .line=line, .column=column },
@@ -844,7 +932,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 					arg_tag = arrchkget(number_stack_arr, 0);
 					arrreset(number_stack_arr);
 					if (!mimop_has_doc(mo)) return mimerr("command '%c' requires doc; mim state has none", chr);
-					struct document* doc = mimop_get_readwrite_doc(mo);
+					struct document* rw_doc = mimop_get_doc(mo);
 					struct mim_state* ms = mimop_ms(mo);
 					const int num_carets = arrlen(ms->caret_arr);
 					for (int i=0; i<num_carets; ++i) {
@@ -852,12 +940,14 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 						struct location* loc0 = &car->caret_loc;
 						struct location* loc1 = &car->anchor_loc;
 						location_sort2(&loc0, &loc1);
-						const int off0 = document_locate(doc, loc0);
-						const int off1 = document_locate(doc, loc1);
+						const int off0 = document_locate(rw_doc, loc0);
+						const int off1 = document_locate(rw_doc, loc1);
 						assert(off0 <= off1);
 						for (int o=off0; o<off1; ++o) {
-							struct docchar* dc = arrchkptr(doc->docchar_arr, o);
-							dc->colorchar.splash4 = ms->splash4;
+							struct docchar* dc = arrchkptr(rw_doc->docchar_arr, o);
+							if (dc->colorchar.splash4 != ms->splash4) {
+								dc->colorchar.splash4 = ms->splash4;
+							}
 						}
 						car->anchor_loc = car->caret_loc;
 					}
@@ -895,7 +985,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 
 					if (!mimop_has_doc(mo)) return mimerr("command '%c' requires doc; mim state has none", chr);
 
-					struct document* doc = mimop_get_readwrite_doc(mo);
+					struct document* rw_doc = mimop_get_doc(mo);
 					struct mim_state* ms = mimop_ms(mo);
 					const int num_carets = arrlen(ms->caret_arr);
 					for (int i=0; i<num_carets; ++i) {
@@ -904,7 +994,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 						struct location* caret_loc = &car->caret_loc;
 						struct location* anchor_loc = &car->anchor_loc;
 						if (0 == location_compare(caret_loc, anchor_loc)) {
-							int o = document_locate(doc, caret_loc);
+							int o = document_locate(rw_doc, caret_loc);
 							int d,m0,m1;
 							if (chr == 'X') { // backspace
 								d=-1; m0=-1; m1=-1;
@@ -915,13 +1005,13 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 							}
 
 							for (int i=0; i<arg_num; ++i) {
-								const int num_chars = arrlen(doc->docchar_arr);
+								const int num_chars = arrlen(rw_doc->docchar_arr);
 								const int od = o+d;
 								int dc=0;
 								if ((0 <= od) && (od < num_chars)) {
-									struct docchar* fc = arrchkptr(doc->docchar_arr, od);
+									struct docchar* fc = arrchkptr(rw_doc->docchar_arr, od);
 									if (fc->flags & FC_IS_INSERT) {
-										arrdel(doc->docchar_arr, od);
+										arrdel(rw_doc->docchar_arr, od);
 										dc=m0;
 									} else if (fc->flags & FC_IS_DELETE) {
 										dc=m1;
@@ -934,7 +1024,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 									}
 								}
 								caret_loc->column += dc;
-								doc_location_constraint(doc, caret_loc);
+								doc_location_constraint(rw_doc, caret_loc);
 								o += dc;
 							}
 						} else {
@@ -995,7 +1085,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 
 				struct mim_state* ms = mimop_ms(mo);
 
-				uint16_t splash4=0;
+				int16_t splash4=0;
 				if (mode == INSERT_STRING) {
 					// insert with artist mim state color
 					splash4 = ms->splash4;
@@ -1010,7 +1100,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 					return mimerr("invalid splash4 value (%d)", splash4);
 				}
 
-				struct document* doc = mimop_get_readwrite_doc(mo);
+				struct document* rw_doc = mimop_get_doc(mo);
 				const int num_carets = arrlen(ms->caret_arr);
 				for (int i=0; i<num_carets; ++i) {
 					struct caret* car = arrchkptr(ms->caret_arr, i);
@@ -1021,10 +1111,9 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 					if (0 != location_compare(loc, anchor)) mimop_delete(mo, loc, anchor);
 					*anchor = *loc;
 
-					const int off = document_locate(doc, loc);
-					assert(doc->docchar_arr != NULL);
-					const int n0 = arrlen(doc->docchar_arr);
-					arrins(doc->docchar_arr, off, ((struct docchar){
+					const int off = document_locate(rw_doc, loc);
+					const int n0 = arrlen(rw_doc->docchar_arr);
+					arrins(rw_doc->docchar_arr, off, ((struct docchar){
 						.colorchar = {
 							.codepoint = chr,
 							.splash4 = splash4,
@@ -1033,7 +1122,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 						//.artist_id = get_my_artist_id(),
 						.flags = (FC_IS_INSERT | FC__FLIPPED_INSERT),
 					}));
-					const int n1 = arrlen(doc->docchar_arr);
+					const int n1 = arrlen(rw_doc->docchar_arr);
 					assert(n1==(n0+1));
 					//printf("%d => INS [%c] => %d\n", n0, chr, n1);
 					if (chr == '\n') {
@@ -1042,7 +1131,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 					} else {
 						++loc->column;
 					}
-					doc_location_constraint(doc, loc);
+					doc_location_constraint(rw_doc, loc);
 					*anchor = *loc;
 				}
 			}
@@ -1076,7 +1165,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 
 				struct mim_state* ms = mimop_ms(mo);
 				const int num_carets = arrlen(ms->caret_arr);
-				struct document* readonly_doc = mimop_get_readonly_doc(mo);
+				struct document* readonly_doc = mimop_get_doc(mo);
 				for (int i=0; i<num_carets; ++i) {
 					struct caret* car = arrchkptr(ms->caret_arr, i);
 					if (car->tag != arg_tag) continue;
@@ -1132,7 +1221,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 
 				if (mode == EX) {
 					struct mimexscanner s;
-					mimexscanner_init(&s, mo->cows->allocator, ex0, input_cursor);
+					mimexscanner_init(&s, ex0, input_cursor);
 
 					{
 						int book_id;
@@ -1154,15 +1243,15 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 									assert(!"TODO handle/import :newbook template");
 								}
 
-								const int num_books = arrlen(mo->cows->ref->book_arr);
+								const int num_books = arrlen(mo->snap->book_arr);
 								for (int ii=0; ii<num_books; ++ii) {
-									struct book* book = &mo->cows->ref->book_arr[ii];
+									struct book* book = &mo->snap->book_arr[ii];
 									if (book_id == book->book_id) {
 										return mimerr("book id %d already exists", book_id);
 									}
 								}
 
-								arrput(mo->cows->new_book_arr, ((struct book){
+								arrput(mo->snap->book_arr, ((struct book){
 									.book_id   = book_id,
 									.fundament = fundament,
 								}));
@@ -1176,18 +1265,9 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 						if (mimex_matches(&s, "newdoc", "iis", &book_id, &doc_id, &name)) {
 							int book_id_exists = 0;
 
-							const int num_books = arrlen(mo->cows->ref->book_arr);
+							const int num_books = arrlen(mo->snap->book_arr);
 							for (int i=0; i<num_books; ++i) {
-								struct book* book = &mo->cows->ref->book_arr[i];
-								if (book->book_id == book_id) {
-									book_id_exists = 1;
-									break;
-								}
-							}
-
-							const int num_new_books = arrlen(mo->cows->new_book_arr);
-							for (int i=0; i<num_new_books; ++i) {
-								struct book* book = &mo->cows->new_book_arr[i];
+								struct book* book = &mo->snap->book_arr[i];
 								if (book->book_id == book_id) {
 									book_id_exists = 1;
 									break;
@@ -1198,9 +1278,9 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 								return mimerr("book id %d does not exist", book_id);
 							}
 
-							const int num_docs = arrlen(mo->cows->ref->document_arr);
+							const int num_docs = arrlen(mo->snap->document_arr);
 							for (int i=0; i<num_docs; ++i) {
-								struct document* doc = &mo->cows->ref->document_arr[i];
+								struct document* doc = &mo->snap->document_arr[i];
 								if ((doc->book_id == book_id) && (doc->doc_id == doc_id)) {
 									return mimerr(":newdoc %d %d collides with existing doc", book_id, doc_id);
 								}
@@ -1209,13 +1289,11 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 								.book_id = book_id,
 								.doc_id  = doc_id,
 							};
-							ARRINIT0(doc.name_arr, mo->cows->allocator);
-							ARRINIT0(doc.docchar_arr, mo->cows->allocator);
 							const size_t n = strlen(name);
 							arrsetlen(doc.name_arr, n+1);
 							memcpy(doc.name_arr, name, n);
 							doc.name_arr[n]=0;
-							arrput(mo->cows->cow_document_arr, doc);
+							arrput(mo->snap->document_arr, doc);
 						}
 					}
 
@@ -1224,22 +1302,12 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 						if (mimex_matches(&s, "setdoc", "ii", &book_id, &doc_id)) {
 
 							int book_id_exists = 0;
-							const int num_books = arrlen(mo->cows->ref->book_arr);
+							const int num_books = arrlen(mo->snap->book_arr);
 							for (int i=0; i<num_books; ++i) {
-								struct book* book = &mo->cows->ref->book_arr[i];
+								struct book* book = &mo->snap->book_arr[i];
 								if (book->book_id == book_id) {
 									book_id_exists = 1;
 									break;
-								}
-							}
-							if (!book_id_exists) {
-								const int num_new_books = arrlen(mo->cows->new_book_arr);
-								for (int i=0; i<num_new_books; ++i) {
-									struct book* book = &mo->cows->new_book_arr[i];
-									if (book->book_id == book_id) {
-										book_id_exists = 1;
-										break;
-									}
 								}
 							}
 							if (!book_id_exists) {
@@ -1247,37 +1315,27 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 							}
 
 							int doc_id_exists = 0;
-							const int num_docs = arrlen(mo->cows->ref->document_arr);
+							const int num_docs = arrlen(mo->snap->document_arr);
 							for (int i=0; i<num_docs; ++i) {
-								struct document* doc = &mo->cows->ref->document_arr[i];
+								struct document* doc = &mo->snap->document_arr[i];
 								if ((doc->book_id == book_id) && (doc->doc_id == doc_id)) {
 									doc_id_exists = 1;
 									break;
 								}
 							}
 							if (!doc_id_exists) {
-								const int num_cow_doc = arrlen(mo->cows->cow_document_arr);
-								for (int i=0; i<num_cow_doc; ++i) {
-									struct document* doc = &mo->cows->cow_document_arr[i];
-									if ((doc->book_id == book_id) && (doc->doc_id == doc_id)) {
-										doc_id_exists = 1;
-										break;
-									}
-								}
-							}
-							if (!doc_id_exists) {
 								return mimerr("setdoc on doc id %d, but it doesn't exist", doc_id);
 							}
 
-							mo->cows->mim_state.book_id = book_id;
-							mo->cows->mim_state.doc_id  = doc_id;
+							mimop_ms(mo)->book_id = book_id;
+							mimop_ms(mo)->doc_id  = doc_id;
 						}
 					}
 
 					if (s.has_error) {
 						return mimerr("mimex error: %s", s.err);
 					} else if (!s.did_match) {
-						return mimerr("unhandled mimex command");
+						return mimerr("unhandled mimex command [%s]", s.cmd);
 					}
 				}
 
@@ -1298,16 +1356,20 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 	return 0;
 }
 
-void begin_mim(int session_id)
+void peer_begin_mim(int session_id)
 {
-	assert(!g.in_mim);
-	g.in_mim = 1;
-	arrreset(g.mim_buffer_arr);
-	g.using_mim_session_id = session_id;
-	S_LOCK();
-	struct snapshot* snap = &gst.cool_snapshot;
-	(void)snapshot_get_or_create_mim_state_by_ids(snap, get_my_artist_id(), session_id);
-	S_UNLOCK();
+	assert(!tlg.in_mim);
+	assert(g.is_peer);
+	tlg.in_mim = 1;
+
+	pg.mim_session_id = session_id;
+	arrreset(tlg.mim_buffer_arr);
+}
+
+void peer_set_artificial_mim_latency(double mean, double variance)
+{
+	pg.artificial_mim_latency_mean     = mean;
+	pg.artificial_mim_latency_variance = variance;
 }
 
 #if 0
@@ -1337,70 +1399,30 @@ static void document_to_colorchar_da(struct colorchar** arr, struct document* do
 	}
 }
 
-static void snapshot_spool_ex(struct snapshot* snap, uint8_t* data, int num_bytes, int artist_id, int session_id)
+static int snapshot_spool(struct snapshot* snap, uint8_t* data, int num_bytes, int artist_id, int session_id)
 {
-	if (num_bytes == 0) return;
-	mie_begin_scrallox();
-	if (0 == setjmp(*mie_prep_scrallox_jmp_buf_for_out_of_memory())) {
-		struct cow_snapshot cows = {0};
-		init_cow_snapshot(
-			&cows,
-			snap,
-			snapshot_get_or_create_mim_state_by_ids(snap, artist_id, session_id),
-			mie_borrow_scrallox());
-		struct mimop mo/*o*/ = { .cows = &cows };
-
-		if (mim_spool(&mo, data, num_bytes) < 0) {
-			assert(!"TODO mim protocol error"); // XXX? should I have a "failable" flag? eg. for human input
-		}
-
-		if (mimop_has_doc(&mo)) {
-			// XXX kinda want to run /all/ docs here... this code is not right
-			struct mim_state* ms = &cows.mim_state;
-			struct document* doc = cow_snapshot_get_readonly_document_by_ids(&cows, ms->book_id, ms->doc_id);
-			static struct colorchar* dodoc_arr = NULL;
-			if (dodoc_arr == NULL) {
-				arrinit(dodoc_arr, &system_allocator);
-			}
-			document_to_colorchar_da(&dodoc_arr, doc);
-			const int prg = mie_compile_colorcode(dodoc_arr, arrlen(dodoc_arr));
-			//printf("prg=%d\n", prg);
-			if (prg == -1) {
-				//printf("TODO compile error [%s]\n", mie_error());
-			} else {
-				vmie_reset(prg);
-				vmie_run();
-				#if 0
-				const char* err = mie_error();
-				if (err != NULL) printf("ERR: %s\n", err);
-				vmie_dump_stack();
-				#endif
-				mie_program_free(prg);
-			}
-		}
-
-		cow_snapshot_commit(&cows);
+	if (num_bytes == 0) return 0;
+	struct mimop mo = { .snap = snap };
+	if (artist_id > 0 && session_id > 0) {
+		mimop_set_ms(&mo, artist_id, session_id);
 	} else {
-		printf("ERROR out of scratch memory!\n"); // XXX?
+		assert(artist_id == 0);
+		assert(session_id == 0);
 	}
-
+	int e = mim_spool(&mo, data, num_bytes);
+	if (e<0) return e;
 	#if 0
-	{
-		size_t allocated, capacity;
-		mie_scrallox_stats(&allocated, &capacity);
-		printf("scrallox scope: allocated %zd/%zd (%.1f%%)\n",
-			allocated, capacity,
-			(double)(allocated*100L) / (double)(capacity));
+	if (!mimop_has_doc(&mo)) {
+		return FMTERR0("mimop has no doc");
 	}
 	#endif
-
-	mie_end_scrallox();
+	return 0;
 }
 
 static int it_is_time_for_a_snapshotcache_push(uint64_t journal_offset)
 {
-	int64_t growth = (journal_offset - gst.journal_offset_at_last_snapshotcache_push);
-	return growth > g.journal_snapshot_growth_threshold;
+	int64_t growth = (journal_offset - igo.journal_offset_at_last_snapshotcache_push);
+	return growth > igo.journal_snapshot_growth_threshold;
 }
 
 static inline int jio_flush_bb(struct jio* jio, uint8_t** bb)
@@ -1457,14 +1479,6 @@ static void pack_mim_state(uint8_t** bb, struct mim_state* ms)
 	}
 }
 
-static uint8_t** get_io_bb(void)
-{
-	uint8_t** bb = &g.io_bb_arr;
-	if (*bb == NULL) arrinit(*bb, &system_allocator);
-	arrreset(*bb);
-	return bb;
-}
-
 static void pack_full_snapshot(uint8_t** bb, struct snapshot* snap, int64_t journal_offset)
 {
 	bb_append_u8(bb, SYNC);
@@ -1492,30 +1506,29 @@ static void pack_full_snapshot(uint8_t** bb, struct snapshot* snap, int64_t jour
 	// TODO? server settings/prefs? or keep that separate?
 }
 
-void* get_snapshot_data(size_t* out_size)
+void* get_present_snapshot_data(size_t* out_size)
 {
-	S_LOCK();
-	uint8_t** bb = get_io_bb();
-	pack_full_snapshot(bb, &gst.cool_snapshot, jio_get_size(gst.jio_journal));
+	uint8_t** bb = &hg.bb_arr;
+	arrreset(*bb);
+	pack_full_snapshot(bb, &hg.present_snapshot, jio_get_size(igo.jio_journal));
 	void* data = bb_dup2plain(bb);
-	S_UNLOCK();
 	if (out_size) *out_size = arrlen(*bb);
 	return data;
 }
 
 int copy_journal(void* dst, int64_t count, int64_t offset)
 {
-	struct jio* jj = gst.jio_journal;
-	return jio_pread_memonly(jj, dst, count, offset);
+	return jio_pread(igo.jio_journal, dst, count, offset);
 }
 
 static void snapshotcache_push(struct snapshot* snap, uint64_t journal_offset)
 {
-	struct jio* jdat = gst.jio_snapshotcache_data;
-	struct jio* jidx = gst.jio_snapshotcache_index;
+	struct jio* jdat = igo.jio_snapshotcache_data;
+	struct jio* jidx = igo.jio_snapshotcache_index;
 	const size_t jdat0 = jio_get_size(jdat);
 
-	uint8_t** bb = get_io_bb();
+	uint8_t** bb = &hg.bb_arr;
+	arrreset(*bb);
 
 	const int num_books = arrlen(snap->book_arr);
 	for (int i=0; i<num_books; ++i) {
@@ -1568,62 +1581,99 @@ static void snapshotcache_push(struct snapshot* snap, uint64_t journal_offset)
 	bb_append_leu64(bb, journal_offset);
 	jio_flush_bb(jidx, bb);
 
-	gst.journal_offset_at_last_snapshotcache_push = journal_offset;
+	igo.journal_offset_at_last_snapshotcache_push = journal_offset;
 }
 
-static void broadcast_journal(int64_t until_journal_cursor)
+void peer_end_mim(void)
 {
-	#ifndef __EMSCRIPTEN__ // XXX not totally right?
-	webserv_broadcast_journal(until_journal_cursor);
-	#endif
-}
+	assert(g.is_peer);
+	assert(tlg.in_mim);
+	tlg.in_mim = 0;
 
-void end_mim(void)
-{
-	assert(g.in_mim);
-	const int num_bytes = arrlen(g.mim_buffer_arr);
-	g.in_mim = 0;
+	const int num_bytes = arrlen(tlg.mim_buffer_arr);
 	if (num_bytes == 0) return;
+	uint8_t* data = tlg.mim_buffer_arr;
 
-	S_LOCK();
-	struct snapshot* snap = &gst.cool_snapshot;
+	const int artist_id  = get_my_artist_id();
+	const int session_id = pg.mim_session_id;
+	assert(artist_id>0);
+	assert(session_id>0);
 
-	uint8_t* data = g.mim_buffer_arr;
-	snapshot_spool_ex(snap, data, num_bytes, get_my_artist_id(), g.using_mim_session_id);
+	struct snapshot* snap = &pg.fiddle_snapshot;
+	(void)snapshot_get_or_create_mim_state_by_ids(snap, artist_id, session_id);
+	snapshot_spool(snap, data, num_bytes, artist_id, session_id);
 
-	struct jio* jj = gst.jio_journal;
-	if (jj != NULL) {
-		uint8_t** bb = get_io_bb();
-		bb_append_u8(bb, SYNC);
-		const int64_t journal_timestamp = (get_nanoseconds() - gst.journal_timestamp_start)/1000LL;
-		bb_append_leb128(bb, journal_timestamp);
-		bb_append_leb128(bb, get_my_artist_id());
-		bb_append_leb128(bb, g.using_mim_session_id);
-		bb_append_leb128(bb, num_bytes);
-		bb_append(bb, data, num_bytes);
-		jio_flush_bb(jj, bb);
-		const int64_t s = jio_get_size(jj);
-		if (it_is_time_for_a_snapshotcache_push(s)) {
-			snapshotcache_push(snap, s);
+	if (arrlen(snap->document_arr)>0) {
+		//TODO(proper mie/vmie document stuff)
+		struct document* doc = &snap->document_arr[0];
+
+		static struct colorchar* dodoc_arr = NULL;
+		document_to_colorchar_da(&dodoc_arr, doc);
+
+		mie_begin_scrallox();
+		if (0 == setjmp(*mie_prep_scrallox_jmp_buf_for_out_of_memory())) {
+			const int prg = mie_compile_colorcode(dodoc_arr, arrlen(dodoc_arr));
+			if (prg < 0) {
+				TODO(handle compile error)
+			} else {
+				vmie_reset(prg);
+				vmie_run();
+				#if 1
+				const char* err = mie_error();
+				if (err != NULL) printf("ERR: %s\n", err);
+				vmie_dump_stack();
+				#endif
+				mie_program_free(prg);
+			}
+		} else {
+			XXX(scrallox ran out of mem!)
+		}
+		#if 0
+		{
+			size_t allocated, capacity;
+			mie_scrallox_stats(&allocated, &capacity);
+			printf("scrallox scope: allocated %zd/%zd (%.1f%%)\n",
+				allocated, capacity,
+				(double)(allocated*100L) / (double)(capacity));
+		}
+		#endif
+		mie_end_scrallox();
+	}
+
+	int64_t not_before_ts = 0;
+	// set not_before_ts to now plus added artificial latency if it's
+	// configured. not_before_ts=0 means "as soon as possible" (plus it takes
+	// up less space due to LEB128)
+	if ((pg.artificial_mim_latency_mean != 0) || (pg.artificial_mim_latency_variance != 0)) {
+		// using a simple approximation to generate a values from the normal
+		// distribution, see:
+		// https://en.wikipedia.org/wiki/Irwin%E2%80%93Hall_distribution#Approximating_a_Normal_distribution
+		double uacc = -6.0;
+		const double scalar = 1.0 / (double)RAND_MAX;
+		for (int i=0; i<12; ++i) uacc += (double)rand() * scalar;
+		double dt = (uacc * pg.artificial_mim_latency_variance) + pg.artificial_mim_latency_mean;
+		not_before_ts = get_nanoseconds_epoch() + (int64_t)(dt*1e9);
+	}
+
+	uint8_t** bb = &pg.bb_arr;
+	arrreset(*bb);
+	bb_append_leb128(bb, session_id);
+	bb_append_leb128(bb, ++pg.tracer_sequence);
+	bb_append_leb128(bb, not_before_ts);
+	bb_append_leb128(bb, num_bytes);
+	bb_append(bb, data, num_bytes);
+	if (g.is_host) {
+		if (ringbuf_write(&g.peer2host_mim_ringbuf, *bb, arrlen(*bb)) < 0) {
+			fprintf(stderr, "peer2host_mim_ringbuf is full!\n");
+			abort();
 		}
 	}
-	const int64_t jcnow = jio_get_size(gst.jio_journal);
-	S_UNLOCK();
+	uint8_t* p = arraddnptr(pg.unackd_mimbuf_arr, arrlen(*bb));
+	memcpy(p, *bb, arrlen(*bb));
 
-	broadcast_journal(jcnow);
-
-	#if 0
-	// old command stream/ringbuf stuff. relavant for network? or throw out?
-	uint8_t header[1<<8];
-	uint8_t* hp = header;
-	uint8_t* end = header + sizeof(header);
-	write_varint64(&hp, end, g.using_mim_session_id);
-	write_varint64(&hp, end, num_bytes);
-	const size_t nh = hp - header;
-	ringbuf_writen(&g.command_ringbuf, header, nh);
-	ringbuf_writen(&g.command_ringbuf, data, num_bytes);
-	ringbuf_commit(&g.command_ringbuf);
-	#endif
+	if (!g.is_host) {
+		transmit_mim(session_id, ++pg.tracer_sequence, data, num_bytes);
+	}
 }
 
 int doc_iterator_next(struct doc_iterator* it)
@@ -1666,20 +1716,6 @@ static uint64_t make_insignia(void)
 	return get_nanoseconds_epoch(); // FIXME a random number might be slightly better here (no biggie)
 }
 
-FORMATPRINTF1
-static int errf(const char* fmt, ...)
-{
-	va_list va;
-	va_start(va, fmt);
-	stbsp_vsnprintf(g.errormsg, sizeof g.errormsg, fmt, va);
-	va_end(va);
-	return -1;
-}
-
-#define FMTERR0(MSG)    errf("(format error): %s (at %s:%d)", (MSG), __FILE__, __LINE__)
-#define FMTERR(PATH,MSG)    errf("%s (format error): %s (at %s:%d)", (PATH), (MSG), __FILE__, __LINE__)
-#define IOERR(PATH,ERRCODE) errf("%s (jio error): %s (at %s:%d)", (PATH), io_error_to_string_safe(ERRCODE), __FILE__, __LINE__)
-
 static int is_snapshotcache_index_size_valid(int64_t sz)
 {
 	return ((sz-16L) % 24L) == 0L;
@@ -1697,9 +1733,9 @@ static int snapshotcache_open(const char* dir, uint64_t journal_insignia)
 
 	int err;
 	STATIC_PATH_JOIN(pathbuf, dir, FILENAME_SNAPSHOTCACHE_DATA);
-	struct jio* jdat = jio_open(pathbuf, IO_OPEN, g.io_port_id, 10, &err);
+	struct jio* jdat = jio_open(pathbuf, IO_OPEN, igo.io_port_id, 10, &err);
 	if (jdat == NULL) return IOERR(pathbuf, err);
-	gst.jio_snapshotcache_data = jdat;
+	igo.jio_snapshotcache_data = jdat;
 	const int64_t szdat = jio_get_size(jdat);
 	if (szdat == 0) {
 		jio_close(jdat);
@@ -1707,9 +1743,9 @@ static int snapshotcache_open(const char* dir, uint64_t journal_insignia)
 	}
 
 	STATIC_PATH_JOIN(pathbuf, dir, FILENAME_SNAPSHOTCACHE_INDEX);
-	struct jio* jidx = jio_open(pathbuf, IO_OPEN, g.io_port_id, 10, &err);
+	struct jio* jidx = jio_open(pathbuf, IO_OPEN, igo.io_port_id, 10, &err);
 	if (jidx == NULL) return IOERR(pathbuf, err);
-	gst.jio_snapshotcache_index = jidx;
+	igo.jio_snapshotcache_index = jidx;
 	const int64_t szidx = jio_get_size(jidx);
 	if (szidx < 16) {
 		jio_close(jidx);
@@ -1777,23 +1813,24 @@ static int snapshotcache_create(const char* dir, uint64_t journal_insignia)
 
 	STATIC_PATH_JOIN(pathbuf, dir, FILENAME_SNAPSHOTCACHE_DATA);
 	int err;
-	struct jio* jdat = jio_open(pathbuf, IO_CREATE, g.io_port_id, 10, &err);
+	struct jio* jdat = jio_open(pathbuf, IO_CREATE, igo.io_port_id, 10, &err);
 	if (jdat == NULL) {
 		return IOERR(FILENAME_SNAPSHOTCACHE_DATA, err);
 	}
-	gst.jio_snapshotcache_data = jdat;
-	uint8_t** bb = get_io_bb();
+	igo.jio_snapshotcache_data = jdat;
+	uint8_t** bb = &hg.bb_arr;
+	arrreset(*bb);
 	bb_append(bb, DOSD_MAGIC, strlen(DOSD_MAGIC));
 	bb_append_leu64(bb, journal_insignia);
 	jio_flush_bb(jdat, bb);
 
 	STATIC_PATH_JOIN(pathbuf, dir, FILENAME_SNAPSHOTCACHE_INDEX);
-	struct jio* jidx = jio_open(pathbuf, IO_CREATE, g.io_port_id, 10, &err);
+	struct jio* jidx = jio_open(pathbuf, IO_CREATE, igo.io_port_id, 10, &err);
 	if (jidx == NULL) {
 		jio_close(jdat);
 		return IOERR(FILENAME_SNAPSHOTCACHE_INDEX, err);
 	}
-	gst.jio_snapshotcache_index = jidx;
+	igo.jio_snapshotcache_index = jidx;
 	bb_append(bb, DOSI_MAGIC, strlen(DOSI_MAGIC));
 	bb_append_leu64(bb, journal_insignia);
 	jio_flush_bb(jidx, bb);
@@ -1817,13 +1854,12 @@ static int unpack_document(struct document* doc, struct bufstream* bs)
 	doc->book_id = bs_read_leb128(bs);
 	doc->doc_id = bs_read_leb128(bs);
 	const int64_t name_len = bs_read_leb128(bs);
-	arrinit(doc->name_arr, &system_allocator);
 	arrsetlen(doc->name_arr, 1+name_len);
 	bs_read(bs, (uint8_t*)doc->name_arr, name_len);
 	doc->name_arr[name_len] = 0;
 
+
 	const int64_t doc_len = bs_read_leb128(bs);
-	arrinit(doc->docchar_arr, &system_allocator);
 	struct docchar* cs = arraddnptr(doc->docchar_arr, doc_len);
 	for (int64_t i=0; i<doc_len; ++cs, ++i) {
 		cs->colorchar.codepoint = bs_read_leb128(bs);
@@ -1850,7 +1886,6 @@ static int unpack_mim_state(struct mim_state* ms, struct bufstream* bs)
 	}
 
 	const int64_t num_carets = bs_read_leb128(bs);
-	arrinit(ms->caret_arr, &system_allocator);
 	struct caret* cr = arraddnptr(ms->caret_arr, num_carets);
 	for (int64_t i=0; i<num_carets; ++cr, ++i) {
 		cr->tag               = bs_read_leb128(bs);
@@ -1864,11 +1899,6 @@ static int unpack_mim_state(struct mim_state* ms, struct bufstream* bs)
 
 int restore_a_snapshot_from_data(struct snapshot* snap, void* data, size_t sz, int64_t* out_journal_offset)
 {
-	#if 0
-	printf("DATA");
-	for (int i=0;i<sz;++i) printf(" %.2x", ((uint8_t*)data)[i]);
-	printf("\n");
-	#endif
 	struct bufstream bs;
 	bufstream_init_from_memory(&bs, data, sz);
 
@@ -1883,6 +1913,7 @@ int restore_a_snapshot_from_data(struct snapshot* snap, void* data, size_t sz, i
 	const int64_t num_books = bs_read_leb128(&bs);
 	arrreset(snap->book_arr);
 	struct book* books = arraddnptr(snap->book_arr, num_books);
+	memset(books, 0, num_books*sizeof(books[0]));
 	for (int64_t i=0; i<num_books; ++i) {
 		e = unpack_book(&books[i], &bs);
 		if (e<0) return e;
@@ -1892,6 +1923,7 @@ int restore_a_snapshot_from_data(struct snapshot* snap, void* data, size_t sz, i
 	const int64_t num_docs = bs_read_leb128(&bs);
 	arrreset(snap->document_arr);
 	struct document* docs = arraddnptr(snap->document_arr, num_docs);
+	memset(docs, 0, num_docs*sizeof(docs[0]));
 	for (int64_t i=0; i<num_docs; ++i) {
 		e = unpack_document(&docs[i], &bs);
 		if (e<0) return e;
@@ -1901,6 +1933,7 @@ int restore_a_snapshot_from_data(struct snapshot* snap, void* data, size_t sz, i
 	const int64_t num_mim_states = bs_read_leb128(&bs);
 	arrreset(snap->mim_state_arr);
 	struct mim_state* mim_states = arraddnptr(snap->mim_state_arr, num_mim_states);
+	memset(mim_states, 0, num_mim_states*sizeof(mim_states[0]));
 	for (int64_t i=0; i<num_mim_states; ++i) {
 		e = unpack_mim_state(&mim_states[i], &bs);
 		if (e<0) return e;
@@ -1909,9 +1942,9 @@ int restore_a_snapshot_from_data(struct snapshot* snap, void* data, size_t sz, i
 	return 0;
 }
 
-int64_t restore_snapshot_from_data(void* data, size_t sz)
+int64_t restore_upstream_snapshot_from_data(void* data, size_t sz)
 {
-	struct snapshot* snap = &gst.cool_snapshot; // XXX
+	struct snapshot* snap = &pg.upstream_snapshot; // XXX
 	int64_t journal_cursor;
 	if (restore_a_snapshot_from_data(snap, data, sz, &journal_cursor) < 0) {
 		dumperr();
@@ -1923,11 +1956,8 @@ int64_t restore_snapshot_from_data(void* data, size_t sz)
 static int restore_snapshot_from_disk(struct snapshot* snap, uint64_t snapshot_manifest_offset)
 {
 	memset(snap, 0, sizeof *snap);
-	arrinit(snap->book_arr      , &system_allocator);
-	arrinit(snap->document_arr  , &system_allocator);
-	arrinit(snap->mim_state_arr , &system_allocator);
 
-	struct jio* jdat = gst.jio_snapshotcache_data;
+	struct jio* jdat = igo.jio_snapshotcache_data;
 
 	struct bufstream bs0,bs1;
 	uint8_t buf0[1<<8], buf1[1<<8];
@@ -1944,7 +1974,7 @@ static int restore_snapshot_from_disk(struct snapshot* snap, uint64_t snapshot_m
 	for (int64_t i=0; i<num_books; ++i) {
 		const int64_t oo1 = bs_read_leb128(&bs0);
 		bufstream_init_from_jio(&bs1, jdat, oo1, buf1, sizeof buf1);
-		struct book book;
+		struct book book={0};
 		if (unpack_book(&book, &bs1) < 0) return FMTERR(path, "bad book");
 		book.snapshotcache_offset = oo1;
 		if (bs1.error) return IOERR(path, bs1.error);
@@ -1954,87 +1984,23 @@ static int restore_snapshot_from_disk(struct snapshot* snap, uint64_t snapshot_m
 	for (int64_t i=0; i<num_documents; ++i) {
 		const int64_t oo1 = bs_read_leb128(&bs0);
 		bufstream_init_from_jio(&bs1, jdat, oo1, buf1, sizeof buf1);
-		struct document doc;
+		struct document doc={0};
 		if (unpack_document(&doc, &bs1) < 0) return FMTERR(path, "bad doc");
 		doc.snapshotcache_offset = oo1;
 		if (bs1.error) return IOERR(path, bs1.error);
 		arrput(snap->document_arr, doc);
 	}
 
-	#if 0
-	for (int64_t i=0; i<num_documents; ++i) {
-		const int64_t oo1 = bs_read_leb128(&bs0);
-		bufstream_init_from_jio(&bs1, jdat, oo1, buf1, sizeof buf1);
-		uint8_t sync = bs_read_u8(&bs1);
-		if (sync != SYNC) return FMTERR(path, "expected SYNC");
-		struct document doc = { .snapshotcache_offset = oo1 };
-
-		doc.book_id = bs_read_leb128(&bs1);
-		doc.doc_id = bs_read_leb128(&bs1);
-		const int64_t name_len = bs_read_leb128(&bs1);
-		arrinit(doc.name_arr, &system_allocator);
-		arrsetlen(doc.name_arr, 1+name_len);
-		bs_read(&bs1, (uint8_t*)doc.name_arr, name_len);
-		doc.name_arr[name_len] = 0;
-
-		const int64_t doc_len = bs_read_leb128(&bs1);
-		arrinit(doc.docchar_arr, &system_allocator);
-		struct docchar* cs = arraddnptr(doc.docchar_arr, doc_len);
-		for (int64_t i=0; i<doc_len; ++cs, ++i) {
-			cs->colorchar.codepoint = bs_read_leb128(&bs1);
-			cs->colorchar.splash4 = bs_read_leu16(&bs1);
-			if (!is_valid_splash4(cs->colorchar.splash4)) {
-				return FMTERR(path, "bad splash4 color in doc");
-			}
-			cs->flags = bs_read_leb128(&bs1);
-		}
-		if (bs1.error) return IOERR(path, bs1.error);
-		arrput(snap->document_arr, doc);
-	}
-	#endif
-
 	for (int64_t i=0; i<num_mim_states; ++i) {
 		const int64_t oo1 = bs_read_leb128(&bs0);
 		bufstream_init_from_jio(&bs1, jdat, oo1, buf1, sizeof buf1);
 		//printf("mim %ld => %ld\n", i, o1);
-		struct mim_state ms = {0};
+		struct mim_state ms={0};
 		if (unpack_mim_state(&ms, &bs1) < 0) return FMTERR(path, "bad mim");
 		ms.snapshotcache_offset = oo1;
 		if (bs1.error) return IOERR(path, bs1.error);
 		arrput(snap->mim_state_arr, ms);
 	}
-
-	#if 0
-	for (int64_t i=0; i<num_mim_states; ++i) {
-		const int64_t oo1 = bs_read_leb128(&bs0);
-		bufstream_init_from_jio(&bs1, jdat, oo1, buf1, sizeof buf1);
-		//printf("mim %ld => %ld\n", i, o1);
-		uint8_t sync = bs_read_u8(&bs1);
-		if (sync != SYNC) return FMTERR(path, "expected SYNC");
-		struct mim_state ms = { .snapshotcache_offset = oo1 };
-		ms.artist_id  = bs_read_leb128(&bs1);
-		ms.session_id = bs_read_leb128(&bs1);
-		ms.book_id    = bs_read_leb128(&bs1);
-		ms.doc_id     = bs_read_leb128(&bs1);
-		ms.splash4    = bs_read_leu16(&bs1);
-		if (!is_valid_splash4(ms.splash4)) {
-			return FMTERR(path, "bad splash4 color in mim state");
-		}
-
-		const int64_t num_carets = bs_read_leb128(&bs1);
-		arrinit(ms.caret_arr, &system_allocator);
-		struct caret* cr = arraddnptr(ms.caret_arr, num_carets);
-		for (int64_t i=0; i<num_carets; ++cr, ++i) {
-			cr->tag               = bs_read_leb128(&bs1);
-			cr->caret_loc.line    = bs_read_leb128(&bs1);
-			cr->caret_loc.column  = bs_read_leb128(&bs1);
-			cr->anchor_loc.line   = bs_read_leb128(&bs1);
-			cr->anchor_loc.column = bs_read_leb128(&bs1);
-		}
-		if (bs1.error) return IOERR(path, bs1.error);
-		arrput(snap->mim_state_arr, ms);
-	}
-	#endif
 
 	if (bs0.error) return IOERR(path, bs0.error);
 
@@ -2043,7 +2009,7 @@ static int restore_snapshot_from_disk(struct snapshot* snap, uint64_t snapshot_m
 
 static int can_restore_latest_snapshot(void)
 {
-	struct jio* jidx = gst.jio_snapshotcache_index;
+	struct jio* jidx = igo.jio_snapshotcache_index;
 	int64_t sz = jio_get_size(jidx);
 	if (!is_snapshotcache_index_size_valid(sz)) return 0;
 	return get_num_snapshotcache_index_entries_from_size(sz) > 0;
@@ -2054,7 +2020,7 @@ static int restore_latest_snapshot(struct snapshot* snap, int64_t* out_journal_o
 	if (!can_restore_latest_snapshot()) {
 		return FMTERR(FILENAME_SNAPSHOTCACHE_INDEX, "bad index file");
 	}
-	struct jio* jidx = gst.jio_snapshotcache_index;
+	struct jio* jidx = igo.jio_snapshotcache_index;
 	const int64_t sz = jio_get_size(jidx);
 	const int64_t o = (sz - 2*sizeof(uint64_t));
 
@@ -2070,21 +2036,9 @@ static int restore_latest_snapshot(struct snapshot* snap, int64_t* out_journal_o
 	return restore_snapshot_from_disk(snap, snapshot_manifest_offset);
 }
 
-static void snapshot_init(struct snapshot* snap)
-{
-	assert(snap->book_arr == NULL);
-	assert(snap->document_arr == NULL);
-	assert(snap->mim_state_arr == NULL);
-	memset(snap, 0, sizeof *snap);
-	arrinit(snap->book_arr      , &system_allocator);
-	arrinit(snap->document_arr  , &system_allocator);
-	arrinit(snap->mim_state_arr , &system_allocator);
-}
-
-static int spool_raw_journal_bs(struct snapshot* snap, struct bufstream* bs, int64_t until_offset)
+static int spool_raw_journal_bs(struct snapshot* snap, struct bufstream* bs, int64_t until_offset, int64_t* out_max_tracer)
 {
 	static uint8_t* mimbuf_arr = NULL;
-	if (mimbuf_arr == NULL) arrinit(mimbuf_arr, &system_allocator);
 
 	while (bs->offset < until_offset) {
 		const uint8_t sync = bs_read_u8(bs);
@@ -2095,11 +2049,17 @@ static int spool_raw_journal_bs(struct snapshot* snap, struct bufstream* bs, int
 		(void)timestamp_us; // XXX? remove?
 		const int64_t artist_id = bs_read_leb128(bs);
 		const int64_t session_id = bs_read_leb128(bs);
+		const int64_t tracer = bs_read_leb128(bs);
+		if (out_max_tracer) {
+			*out_max_tracer = tracer;
+		}
 		const int64_t num_bytes = bs_read_leb128(bs);
 		arrsetlen(mimbuf_arr, num_bytes);
 		bs_read(bs, mimbuf_arr, num_bytes);
 		//printf("going to spool [");for(int i=0;i<num_bytes;++i)printf("%c",mimbuf_arr[i]);printf("]\n");
-		snapshot_spool_ex(snap, mimbuf_arr, num_bytes, artist_id, session_id);
+		fprintf(stderr,"SPOOL_RAW_JOURNAL_BS a=%ld s=%ld t=%ld nb=%ld at offff %ld\n", (long)artist_id, (long)session_id, (long)tracer, (long)num_bytes, (long)bs->offset);
+		int e = snapshot_spool(snap, mimbuf_arr, num_bytes, artist_id, session_id);
+		if (e<0) return e;
 	}
 
 	if (bs->offset != until_offset) {
@@ -2108,80 +2068,285 @@ static int spool_raw_journal_bs(struct snapshot* snap, struct bufstream* bs, int
 	return 0;
 }
 
-void spool_raw_journal(void* data, int64_t count)
+int peer_spool_raw_journal_into_upstream_snapshot(void* data, int64_t count)
 {
+	assert(g.is_peer);
 	struct bufstream bs;
 	bufstream_init_from_memory(&bs, data, count);
-	const int e = spool_raw_journal_bs(&gst.cool_snapshot, &bs, count);
+	hexdump(data,count);
+	int64_t max_tracer = -1;
+	struct snapshot* snap = &pg.upstream_snapshot;
+	const int e = spool_raw_journal_bs(snap, &bs, count, &max_tracer);
 	if (e<0) {
 		dumperr();
-		fprintf(stderr, "spool_raw_journal_bs() of %d bytes => %d\n", (int)count, e);
+		fprintf(stderr, "spool_raw_journal_bs() of %d bytes => %d:\n", (int)count, e);
+		hexdump(data, count);
+		return -1;
 	}
+	if (max_tracer < 0) return 0;
+
+	// re-spool inflight mim that has not yet been ack'd
+	const int64_t num_total = arrlen(pg.unackd_mimbuf_arr);
+	bufstream_init_from_memory(&bs, pg.unackd_mimbuf_arr, num_total);
+	int64_t trunc_to = 0;
+	int64_t prev_tracer = -1;
+	while (bs.offset < num_total) {
+		const int64_t session_id     =  bs_read_leb128(&bs);
+		const int64_t tracer         =  bs_read_leb128(&bs);
+		/*const int64_t not_befor_ts =*/bs_read_leb128(&bs); // ignored
+		const int64_t num_bytes      =  bs_read_leb128(&bs);
+		if (tracer <= prev_tracer) {
+			fprintf(stderr, "unordered tracer sequence [%ld,%ld]\n", (long)prev_tracer, (long)tracer);
+			return -1;
+		}
+		assert(tracer > prev_tracer);
+		prev_tracer = tracer;
+		if (tracer <= max_tracer) {
+			// journal received from host already covers this tracer, so skip
+			// it and continue
+			bs_skip(&bs, num_bytes);
+			assert(bs.offset > trunc_to);
+			trunc_to = bs.offset;
+		} else {
+			snapshot_spool(snap, &pg.unackd_mimbuf_arr[bs.offset], num_bytes, get_my_artist_id(), session_id);
+			bs_skip(&bs, num_bytes);
+		}
+	}
+
+	// remove that which was actually ack'd
+	if (trunc_to > 0) {
+		arrdeln(pg.unackd_mimbuf_arr, 0, trunc_to);
+	}
+
+	return 0;
 }
 
-static int host_dir(const char* dir)
+void commit_mim_to_host(int artist_id, int session_id, int64_t tracer, uint8_t* data, int count)
+{
+	struct snapshot* snap = &hg.present_snapshot;
+	snapshot_spool(snap, data, count, artist_id, session_id);
+	struct jio* jj = igo.jio_journal;
+	assert(jj != NULL);
+	uint8_t** bb = &pg.bb_arr;
+	arrreset(*bb);
+	bb_append_u8(bb, SYNC);
+	const int64_t journal_timestamp = (get_nanoseconds() - igo.journal_timestamp_start)/1000LL;
+	bb_append_leb128(bb, journal_timestamp);
+	bb_append_leb128(bb, artist_id);
+	bb_append_leb128(bb, session_id);
+	bb_append_leb128(bb, tracer);
+	bb_append_leb128(bb, count);
+	bb_append(bb, data, count);
+	jio_flush_bb(jj, bb);
+	const int64_t s = jio_get_size(jj);
+	if (it_is_time_for_a_snapshotcache_push(s)) {
+		snapshotcache_push(snap, s);
+	}
+	#ifndef __EMSCRIPTEN__ // XXX not totally right?
+	webserv_broadcast_journal(jio_get_size(jj));
+	#endif
+}
+
+int host_tick(void)
+{
+	assert(g.is_host);
+
+	// handle completion events from io port
+	int did_work = 0;
+	#ifndef __EMSCRIPTEN__
+	struct io_event ev = {0};
+	while (io_port_poll(igo.io_port_id, &ev)) {
+		did_work = 1;
+		io_echo ec = ev.echo;
+		if (igo.jio_journal             && jio_ack(igo.jio_journal             , ec)) continue;
+		if (igo.jio_snapshotcache_data  && jio_ack(igo.jio_snapshotcache_data  , ec)) continue;
+		if (igo.jio_snapshotcache_index && jio_ack(igo.jio_snapshotcache_index , ec)) continue;
+		assert(!"unhandled event");
+	}
+	#endif
+
+	if (g.is_peer) {
+		const int artist_id = get_my_artist_id();
+		struct peer_state* ps = host_get_or_create_peer_state_by_artist_id(artist_id);
+		uint8_t** bb = &ps->cmdbuf_arr;
+		if (arrlen(*bb) == 0) {
+			int64_t p0,p1;
+			struct ringbuf* rb = &g.peer2host_mim_ringbuf;
+			ringbuf_get_readable_range(rb, &p0, &p1);
+			const int64_t nrb = (p1-p0);
+			if (nrb>0) {
+				assert(p1>p0);
+				arrsetlen(*bb, nrb);
+				ringbuf_read_range(rb, *bb, p0, p1);
+				did_work = 1;
+			}
+		}
+	}
+
+	const int num_ps = arrlen(hg.peer_state_arr);
+	for (int i=0; i<num_ps; ++i) {
+		struct peer_state* ps = &hg.peer_state_arr[i];
+		const int64_t n = arrlen(ps->cmdbuf_arr);
+		struct bufstream bs;
+		bufstream_init_from_memory(&bs, ps->cmdbuf_arr, n);
+		int64_t cursor = 0;
+		while (cursor < n) {
+			const int64_t o0 = bs.offset;
+			const int64_t session_id = bs_read_leb128(&bs);
+			const int64_t tracer = bs_read_leb128(&bs);
+			const int64_t not_before_ts  = bs_read_leb128(&bs);
+			const int is_released = (not_before_ts == 0) || (get_nanoseconds_epoch() > not_before_ts);
+			if (!is_released) break;
+			const int64_t num_bytes  = bs_read_leb128(&bs);
+			const int64_t o1 = bs.offset;
+			cursor += (o1-o0);
+
+			commit_mim_to_host(ps->artist_id, session_id, tracer, ps->cmdbuf_arr + cursor, num_bytes);
+			bs_skip(&bs, num_bytes);
+			did_work = 1;
+			cursor += num_bytes;
+			assert(cursor <= n);
+		}
+
+		#if 0
+		ps->cmd_ack_cursor += cursor;
+		if (g.is_peer && (ps->artist_id == get_my_artist_id())) {
+			// immediately report back acknowledged position to local peer
+			atomic_store(&pg.ackd_cmd_cursor, ps->cmd_ack_cursor);
+		}
+		#endif
+
+		assert(cursor <= n);
+		if (cursor == n) {
+			arrreset(ps->cmdbuf_arr);
+		} else if (cursor > 0) {
+			const int nn = n-cursor;
+			assert(nn > 0);
+			memmove(ps->cmdbuf_arr, ps->cmdbuf_arr + cursor, nn);
+			arrsetlen(ps->cmdbuf_arr, nn);
+		}
+	}
+
+	return did_work;
+}
+
+#if 0
+void gig_maybe_setup_stub(void)
+{
+	// XXX doesn't work too well
+	struct snapshot* snap = &g.cool_snapshot;
+	if (arrlen(snap->book_arr) > 0) {
+		return;
+	}
+	peer_begin_mim(1);
+	mimex("newbook 1 mie-urlyd -");
+	mimex("newdoc 1 50 art.mie");
+	mimex("setdoc 1 50");
+	mimf("0,1,1c");
+	peer_end_mim();
+}
+#endif
+
+static void host_begin_mim(void)
+{
+	assert(g.is_host);
+	assert(!tlg.in_mim);
+	tlg.in_mim = 1;
+	arrreset(tlg.mim_buffer_arr);
+}
+
+static void host_end_mim(void)
+{
+	assert(tlg.in_mim);
+	tlg.in_mim = 0;
+	assert(g.is_host);
+	const int num_bytes = arrlen(tlg.mim_buffer_arr);
+	if (num_bytes == 0) return;
+	#if 0
+	printf("MIM[");
+	for (int i=0; i<num_bytes; ++i) printf("%c",tlg.mim_buffer_arr[i]);
+	printf("]\n");
+	#endif
+	commit_mim_to_host(0, 0, 0, tlg.mim_buffer_arr, num_bytes);
+}
+
+static void setup_default_stub(void)
+{
+	// TODO later we probably want to allow choosing the "book fundament"
+	// (mie-urlyd) and "book template" (-) /before/ creating the journal
+	// file... this is because we're probably going to add 1000s of lines of
+	// standard libraries and stuff which is a shame to put in the journal file
+	// (which remembers everything) if we're not going to need it
+	host_begin_mim();
+	mimex("newbook 1 mie-urlyd -");
+	mimex("newdoc 1 50 art.mie");
+	host_end_mim();
+}
+
+
+static int setup_datadir(const char* dir)
 {
 	char pathbuf[1<<14];
 	STATIC_PATH_JOIN(pathbuf, dir, FILENAME_JOURNAL);
 	int err;
-	struct jio* jj = jio_open(pathbuf, IO_OPEN_OR_CREATE, g.io_port_id, 10, &err);
-	gst.jio_journal = jj;
+	struct jio* jj = jio_open(pathbuf, IO_OPEN_OR_CREATE, igo.io_port_id, 10, &err);
+	igo.jio_journal = jj;
 	if (jj == NULL) return IOERR(FILENAME_JOURNAL, err);
 
 	// TODO setup journal jio for fdatasync?
 
-	S_LOCK();
-	struct snapshot* snap = &gst.cool_snapshot; // XXX
-	snapshot_init(snap);
-
 	const int64_t sz = jio_get_size(jj);
 	if (sz == 0) {
-		uint8_t** bb = get_io_bb();
+		uint8_t** bb = &hg.bb_arr;
+		arrreset(*bb);
 		bb_append(bb, DOJO_MAGIC, strlen(DOJO_MAGIC));
-		bb_append_leb128(bb, DO_FORMAT_VERSION);
-		gst.journal_insignia = make_insignia();
-		bb_append_leu64(bb, gst.journal_insignia);
+		bb_append_leu64(bb, DO_FORMAT_VERSION);
+		const uint64_t insignia = make_insignia();
+		bb_append_leu64(bb, insignia);
 		// TODO epoch timestamp?
 		jio_flush_bb(jj, bb);
 		err = jio_get_error(jj);
 		if (err<0) {
-			S_UNLOCK();
 			return IOERR(FILENAME_JOURNAL, err);
 		}
-		gst.journal_timestamp_start = get_nanoseconds();
+		igo.journal_timestamp_start = get_nanoseconds();
 
-		err = snapshotcache_create(dir, gst.journal_insignia);
+		err = snapshotcache_create(dir, insignia);
 		if (err<0) {
-			S_UNLOCK();
+			dumperr();
 			return IOERR(FILENAME_JOURNAL, err);
 		}
+
+		if (g.is_host) setup_default_stub();
 	} else {
+		if (!g.is_host) {
+			return FMTERR(pathbuf, "journal save file already exists; delete it or choose another savedir");
+		}
+
 		uint8_t magic[8];
 		struct bufstream bs0;
 		uint8_t buf0[1<<8];
 		bufstream_init_from_jio(&bs0, jj, 0, buf0, sizeof buf0);
 		bs_read(&bs0, magic, sizeof magic);
 		if (memcmp(magic, DOJO_MAGIC, 8) != 0) {
-			S_UNLOCK();
 			return FMTERR(pathbuf, "invalid magic in journal header");
 		}
-		const int64_t do_format_version = bs_read_leb128(&bs0);
+		const int64_t do_format_version = bs_read_leu64(&bs0);
 		if (do_format_version != DO_FORMAT_VERSION) {
-			S_UNLOCK();
 			return FMTERR(pathbuf, "unknown do-format-version");
 		}
-		gst.journal_insignia = bs_read_leu64(&bs0);
+		const uint64_t insignia = bs_read_leu64(&bs0);
 
 		int64_t journal_spool_offset = -1;
 
-		int err = snapshotcache_open(dir, gst.journal_insignia);
+		struct snapshot* snap = &hg.present_snapshot;
+		int err = snapshotcache_open(dir, insignia);
 		if (err == IO_NOT_FOUND) {
 			// OK just spool journal from beginning
 		} else {
 			if (can_restore_latest_snapshot()) {
 				err = restore_latest_snapshot(snap, &journal_spool_offset);
 				if (err<0) {
-					S_UNLOCK();
 					return err;
 				}
 				assert(journal_spool_offset > 0);
@@ -2193,101 +2358,89 @@ static int host_dir(const char* dir)
 		const int64_t jjsz = jio_get_size(jj);
 		if (journal_spool_offset > 0) {
 			if (journal_spool_offset  > jjsz) {
-				S_UNLOCK();
 				return FMTERR(FILENAME_JOURNAL, "journal spool offset past end-of-file");
 			}
 			bufstream_init_from_jio(&bs0, jj, journal_spool_offset, buf0, sizeof buf0);
 		}
 
-		if (spool_raw_journal_bs(snap, &bs0, jjsz) < 0) {
-			S_UNLOCK();
+		if (spool_raw_journal_bs(snap, &bs0, jjsz, NULL) < 0) {
 			return bs0.error;
 		}
 		if (bs0.error<0) {
-			S_UNLOCK();
 			return IOERR(FILENAME_JOURNAL, bs0.error);
 		}
 	}
 
-	assert(snap->book_arr != NULL);
-	assert(snap->document_arr != NULL);
-	assert(snap->mim_state_arr != NULL);
-
-	S_UNLOCK();
-
 	return 0;
 }
 
-void gig_host(const char* dir)
+int gig_configure_as_host_and_peer(const char* rootdir)
 {
-	memset(&gst, 0, sizeof gst);
-	gst.my_artist_id = 1; // XXX?
-	const int err = host_dir(dir);
-	if (err<0) {
-		fprintf(stderr, "host_dir(\"%s\") failed: [%s]/%d\n", dir, g.errormsg, err);
-		abort();
+	assert(!g.is_configured);
+	g.is_configured = 1;
+	g.is_host = 1;
+	g.is_peer = 1;
+	pg.my_artist_id = 1;
+	hg.next_artist_id = 2;
+	ringbuf_init(&g.peer2host_mim_ringbuf, 16);
+	int e = setup_datadir(rootdir);
+	if (e<0) {
+		dumperr();
+		return e;
 	}
+	//snapshot_copy(&pg.upstream_snapshot, &hg.present_snapshot);
+	return 0;
 }
 
-void gig_host_no_jio(void)
+int gig_configure_as_host_only(const char* rootdir)
 {
-	// XXX? find a better solution, or?
-	memset(&gst, 0, sizeof gst);
-	gst.my_artist_id = 1; // XXX?
-	S_LOCK();
-	struct snapshot* snap = &gst.cool_snapshot; // XXX
-	S_UNLOCK();
-	snapshot_init(snap);
+	assert(!g.is_configured);
+	g.is_configured = 1;
+	g.is_host = 1;
+	hg.next_artist_id = 1;
+	return setup_datadir(rootdir);
 }
 
-void gig_unhost(void)
+int gig_configure_as_peer_only(const char* savedir)
 {
-	jio_close(gst.jio_journal);
-	jio_close(gst.jio_snapshotcache_data);
-	jio_close(gst.jio_snapshotcache_index);
-	// XXX hmmm... is this all? or even right?
-	S_LOCK();
-	struct snapshot* snap = &gst.cool_snapshot;
-	arrfree(snap->book_arr);
-	arrfree(snap->document_arr);
-	arrfree(snap->mim_state_arr);
-	S_UNLOCK();
+	assert(!g.is_configured);
+	g.is_configured = 1;
+	g.is_peer = 1;
+	hg.next_artist_id = -1;
+	return setup_datadir(savedir);
+	return 0;
 }
 
-void gig_maybe_setup_stub(void)
+void gig_unconfigure(void)
 {
-	// XXX doesn't work too well
-	S_LOCK();
-	struct snapshot* snap = &gst.cool_snapshot;
-	if (arrlen(snap->book_arr) > 0) {
-		S_UNLOCK();
-		return;
+	assert(g.is_configured);
+	assert(g.is_host || g.is_peer);
+	g.is_configured = 0;
+	if (g.is_host && g.is_peer) {
+		ringbuf_free(&g.peer2host_mim_ringbuf);
+	} else {
+		assert(g.peer2host_mim_ringbuf.buf != NULL);
 	}
-	S_UNLOCK();
-	begin_mim(1);
-	mimex("newbook 1 mie-urlyd -");
-	mimex("newdoc 1 50 art.mie");
-	mimex("setdoc 1 50");
-	mimf("0,1,1c");
-	end_mim();
+	jio_close(igo.jio_journal);
+	jio_close(igo.jio_snapshotcache_data);
+	jio_close(igo.jio_snapshotcache_index);
 }
 
 void gig_set_journal_snapshot_growth_threshold(int t)
 {
 	assert(t > 0);
-	g.journal_snapshot_growth_threshold = t;
+	igo.journal_snapshot_growth_threshold = t;
 }
 
 void gig_init(void)
 {
-	assert(thrd_success == mtx_init(&gst.snap_mutex, mtx_plain));
+	//assert(thrd_success == mtx_init(&g.snap_mutex, mtx_plain));
 	#ifdef __EMSCRIPTEN__
-	g.io_port_id = -1;
+	igo.io_port_id = -1;
 	#else
-	g.io_port_id = io_port_create();
+	igo.io_port_id = io_port_create();
 	#endif
 	gig_set_journal_snapshot_growth_threshold(5000);
-	arrinit(g.mim_buffer_arr, &system_allocator);
 }
 
 void gig_selftest(void)

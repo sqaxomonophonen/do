@@ -1,12 +1,12 @@
 // mie (forth-like language) compiler and vmie virtual machine
 //  - see mie_selftest() near bottom for small programs that test compiler+vm
 //  - see built-in word definitions near top of this file
-//  - copious use of macros, including "X macros". search for e.g. BINOP for
-//    how binary operators (like `a+b`/`a b +`) are implemented with macros
+//  - see mie_compile_*() for compiler entrypoints
+//  - see vmie_run2() for the VM main loop
 
 // the vm (vmie) and the compiler (which also runs a compile-time vmie) uses a
 // "scratch allocator" (aka "arena allocator") which does a couple of things:
-//  - it lets in the memory corruption bugs from hell,.. but hear me out!
+//  - it lets in memory corruption bugs from hell,.. but hear me out!
 //  - it lets you code as if you had a garbage collector when it comes to
 //    temporary memory
 //  - it can (TODO) very likely be used to implement simple/fast compiler/vm
@@ -20,9 +20,9 @@
 // the compiler and vm(/vmie) state is global, but thread local, i.e. you have
 // one instance of them per thread. this is because compilation plus program
 // execution should always feel instant (<20ms?); it's not designed for
-// long-running programs, so there's no point in having more than one instance
-// per thread at that timescale. it also means we only need one scratch
-// allocator per thread.
+// long-running programs, so there's no point (?) in having more than one
+// instance per thread at that timescale. it also means we only need one
+// scratch allocator per thread.
 
 #include <stdio.h> // XXX remove me eventually?
 #include <string.h>

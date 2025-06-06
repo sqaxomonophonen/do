@@ -1,6 +1,7 @@
 #ifndef UTIL_H
 
 #include <stdlib.h>
+#include <stdint.h>
 #include <stdio.h>
 
 #define ARRAY_LENGTH(xs) (sizeof(xs)/sizeof((xs)[0]))
@@ -58,12 +59,30 @@ static inline int bounds_check(int index, int length, const char* location)
 #define XXX(S)       fprintf(stderr,"XXX(" #S ") at %s:%d\n",__FILE__,__LINE__);
 #define XXX_NOW(S)   {XXX(S);abort();}
 
-#define HEXDUMP(DATA,COUNT) { \
-	fprintf(stderr, "HEX(n=%d) >>",(int)(COUNT)); \
-	for(int i=0;i<(int)(COUNT);++i) { \
-		fprintf(stderr, " %.2x", ((uint8_t*)(DATA))[i]); \
-	} \
-	fprintf(stderr, "\n"); \
+static inline void hexdump(uint8_t* data, int count)
+{
+	int i=0;
+	while (i < count) {
+		fprintf(stderr, "*%.4x    ", i);
+
+		const int i0=i;
+		const int im=i0+8;
+		const int i1=i0+16;
+		for (; i<i1; ++i) {
+			 if (i==im) fprintf(stderr, " ");
+			 if (i < count) {
+				 fprintf(stderr, "%.2x ", data[i]);
+			 } else {
+				 fprintf(stderr, "   ");
+			 }
+		}
+		fprintf(stderr, "  | ");
+		for (i=i0; i<i1; ++i) {
+			char c = i < count ? data[i] : ' ';
+			fprintf(stderr, "%c", c>=' '?c:'.');
+		}
+		fprintf(stderr, " |\n");
+	}
 }
 
 #define UTIL_H

@@ -99,6 +99,7 @@ static inline uint16_t bs_read_u8(struct bufstream* bs)     { return bufstream_r
 static inline uint16_t bs_read_leu16(struct bufstream* bs)  { return bufstream_read_leu16(bs); }
 static inline int64_t  bs_read_leu64(struct bufstream* bs)  { return bufstream_read_leu64(bs); }
 static inline int64_t  bs_read_leb128(struct bufstream* bs) { return bufstream_read_leb128(bs); }
+static inline void     bs_skip(struct bufstream* bs, int count) { bufstream_skip(bs, count); }
 
 
 #define BUFSTREAM_H

@@ -76,5 +76,7 @@ Module["preInit"] = [
 
 		console.log(Module);
 
+		FS.mkdir('/data');
+
 	}
 ];

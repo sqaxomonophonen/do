@@ -10,6 +10,8 @@ CFLAGS+=$(OPT)
 CFLAGS+=-Wall
 #CFLAGS+=-Wall
 
+CFLAGS+=-DDEVELOPMENT_BUILD
+
 # you can temporarily disable warnings to remove unhelpful clutter:
 #CFLAGS+=-Wno-unused
 

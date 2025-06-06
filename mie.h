@@ -88,6 +88,8 @@ const char* mie_error(void);
 
 void mie_selftest(void);
 
+// FIXME TODO make scrallox private to mie.c again? currently no longer used
+// (mie_borrow_scrallox() that is) by gig.c
 void mie_begin_scrallox(void);
 void mie_end_scrallox(void);
 jmp_buf* mie_prep_scrallox_jmp_buf_for_out_of_memory(void);

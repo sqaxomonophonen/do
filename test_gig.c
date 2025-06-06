@@ -85,13 +85,13 @@ static void test_readwrite(int N)
 		gig_host(test_dir);
 
 		if (pass == 0) {
-			begin_mim(1);
+			peer_begin_mim(1);
 			mimex("newbook 1 mie-urlyd -");
 			mimex("newdoc 1 50 art.mie");
 			mimex("setdoc 1 50");
 			mimf("0,1,1c");
 			for (int i=0; i<N; ++i) mimi(0,"hello");
-			end_mim();
+			peer_end_mim();
 		}
 
 		get_state_and_doc(1, &g.ms, &g.doc);
@@ -148,27 +148,27 @@ static void test_regress_0a(void)
 	new_test("regress0");
 	gig_host(test_dir);
 
-	begin_mim(1);
+	peer_begin_mim(1);
 	mimex("newbook 1 mie-urlyd -");
 	mimex("newdoc 1 50 art.mie");
 	mimex("setdoc 1 50");
 	mimf("0,1,1c");
-	end_mim();
+	peer_end_mim();
 	expect_col_and_doc(1,"");
 
-	begin_mim(1);
+	peer_begin_mim(1);
 	mimi(0,"abc");
-	end_mim();
+	peer_end_mim();
 	expect_col_and_doc(4,"abc");
 
-	begin_mim(1);
+	peer_begin_mim(1);
 	mimf("0Mh0Mh");
-	end_mim();
+	peer_end_mim();
 	expect_col_and_doc(2,"abc");
 
-	begin_mim(1);
+	peer_begin_mim(1);
 	mimi(0,"12");
-	end_mim();
+	peer_end_mim();
 	expect_col_and_doc(4,"a12bc");
 
 	gig_unhost();
@@ -183,32 +183,32 @@ static void test_regress_0b(void)
 	new_test("regress0");
 	gig_host(test_dir);
 
-	begin_mim(1);
+	peer_begin_mim(1);
 	mimex("newbook 1 mie-urlyd -");
 	mimex("newdoc 1 50 art.mie");
 	mimex("setdoc 1 50");
 	mimf("0,1,1c");
-	end_mim();
+	peer_end_mim();
 	expect_col_and_doc(1,"");
 
-	begin_mim(1);
+	peer_begin_mim(1);
 	mimi(0,"abc");
-	end_mim();
+	peer_end_mim();
 	expect_col_and_doc(4,"abc");
 
-	begin_mim(1);
+	peer_begin_mim(1);
 	mimf("0Mh0Mh0Mh");
-	end_mim();
+	peer_end_mim();
 	expect_col_and_doc(1,"abc");
 
-	begin_mim(1);
+	peer_begin_mim(1);
 	// no-op
-	end_mim();
+	peer_end_mim();
 	expect_col_and_doc(1,"abc");
 
-	begin_mim(1);
+	peer_begin_mim(1);
 	mimi(0,"12");
-	end_mim();
+	peer_end_mim();
 	expect_col_and_doc(3,"12abc");
 
 	gig_unhost();
@@ -223,19 +223,19 @@ static void test_regress_0c(void)
 	new_test("regress1");
 	gig_host(test_dir);
 
-	begin_mim(1);
+	peer_begin_mim(1);
 	mimex("newbook 1 mie-urlyd -");
 	mimex("newdoc 1 50 art.mie");
 	mimex("setdoc 1 50");
 	mimf("0,1,1c");
-	end_mim();
+	peer_end_mim();
 	expect_col_and_doc(1,"");
 
-	begin_mim(1);
+	peer_begin_mim(1);
 	mimi(0,"abc");
 	mimf("0Mh0Mh0Mh");
 	mimi(0,"123");
-	end_mim();
+	peer_end_mim();
 	expect_col_and_doc(4,"123abc");
 
 	gig_unhost();
@@ -250,57 +250,57 @@ static void test_regress_0d(void)
 	new_test("regress1");
 	gig_host(test_dir);
 
-	begin_mim(1);
+	peer_begin_mim(1);
 	mimex("newbook 1 mie-urlyd -");
 	mimex("newdoc 1 50 art.mie");
 	mimex("setdoc 1 50");
 	mimf("0,1,1c");
-	end_mim();
+	peer_end_mim();
 	expect_col_and_doc(1,"");
 
 	// insert "abc"
-	begin_mim(1);
+	peer_begin_mim(1);
 	mimi(0,"abc");
-	end_mim();
+	peer_end_mim();
 	expect_col_and_doc(4,"abc");
 
 	// commit
-	begin_mim(1);
+	peer_begin_mim(1);
 	mimf("0!");
-	end_mim();
+	peer_end_mim();
 	expect_col_and_doc(4,"abc");
 
 	// 1 x caret left
-	begin_mim(1);
+	peer_begin_mim(1);
 	mimf("0Mh");
-	end_mim();
+	peer_end_mim();
 	expect_col_and_doc(3,"abc");
 
 	// 2 x caret left
-	begin_mim(1);
+	peer_begin_mim(1);
 	mimf("0Mh0Mh");
-	end_mim();
+	peer_end_mim();
 	expect_col_and_doc(1,"abc");
 
 	// insert "123" and commit
-	begin_mim(1);
+	peer_begin_mim(1);
 	mimi(0,"123");
 	mimf("0!");
-	end_mim();
+	peer_end_mim();
 	expect_col_and_doc(4,"123abc");
 
 	// insert "xxx" and commit
-	begin_mim(1);
+	peer_begin_mim(1);
 	mimi(0,"xxx");
 	mimf("0!");
-	end_mim();
+	peer_end_mim();
 	expect_col_and_doc(7,"123xxxabc");
 
 	// insert "y" and commit
-	begin_mim(1);
+	peer_begin_mim(1);
 	mimi(0,"y");
 	mimf("0!");
-	end_mim();
+	peer_end_mim();
 	expect_col_and_doc(8,"123xxxyabc");
 
 	gig_unhost();
@@ -308,14 +308,14 @@ static void test_regress_0d(void)
 	gig_host(test_dir);
 	expect_col_and_doc(8,"123xxxyabc");
 
-	begin_mim(1);
+	peer_begin_mim(1);
 	mimf("0Mh0Mh0Mh0Mh");
-	end_mim();
+	peer_end_mim();
 	expect_col_and_doc(4,"123xxxyabc");
 
-	begin_mim(1);
+	peer_begin_mim(1);
 	mimi(0,"--");
-	end_mim();
+	peer_end_mim();
 	expect_col_and_doc(6,"123--xxxyabc");
 
 	gig_unhost();

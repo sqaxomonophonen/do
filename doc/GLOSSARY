@@ -14,8 +14,7 @@ loosely inspired by, and named after "vim", but starting with "mi" as in
 "do-re-mi" or "minimal".
 
 : scrallox
-scratch allocator used in the compiler, VM (in mie.c), and also for temporary
-documents in gig.c.
+scratch allocator used in the compiler, VM (in mie.c)
 
 : journal
 a data structure, DO_JAM_JOURNAL on disk, that represents a Do-session as a
@@ -27,9 +26,24 @@ processing a sequence of journal entries and applying them to the internal
 snapshot state. this happens during startup, during time travel and upon user
 input.
 
+: host and peer
+like server and client, but I like these names better. but also, a desktop
+build that acts as "server" is host and peer at the same time; the host is
+basically only responsible for recording a series of events (journal) and
+broadcasting them to peers. the peer does all the "fun stuff" (runs mie-code,
+audio, etc)
+
 : snapshot
 a data structure containing a materialised point-in-time version of a
-Do-session. this is derived from the journal.
+Do-session. this is derived from mim-commands from the journal or elsewhere.
+kinds of snapshots in use:
+ - "present snapshot": the host's snapshot; corresponds to the latest state
+   according to the journal.
+ - "upstream snapshot": the peer's snapshot; corresponds to lhe latest state
+   received from the host
+ - "fiddle snapshot": used by peer for local edits; it's initialized from the
+   upstream snapshot, and edits are then applied (so that the upstream snapshot
+   is "undisturbed")
 
 : snapshotcache
 snapshotcache.data and snapshotcache.index collectively store snapshots on

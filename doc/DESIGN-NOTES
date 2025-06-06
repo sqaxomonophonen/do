@@ -383,3 +383,15 @@ are there any good execuses for having multi-room support in the Do-executable?
 
 idea: curated views.. follow somebody's caret (curator caret)? you can maybe
 designate a view as either broadcasting a curator caret, or following one.
+
+
+
+optimization idea: use hashing to optimize snapshot_copy(), document_copy(),
+etc? simple content hashing is probably fine? hashing is only necessary when
+e.g. a document changes, and most edits are probably in small documents? could
+maybe also do a merkle-chain thing, where objects start with a random hash, and
+then e.g. document edits could be added to the hash like:
+   $newhash = hash( $prevhash .. $mimstatehash .. $mim )
+$mimstatehash is the struct mim_state hash, and $mim are the actual edit
+commands.
+

@@ -465,7 +465,7 @@ static int build_atlas(void)
 		stbtt_GetFontVMetrics(fontinfo, &spec->_ascent, &spec->_descent, &spec->_line_gap);
 	}
 
-	// pack rectangles; give them positions in the atlas image
+	// pack rectangles; give them positions in the atlas image.
 	int atlas_width_log2  = ATLAS_MIN_SIZE_LOG2;
 	int atlas_height_log2 = ATLAS_MIN_SIZE_LOG2;
 	for (;;) {
@@ -820,7 +820,6 @@ void gui_init(void)
 		.u1=1, .v1=1,
 		.code = {
 			.focus_id = focus_id,
-			.session_id = 1,
 		},
 	}));
 	focus(focus_id);
@@ -1238,7 +1237,8 @@ static int keyboard_input_area(struct rect* r, int focus_id)
 
 void gui_begin_frame(void)
 {
-	gig_tick();
+	//peer_set_artificial_mim_latency(.5, .1);
+	peer_tick();
 	update_fps();
 	arrreset(g.key_buffer_arr);
 	arrreset(g.text_buffer_arr);
@@ -1307,7 +1307,7 @@ static void cpick_add_rgb(struct pane* p, int delta)
 static void handle_editor_input(struct pane* pane)
 {
 	assert(pane->type == CODE);
-	begin_mim(pane->code.session_id);
+	peer_begin_mim(pane->code.session_id);
 	int last_mod = 0;
 	for (int i=0; i<arrlen(g.key_buffer_arr); ++i) {
 		const int key = arrchkget(g.key_buffer_arr, i);
@@ -1370,7 +1370,7 @@ static void handle_editor_input(struct pane* pane)
 		}
 	}
 
-	end_mim();
+	peer_end_mim();
 }
 
 static void save(void)
@@ -1398,6 +1398,26 @@ static void draw_code_pane(struct pane* pane)
 {
 	assert(pane->type == CODE);
 
+	struct mim_state* ms  = &g.ms_copy;
+	if (pane->code.session_id == 0) {
+		pane->code.session_id = 1; // XXX no allocate?
+		int do_setdoc=0;
+		int do_addcar=0;
+		if (get_copy_of_state(pane->code.session_id, ms)) {
+			if ((ms->book_id == 0) || (ms->doc_id == 0)) do_setdoc=1;
+			if (arrlen(ms->caret_arr) == 0)              do_addcar=1;
+		} else {
+			do_setdoc=1;
+			do_addcar=1;
+		}
+		if (do_addcar || do_setdoc) {
+			peer_begin_mim(pane->code.session_id);
+			if (do_setdoc) mimex("setdoc 1 50");
+			if (do_addcar) mimf("0,1,1c");
+			peer_end_mim();
+		}
+	}
+
 	g.state.is_dimming = pane->code.cpick_on;
 
 	struct rect pr = get_pane_rect(pane);
@@ -1421,9 +1441,10 @@ static void draw_code_pane(struct pane* pane)
 	//set_color3f(.7, 2.7, .7);
 	set_color3f(.9,2.6,.9);
 
-	struct mim_state* ms  = &g.ms_copy;
 	struct document*  doc = &g.doc_copy;
-	get_copy_of_state_and_doc(pane->code.session_id, ms, doc);
+	if (!get_copy_of_state_and_doc(pane->code.session_id, ms, doc)) {
+		return;
+	}
 	pane->code.splash4_cache = ms->splash4;
 
 	const int num_carets = arrlen(ms->caret_arr);

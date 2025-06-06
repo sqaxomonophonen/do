@@ -189,6 +189,8 @@ enum websock_state {
 
 struct conndo {
 	int64_t journal_cursor;
+	int artist_id;
+	unsigned did_greet  :1;
 };
 
 struct websock {
@@ -229,6 +231,10 @@ static struct {
 	int num_free;
 	int next;
 } g;
+
+THREAD_LOCAL static struct {
+	uint8_t* bb;
+} tlg;
 
 static int alloc_conn(void)
 {
@@ -604,10 +610,46 @@ static const char* get_mime_from_ext(const char* ext)
 	if (0==strcmp("wasm",ext))  return "application/wasm";
 	if (0==strcmp("css",ext))   return "text/css";
 	if (0==strcmp("html",ext))  return "text/html; charset=UTF-8";
+	#ifdef DEVELOPMENT_BUILD
+	if (0==strcmp("map",ext))   return "application/json";
+	#endif
 	return "application/octet-stream";
 }
 
-// parses HTTP/1.1 request between pstart/pend. the memory is modified.
+static void serve_dok(struct conn* conn, enum http_method method, const char* path0, const char* ext)
+{
+	// TODO allow override of "dok/", but probably also "shadow dok's".
+	// one use is to serve the web app, and not contaminate your main
+	// "dok"
+	char* p = (char*)path0;
+	while (*p=='/') ++p;
+	int64_t size;
+	const int src_file_id = io_open(p, IO_OPEN_RDONLY, &size);
+	if (src_file_id < 0) {
+		// file actually not found
+		SERVE_STATIC_AND_RETURN(conn, R404)
+	}
+	assert(src_file_id >= 0);
+
+	// TODO range?
+
+	conn_printf(conn,
+		"HTTP/1.1 200 OK" CRLF
+		"Content-Type: %s" CRLF
+		"Content-Length: %ld" CRLF
+		"Cache-Control: max-age=31536000, immutable" CRLF
+		CRLF
+		,
+		get_mime_from_ext(ext),
+		size);
+
+	conn_respond(conn);
+	if (method==GET) {
+		conn_sendfileall(conn, src_file_id, size, 0);
+	} else assert(method==HEAD);
+}
+
+// serves HTTP/1.1 request between pstart/pend. the memory is modified.
 static void http_serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 {
 	assert(conn->cstate == HTTP_REQUEST);
@@ -638,7 +680,7 @@ static void http_serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 	uint8_t* path1=p;
 	*path1 = 0; // insert NUL-terminator
 
-	// match protocol (GET /path/to/resource [HTTP/1.1]\r\n)
+	// match protocol (GET /path/to/resource [HTTP/1.1\r\n])
 	++p;
 	uint8_t* proto0=p;
 	while (p<(pend-1) && *p>' ') ++p;
@@ -647,6 +689,7 @@ static void http_serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 	uint8_t* proto1=p;
 	p+=2;
 	static const char PROTO[] = "HTTP/1.1";
+	// TODO match HTTP/1.0 too? :) hmmm...
 	err |= ((proto1-proto0) != (sizeof(PROTO)-1) || memcmp(proto0,PROTO,proto1-proto0) != 0);
 
 	if (err) {
@@ -700,6 +743,8 @@ static void http_serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 	int method_set;
 	conn_enter(conn, HTTP_RESPONSE);
 
+	printf("http [%s]\n", path0);
+
 	const char* tail;
 	#define ROUTE(R) (method_set=0 , is_route(R,(char*)path0,&tail))
 	#define IS(M)    (assert(!(method_set&(1<<(M)))), (method_set|=(1<<(M))), method==(M))
@@ -719,7 +764,7 @@ static void http_serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 				"<div id=\"text_input_overlay\" contenteditable>?</div>"
 				"<script src=\"/dok/%s\"></script>"
 				,
-				"waiting for toDO",
+				"waiting for todo",
 				webpack_lookup("do.css"),
 				webpack_lookup("do.js")
 			);
@@ -742,7 +787,7 @@ static void http_serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 
 	} else if (ROUTE("/o/info")) {
 		size_t size;
-		void* data = get_snapshot_data(&size);
+		void* data = get_present_snapshot_data(&size);
 		conn_printf(conn,
 			"HTTP/1.1 200 OK" CRLF
 			"Content-Type: application/do-info" CRLF
@@ -764,6 +809,21 @@ static void http_serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 	} else if (ROUTE("/o/resolv/")) {
 		TODO(web/resolv)
 		SERVE_STATIC_AND_RETURN(conn, R404)
+
+	#ifdef DEVELOPMENT_BUILD
+	// hack that serves /dok/do.wasm.map (contains WASM=>C source map; without
+	// it, your browser doesn't know which file/line your program crashed in).
+	// while do.wasm is renamed and placed under /dok/<sha256sum>.wasm, it
+	// still points at do.wasm.map
+	} else if (ROUTE("/dok/do.wasm.map")) {
+		if (IS(HEAD) || IS(GET)) {
+			serve_dok(conn, method, (char*)path0, "map");
+			return;
+		} else {
+			DO405_AND_RETURN
+		}
+	#endif
+
 	} else if (ROUTE("/dok/")) {
 		if (IS(HEAD) || IS(GET)) {
 			assert(tail != NULL);
@@ -788,36 +848,7 @@ static void http_serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 				SERVE_STATIC_AND_RETURN(conn, R404)
 			}
 			const char* ext = p+65;
-
-			// TODO allow override of "dok/", but probably also "shadow dok's".
-			// one use is to serve the web app, and not contaminate your main
-			// "dok"
-			p = (char*)path0;
-			while (*p=='/') ++p;
-			int64_t size;
-			const int src_file_id = io_open(p, IO_OPEN_RDONLY, &size);
-			if (src_file_id < 0) {
-				// file actually not found
-				SERVE_STATIC_AND_RETURN(conn, R404)
-			}
-			assert(src_file_id >= 0);
-
-			// TODO range?
-
-			conn_printf(conn,
-				"HTTP/1.1 200 OK" CRLF
-				"Content-Type: %s" CRLF
-				"Content-Length: %ld" CRLF
-				"Cache-Control: max-age=31536000, immutable" CRLF
-				CRLF
-				,
-				get_mime_from_ext(ext),
-				size);
-
-			conn_respond(conn);
-			if (method==GET) {
-				conn_sendfileall(conn, src_file_id, size, 0);
-			} else assert(method==HEAD);
+			serve_dok(conn, method, (char*)path0, ext);
 			return;
 		} else {
 			// TODO PUT?
@@ -872,28 +903,29 @@ static void http_serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 		// when implementing the handshake part of RFC6455. JUST LOOK AT IT:
 
 		SHA1_CTX sha1;
-		// let's depend on a broken hash function, why not... "it's fine"
-		// because the RFC says: "The WebSocket handshake described in this
-		// document doesn't depend on any security properties of SHA-1, such as
+		// we depend on a broken hash function, why not... "it's fine" because
+		// the RFC says: "The WebSocket handshake described in this document
+		// doesn't depend on any security properties of SHA-1, such as
 		// collision resistance or resistance to the second pre-image attack".
 		// so why are we using SHA-1 again? also, what does the "sec" in
 		// "Sec-WebSocket-Key" stand for? secondhand?
 		SHA1_Init(&sha1);
 		SHA1_Update(&sha1, (uint8_t*) sec_websocket_key, sizeof sec_websocket_key);
-		// now let's add some base64-encoded data from "Sec-WebSocket-Key"...
-		// except we haven't actually verified it's base64-encoded, because
-		// the RFC says: "It is not necessary for the server to base64-decode
-		// the |Sec-WebSocket-Key| value.". yet the RFC also says that the
-		// client MUST base64-encode it... um ok. I guess we should base64-
-		// decode it for '"extra security"'? (triple-quotes for /extra/ sarcasm)
+		// we must add the base64-encoded data from "Sec-WebSocket-Key"...
+		// except we haven't actually verified it's base64-encoded, because the
+		// RFC says: "It is not necessary for the server to base64-decode the
+		// |Sec-WebSocket-Key| value.". yet the RFC also says that the client
+		// MUST base64-encode it... um ok. I guess we should base64-decode it
+		// for '"extra security"'? (triple-quotes for /extra/ sarcasm)
 		SHA1_Update(&sha1, (uint8_t*) "258EAFA5-E914-47DA-95CA-C5AB0DC85B11", 36);
-		// now let's add a magic GUID... of course it would NOT work in
-		// lowercase even though it would be the same guid? it says something
-		// about the creator of this handshake, doesn't it, to have the
-		// opportunity to select a sequence of 36 characters to be immortalized
-		// in RFC6455, and then you choose an F'ing (I now know what the F in
-		// RFC stands for) GUID!!1 also note how we've now /twice/ added the
-		// ASCII representation of binary data to the SHA-1... because... mmpfh
+		// finally we must add this magic GUID... of course it would NOT work
+		// in lowercase even though it would be the same guid? it says
+		// something about the creator of this handshake, doesn't it, to have
+		// the opportunity to select a sequence of 36 characters to be
+		// immortalized in RFC6455, and then you choose an F'ing (I now know
+		// what the F in RFC stands for) GUID!!1 also note how we've now
+		// /twice/ added the ASCII representation of binary data to the
+		// SHA-1... because... mmpfh
 		uint8_t digest[SHA1_DIGEST_SIZE];
 		SHA1_Final(&sha1, digest);
 
@@ -914,10 +946,11 @@ static void http_serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 			CRLF
 			,
 			accept_key);
-		// so if "Upgrade: websocket" and more headers werent't enough, we also
-		// have to reply with this psuedo crypto nonsense. if you really want
-		// the server to "prove" you speak websocket, why not just echo the
-		// sec-websocket-key? but the RFC's justification is:
+		// so if "101 Switching Protocols", "Upgrade: websocket" and more
+		// headers werent't enough, we also have to reply with this psuedo
+		// crypto nonsense. if you really want the server to "prove" you speak
+		// websocket, why not just echo the sec-websocket-key? but the RFC's
+		// justification is:
 
 		//   "The |Sec-WebSocket-Key| header field is used in the WebSocket
 		//   opening handshake.  It is sent from the client to the server to
@@ -929,14 +962,15 @@ static void http_serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 
 		// hello are we talking about the same protocol? you say it proves to
 		// the server that the client can speak websocket, but the server is
-		// doing all the work? the client can just send:
+		// doing all the work? (in fact, the server proves to the client it can
+		// speak websocket by depending on the GUID). the client can just send:
 		//   Sec-WebSocket-Key: adsfasdf12341243143adfa2
 		// (making it 24 chars "fools" our webserv), as well as it can send:
 		//   Sec-WebSocket-Version: 13
 		// which it must anyway??? (a browser can send neither due to the sec-*
 		// header prefix). if the client /really/ wants to fool a
-		// goody-two-shoes base64-decoding server it can always send the
-		// example from the RFC:
+		// goody-two-shoes base64-decoding server (not ours, we let everyone
+		// in) it can always send the example from the RFC:
 		//   Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==
 		// and then the server does all this work and sends back:
 		//   Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
@@ -946,7 +980,12 @@ static void http_serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 		// the client isn't reusing keys? SHOULD we do live entropy analyses to
 		// see if the client /actually/ wants to speak websocket?
 
-		// TODO make a "fast path" when Sec-WebSocket-Key is "dGhlIHNhbXBsZSBub25jZQ=="?
+		// ok sorry for the long rant, but I had to vendor ~150 lines of C
+		// (sha1.c) and add a "ONLY FOR WEBSOCKET" warning for this
+		//                         pointless
+		//                           crap
+
+		// TODO make a "fast path" when Sec-WebSocket-Key is "dGhlIHNhbXBsZSBub25jZQ=="
 
 		conn_respond(conn);
 		// ok whatever
@@ -1157,13 +1196,29 @@ static void websocket_handle_msg(struct conn* conn, uint8_t* data, int count)
 		uint8_t op = bs_read_u8(&bs);
 		switch (op) {
 
-		case WS0_SET_JOURNAL_CURSOR: {
-			cdo->journal_cursor = bs_read_leb128(&bs);
+		case WS0_HELLO: {
+			if (cdo->did_greet) {
+				fprintf(stderr, "client said hello 2+ times\n");
+				conn_drop(conn);
+			} else {
+				cdo->did_greet = 1;
+				cdo->journal_cursor = bs_read_leb128(&bs);
+				cdo->artist_id = alloc_artist_id();
+
+				uint8_t** bb = &tlg.bb;
+				arrreset(*bb);
+				bb_append_u8(bb, WS1_HELLO);
+				bb_append_leb128(bb, cdo->artist_id);
+				websocket_send0(conn, *bb, arrlen(*bb));
+			}
 		}	break;
 
 		case WS0_MIM: {
-			TODO(handle mim from peer)
-			conn_drop(conn);
+			const int mim_session_id = bs_read_leb128(&bs);
+			const int64_t tracer = bs_read_leb128(&bs);
+			const int count = bs_read_leb128(&bs);
+			commit_mim_to_host(cdo->artist_id, mim_session_id, tracer, data+bs.offset, count);
+			bs_skip(&bs, count);
 		}	break;
 
 		default: {
@@ -1177,6 +1232,7 @@ static void websocket_handle_msg(struct conn* conn, uint8_t* data, int count)
 
 static void websocket_handle_data(struct conn* conn, int fin, uint8_t* data, int count)
 {
+	if (conn->cstate == CLOSING) return;
 	assert(conn->cstate == WEBSOCKET);
 	struct websock* ws = &conn->websock;
 	uint8_t* p = arraddnptr(ws->msgbuf_arr, count);
@@ -1189,6 +1245,7 @@ static void websocket_handle_data(struct conn* conn, int fin, uint8_t* data, int
 
 static void websocket_serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 {
+	if (conn->cstate == CLOSING) return;
 	assert(conn->cstate == WEBSOCKET);
 	struct websock* ws = &conn->websock;
 	uint8_t* p = pstart;
@@ -1335,14 +1392,15 @@ void webserv_broadcast_journal(int64_t until_journal_cursor)
 		int64_t count = (until_journal_cursor - cdo->journal_cursor);
 		if (count <= 0) continue;
 
-		static uint8_t* bb;
-		arrreset(bb);
-		bb_append_u8(&bb, WS1_JOURNAL_UPDATE);
-		bb_append_leb128(&bb, count);
-		uint8_t* p = arraddnptr(bb, count);
+		uint8_t** bb = &tlg.bb;
+		arrreset(*bb);
+		bb_append_u8(bb, WS1_JOURNAL_UPDATE);
+		// XXX I think we have to also "privately" send to each peer
+		bb_append_leb128(bb, count);
+		uint8_t* p = arraddnptr(*bb, count);
 		copy_journal(p, count, cdo->journal_cursor);
 		cdo->journal_cursor = until_journal_cursor;
-		websocket_send0(conn, bb, arrlen(bb));
+		websocket_send0(conn, *bb, arrlen(*bb));
 	}
 }
 

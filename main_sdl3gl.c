@@ -11,6 +11,7 @@
 #include "webserv.h"
 #include "jio.h"
 #include "arg.h"
+#include "gig.h"
 
 #include "impl_sdl3.h"
 #define GL_GLEXT_PROTOTYPES
@@ -66,6 +67,7 @@ static int io_thread_run(void* usr)
 	(void)usr;
 	for (;;) {
 		int did_work = 0;
+		did_work |= host_tick();
 		did_work |= webserv_tick();
 		did_work |= io_tick();
 		if (!did_work) {
@@ -74,6 +76,11 @@ static int io_thread_run(void* usr)
 		}
 	}
 	return 0;
+}
+
+void transmit_mim(int mim_session_id, int64_t tracer, uint8_t* data, int count)
+{
+	FIXME(transmit mim via.. udp? ws?)
 }
 
 int main(int argc, char** argv)
@@ -126,8 +133,15 @@ int main(int argc, char** argv)
 	webserv_init();
 	mie_thread_init();
 	gig_init();
-	gig_host(arg_dir ? arg_dir : "."); // XXX?!
-	gig_maybe_setup_stub();
+
+	int e = gig_configure_as_host_and_peer(arg_dir ? arg_dir : ".");
+	if (e<0) {
+		fprintf(stderr, "configure failed\n");
+		return EXIT_FAILURE;
+	}
+	//gig_host(arg_dir ? arg_dir : "."); // XXX?!
+	//gig_maybe_setup_stub();
+
 	gui_init();
 	SDL_DetachThread(SDL_CreateThread(io_thread_run, "io", NULL));
 
@@ -153,7 +167,7 @@ int main(int argc, char** argv)
 		remove_closed_windows();
 	}
 
-	gig_unhost();
+	gig_unconfigure();
 
 	SDL_GL_DestroyContext(g.shared_gl_context);
 

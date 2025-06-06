@@ -11,6 +11,11 @@ struct location {
 	int column;
 };
 
+struct colorchar {
+	int32_t codepoint;
+	int16_t splash4; // [0000:9999]
+};
+
 static inline int location_compare(struct location* a, struct location* b)
 {
 	const int d0 = a->line - b->line;
@@ -33,11 +38,6 @@ static inline void location_sort2(struct location** a, struct location** b)
 	}
 }
 
-struct colorchar {
-	int32_t codepoint;
-	uint16_t splash4; // [0000:9999]
-};
-
 static inline uint16_t splash4_from_i32(int32_t v)
 {
 	if (v<0) return 0;
@@ -49,7 +49,6 @@ static inline int is_valid_splash4(int v)
 {
 	return ((0 <= v) && (v <= 9999));
 }
-
 
 // these flags are persistent (written in snapshotcache):
 #define FC_IS_INSERT (1LL<<0)
@@ -87,43 +86,10 @@ struct mim_state {
 	// the artist themselves can set these (unlike e.g. carets which can move
 	// due to document changes)
 	int book_id, doc_id;
-	uint16_t splash4;
+	int16_t splash4;
 	struct caret* caret_arr;
 	uint64_t snapshotcache_offset;
 	// (update mim_state_copy() when adding arr-fields here)
-};
-
-#if 0
-enum document_type {
-	DOCUMENT_TYPE_ROOT = 1,
-	DOCUMENT_TYPE_AUDIO,
-	DOCUMENT_TYPE_VIDEO,
-	//DOCUMENT_TYPE_SCRATCHPAD // XXX do I want/need this?
-	DOCUMENT_TYPE_PRESENTATION_SHADER,
-	// XXX re:DOCUMENT_TYPE_PRESENTATION_SHADER: code that translates "docchars"
-	// into "render_chars". but do I need a type per "presentation backend"?
-	// would a "braille backend" need another doc type?
-};
-#endif
-
-enum document_flag {
-
-	DOCUMENT_FLAG_REPLICA = (1<<0),
-	// the document is a replica from a remote venue. if this flag is not set
-	// it implies we're the venue.
-
-	DOCUMENT_FLAG_SYSTEM = (1<<1),
-	// the document is a system document which is always executed before your
-	// non-system documents. these typically contain language defining- and
-	// library/shared code. if set, document type must be DOCUMENT_TYPE_ROOT,
-	// DOCUMENT_TYPE_AUDIO or DOCUMENT_TYPE_VIDEO. the root type is executed
-	// before all document types whereas the others are only executed before
-	// their corresponding type.
-
-	DOCUMENT_FLAG_HIDDEN = (1<<2),
-	// suggests hiding the document in lists (you may override?). used with
-	// DOCUMENT_FLAG_SYSTEM for stdlib files?
-
 };
 
 #define LIST_OF_FUNDAMENTS \
@@ -145,10 +111,9 @@ struct book {
 struct document {
 	int book_id, doc_id;
 	uint64_t snapshotcache_offset;
-	//enum document_type type;
 	char* name_arr;
 	struct docchar* docchar_arr;
-	// (update document_copy() when adding arr-fields here)
+	// (update document_copy() and snapshot_copy() when adding arr-fields here)
 };
 
 struct doc_iterator {
@@ -181,17 +146,32 @@ static inline void doc_iterator_locate(struct doc_iterator* it, struct location*
 	}
 }
 
-void gig_host(const char* dir);
-void gig_host_no_jio(void);
-void gig_unhost(void);
-void gig_maybe_setup_stub(void);
-//void gig_testsetup(void);
 void gig_init(void);
 void gig_set_journal_snapshot_growth_threshold(int);
-void gig_tick(void);
+void peer_tick(void);
+int host_tick(void);
 void gig_selftest(void);
 
-void mim_set_latency(double mu, double sigma);
+int gig_configure_as_host_and_peer(const char* rootdir);
+// configure gig to be both host and peer (example: you're performing with the
+// desktop build, but others can join on your IP address)
+
+int gig_configure_as_host_only(const char* rootdir);
+// configure gig to be host-only (example: headless server, no audio/mie)
+
+int gig_configure_as_peer_only(const char* savedir);
+// configure gig to be peer-only (example: you join somebody else's host,
+// whether on LAN or over internet)
+
+void gig_unconfigure(void);
+
+void peer_set_artificial_mim_latency(double mean, double variance);
+// latency to add to mim commands for simulating roundtrip latency. values are
+// in seconds: mean is mu in the normal distribution, and variance is
+// sigma-squared
+
+
+//void gig_maybe_setup_stub(void);
 
 // TODO I think I may want to support some kind of "dry run", or "exploratory
 // fork", or something; specifically I'm considering having "commit intention
@@ -199,7 +179,7 @@ void mim_set_latency(double mu, double sigma);
 // standard carets?).
 //  - they reveal your near-future intents to your fellow artists
 //  - allows you to commit multiple disjoint diffs at once
-//  - it can check/test/run your mi code and give you feedback for every
+//  - it can check/test/run your mie code and give you feedback for every
 //    tiny change instead of waiting for ctrl+enter
 // you may say that you can "just" drag a selection around what you want to
 // commit and ctrl+enter, and it may usually be fine, but:
@@ -216,8 +196,8 @@ void mim_set_latency(double mu, double sigma);
 //    intent markers have their own "tag space" so they don't cause these
 //    problems)
 
-void begin_mim(int session_mim_state_id);
-void end_mim(void);
+void peer_begin_mim(int session_mim_state_id);
+void peer_end_mim(void);
 
 FORMATPRINTF1
 void mimf(const char* fmt, ...);
@@ -225,14 +205,20 @@ void mim8(uint8_t v);
 void mimex(const char*);
 void mimi(int tag, const char*);
 
-void get_copy_of_state_and_doc(int session_id, struct mim_state* out_mim_state, struct document* out_doc);
+int get_copy_of_state(int session_id, struct mim_state* out_mim_state);
+int get_copy_of_state_and_doc(int session_id, struct mim_state* out_mim_state, struct document* out_doc);
 
 int get_my_artist_id(void);
+void set_my_artist_id(int);
 
-int64_t restore_snapshot_from_data(void* data, size_t sz);
-void* get_snapshot_data(size_t* out_size);
+int alloc_artist_id(void);
+void free_artist_id(int);
+
 int copy_journal(void* dst, int64_t count, int64_t offset);
-void spool_raw_journal(void* data, int64_t count);
+void* get_present_snapshot_data(size_t* out_size);
+void commit_mim_to_host(int artist_id, int session_id, int64_t tracer, uint8_t* data, int count);
+int64_t restore_upstream_snapshot_from_data(void* data, size_t sz);
+int peer_spool_raw_journal_into_upstream_snapshot(void* data, int64_t count);
 
 // returns snapshot data. you're responsible for free()ing it when done
 

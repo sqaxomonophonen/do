@@ -1,6 +1,13 @@
 #ifdef __EMSCRIPTEN__
 #include <unistd.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <string.h>
 #define BLOCKING
+const char* io_error_to_string(int error)
+{
+	return strerror(errno);
+}
 #endif
 
 #include <limits.h>
@@ -25,11 +32,8 @@ struct jio {
 	// filesize of file, includes non-committed writes, so new size is
 	// available immediately after jio_append(). used from client thread.
 
-	int64_t filesize0;
-
-	unsigned head, tail;
-	// head/tail cursors for ringbuf. these should be able to wrap around (XXX
-	// is this tested&verified?)
+	long head, tail;
+	// head/tail cursors for ringbuf.
 
 	int ringbuf_size_log2;
 	uint8_t* ringbuf;
@@ -38,6 +42,7 @@ struct jio {
 	struct inflight* inflight_arr;
 	unsigned tag;
 };
+//static_assert(sizeof(((struct jio*)0)->head)==8,"noo");
 
 static struct {
 	unsigned tag_sequence;
@@ -48,20 +53,97 @@ struct jio* jio_open(const char* path, enum io_open_mode mode, int port_id, int 
 	assert((0 <= ringbuf_size_log2) && (ringbuf_size_log2 <= 30));
 
 	int64_t filesize;
+
+	#ifdef BLOCKING
+	// XXX a bit of unfortunate copy-pasta from io.c, but it's awkward to share
+	// (depends on posix but io.h/jio.h don't)
+	int oflags;
+	int omode = 0;
+	switch (mode) {
+	case IO_OPEN_RDONLY: {
+		oflags = (O_RDONLY);
+	}	break;
+	case IO_OPEN: {
+		oflags = (O_RDWR);
+	}	break;
+	case IO_OPEN_OR_CREATE: {
+		oflags = (O_RDWR | O_CREAT);
+		omode = 0666;
+	}	break;
+	case IO_CREATE: {
+		oflags = (O_RDWR | O_CREAT | O_EXCL);
+		omode = 0666;
+	}	break;
+	default: assert(!"unhandled mode");
+	}
+	const int file_id = open(path, oflags, omode);
+	if (file_id == -1) {
+		if (out_error) *out_error = -abs(errno);
+		return NULL;
+	}
+	off_t e = lseek(file_id, 0, SEEK_END);
+	if (e == -1) {
+		if (out_error) *out_error = -abs(errno);
+		return NULL;
+	}
+	filesize = e;
+	#else
 	const int file_id = io_open(path, mode, &filesize);
 	if (file_id < 0) {
 		if (out_error) *out_error = file_id;
 		return NULL;
 	}
+	#endif
 
 	struct jio* jio = calloc(1, sizeof *jio);
 	jio->port_id = port_id;
 	jio->file_id = file_id;
 	jio->filesize = filesize;
-	jio->filesize0 = filesize;
 	jio->ringbuf_size_log2 = ringbuf_size_log2;
 	jio->ringbuf = calloc(1L << jio->ringbuf_size_log2, sizeof *jio->ringbuf);
 	jio->tag = ++g.tag_sequence;
+
+	if (filesize > 0) {
+		const int ringbuf_size_log2 = jio->ringbuf_size_log2;
+		const int64_t ringbuf_size = (1L << ringbuf_size_log2);
+		const int64_t mask = (ringbuf_size-1);
+		const int64_t i = filesize & mask;
+		const int64_t o0 = filesize & ~mask;
+
+		int e0=0;
+		if (i>0) {
+			#ifdef BLOCKING
+			e0 = pread(file_id, &jio->ringbuf[0], i, o0);
+			#else
+			e0 = io_pread(file_id, &jio->ringbuf[0], i, o0);
+			#endif
+		}
+
+		if ((e0==0) && (o0>0)) {
+			const int64_t n = ringbuf_size - i;
+			assert(n > 0);
+			#ifdef BLOCKING
+			e0 = pread(file_id, &jio->ringbuf[i], n, o0 - ringbuf_size + i);
+			#else
+			e0 = io_pread(file_id, &jio->ringbuf[i], n, o0 - ringbuf_size + i);
+			#endif
+		}
+
+		if (e0 < 0) {
+			if (out_error) *out_error = e0;
+			#ifdef BLOCKING
+			const int e1 = close(file_id);
+			#else
+			const int e1 = io_close(file_id);
+			#endif
+			if (e1 < 0) {
+				if (out_error) *out_error = e1;
+				fprintf(stderr, "WARNING: close-error: %s / %s\n", io_error_to_string(e0), io_error_to_string(e1));
+			}
+			return NULL;
+		}
+		jio->head = filesize;
+	}
 
 	return jio;
 }
@@ -72,7 +154,11 @@ int jio_close(struct jio* jio)
 	const unsigned head = jio->head;
 	if (jio->tail != head) return IO_PENDING;
 
+	#ifdef BLOCKING
+	const int e = close(jio->file_id);
+	#else
 	const int e = io_close(jio->file_id);
+	#endif
 	int has_error = 0;
 	if (e < 0) {
 		fprintf(stderr, "WARNING: close-error: %s\n", io_error_to_string(e));
@@ -202,6 +288,8 @@ int jio_append(struct jio* jio, const void* ptr, int64_t size)
 	return 0;
 }
 
+// XXX memonly never set currently; change pread_ex() back into jio_pread() if
+// it sticks?
 int pread_ex(struct jio* jio, void* ptr, int64_t size, int64_t offset, int memonly)
 {
 	// ignore read if an error has been signalled
@@ -221,7 +309,7 @@ int pread_ex(struct jio* jio, void* ptr, int64_t size, int64_t offset, int memon
 	const int ringbuf_size_log2 = jio->ringbuf_size_log2;
 	const int64_t ringbuf_size = 1L << ringbuf_size_log2;
 	// ring buffer file position interval [rb0;rb1[
-	int64_t rb0 = jio->filesize0;
+	int64_t rb0 = 0;
 	const int64_t rb1 = jio->filesize;
 	{
 		const int64_t rbn = (rb1-rb0);
@@ -263,7 +351,6 @@ int pread_ex(struct jio* jio, void* ptr, int64_t size, int64_t offset, int memon
 	}
 
 	if (read_from_backend && memonly) {
-		assert(!"FWEFEWFA");
 		jio->error = IO_READ_ERROR;
 		return jio->error;
 	}
@@ -271,26 +358,31 @@ int pread_ex(struct jio* jio, void* ptr, int64_t size, int64_t offset, int memon
 	if (read_from_backend) {
 		assert(!memonly);
 		assert(rr1>rr0);
+		#ifdef BLOCKING
+		if (-1 == pread(jio->file_id, rrp, (rr1-rr0), rr0)) {
+			jio->error = IO_READ_ERROR;
+			return jio->error;
+		}
+		#else
 		if (0 > io_pread(jio->file_id, rrp, (rr1-rr0), rr0)) {
 			jio->error = IO_READ_ERROR;
 			return jio->error;
 		}
+		#endif
 	}
 	if (copy_from_ringbuf) {
 		assert(cc1>cc0);
-		const int64_t i0 = (cc0 - jio->filesize0);
-		const int64_t i0cycle = (i0     >> ringbuf_size_log2);
-		const int64_t i1 = (cc1 - jio->filesize0);
-		const int64_t i1cycle = ((i1-1) >> ringbuf_size_log2);
+		const int64_t cc0cycle = ( cc0    >> ringbuf_size_log2);
+		const int64_t cc1cycle = ((cc1-1) >> ringbuf_size_log2);
 		assert(ringbuf_size == (1<<ringbuf_size_log2));
 		const int64_t mask = (ringbuf_size-1);
-		assert((i1-i0)==size || read_from_backend);
-		const int64_t i0mask = i0&mask;
-		if (i0cycle == i1cycle) {
-			memcpy(ccp, &jio->ringbuf[i0mask], (i1-i0));
+		assert((cc1-cc0)==size || read_from_backend);
+		const int64_t cc0mask = cc0&mask;
+		if (cc0cycle == cc1cycle) {
+			memcpy(ccp, &jio->ringbuf[cc0mask], (cc1-cc0));
 		} else {
-			const int64_t n0 = (ringbuf_size - i0mask);
-			memcpy(ccp,   &jio->ringbuf[i0mask], n0);
+			const int64_t n0 = (ringbuf_size - cc0mask);
+			memcpy(ccp,   &jio->ringbuf[cc0mask], n0);
 			memcpy(ccp+n0, jio->ringbuf,    size-n0);
 		}
 	}
@@ -303,10 +395,12 @@ int jio_pread(struct jio* jio, void* ptr, int64_t size, int64_t offset)
 	return pread_ex(jio, ptr, size, offset, 0);
 }
 
+#if 0
 int jio_pread_memonly(struct jio* jio, void* ptr, int64_t size, int64_t offset)
 {
 	return pread_ex(jio, ptr, size, offset, 1);
 }
+#endif
 
 int jio_get_error(struct jio* jio)
 {

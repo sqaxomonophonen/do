@@ -47,7 +47,6 @@ EM_JS(char*, get_websocket_url, (void), {
 })
 
 EM_JS(char*, get_info_url, (void), {
-
 	let loc = window.location;
 	let url = loc.protocol + "//" + loc.hostname;
 	if (loc.port) url += (":"+loc.port);
@@ -250,7 +249,7 @@ static void request_journal(void)
 {
 	uint8_t** bb = &g.bb;
 	arrreset(*bb);
-	bb_append_u8(bb, WS0_SET_JOURNAL_CURSOR);
+	bb_append_u8(bb, WS0_HELLO);
 	bb_append_leb128(bb, g.journal_cursor);
 	emscripten_websocket_send_binary(g.socket, *bb, arrlen(*bb));
 }
@@ -275,31 +274,49 @@ bool ws_on_error(int type, const EmscriptenWebSocketErrorEvent* e, void *usr)
 	return 0;
 }
 
+enum {
+	CLOSE_NORMAL         = 1000,
+	CLOSE_PROTOCOL_ERROR = 1002,
+};
+
 bool ws_on_message(int type, const EmscriptenWebSocketMessageEvent* e, void *usr)
 {
 	printf("WS MESSAGE (n=%d)!\n", e->numBytes);
-	//e->data // TODO
 	struct bufstream bs;
 	bufstream_init_from_memory(&bs, e->data, e->numBytes);
 	while (bs.offset < e->numBytes) {
 		const uint8_t op = bs_read_u8(&bs);
 		switch (op) {
+
 		case WS1_JOURNAL_UPDATE: {
 			const int64_t count = bs_read_leb128(&bs);
-			spool_raw_journal(e->data + bs.offset, count);
-			bufstream_skip(&bs, count);
+			if (peer_spool_raw_journal_into_upstream_snapshot(e->data + bs.offset, count) < 0) {
+				printf("spool error: received bad message from host?\n");
+				emscripten_websocket_close(e->socket, CLOSE_PROTOCOL_ERROR, "bad journal");
+				return 0;
+			}
+			bs_skip(&bs, count);
 			g.journal_cursor += count;
 		}	break;
+
+		case WS1_HELLO: {
+			const int64_t my_artist_id = bs_read_leb128(&bs);
+			set_my_artist_id(my_artist_id);
+		}	break;
+
 		default: {
 			printf("bad opcode (%d) received\n", op);
-			emscripten_websocket_close(e->socket, 1, "bad opcode");
-		}	break;
+			emscripten_websocket_close(e->socket, CLOSE_PROTOCOL_ERROR, "bad opcode");
+			return 0;
+		}
+
 		}
 	}
 
 	if (bs.offset != e->numBytes) {
 		printf("bad alignment? offset=%lld numBytes=%d\n", bs.offset, e->numBytes);
-		emscripten_websocket_close(e->socket, 2, "bad alignment");
+		emscripten_websocket_close(e->socket, CLOSE_PROTOCOL_ERROR, "bad alignment");
+		return 0;
 	}
 
 	return 0;
@@ -307,7 +324,7 @@ bool ws_on_message(int type, const EmscriptenWebSocketMessageEvent* e, void *usr
 
 void info_on_load(void* usr, void* data, int size)
 {
-	g.journal_cursor = restore_snapshot_from_data(data, size);
+	g.journal_cursor = restore_upstream_snapshot_from_data(data, size);
 
 	EmscriptenWebSocketCreateAttributes attr = {0};
 	emscripten_websocket_init_create_attributes(&attr);
@@ -326,6 +343,17 @@ void info_on_error(void* usr)
 	assert(!"failed to load info");
 }
 
+void transmit_mim(int mim_session_id, int64_t tracer, uint8_t* data, int count)
+{
+	uint8_t** bb = &g.bb;
+	arrreset(*bb);
+	bb_append_u8(bb, WS0_MIM);
+	bb_append_leb128(bb, mim_session_id);
+	bb_append_leb128(bb, tracer);
+	bb_append(bb, data, count);
+	emscripten_websocket_send_binary(g.socket, *bb, arrlen(*bb));
+}
+
 int main(int argc, char** argv)
 {
 	WS_URL = get_websocket_url();
@@ -339,9 +367,7 @@ int main(int argc, char** argv)
 	run_selftest();
 	mie_thread_init();
 	gig_init();
-	//gig_host(arg_dir ? arg_dir : "."); // XXX?!
-	gig_host_no_jio();
-	gig_maybe_setup_stub();
+	gig_configure_as_peer_only("/data");
 	gui_init();
 
 	emscripten_async_wget_data(INFO_URL, NULL, info_on_load, info_on_error);
