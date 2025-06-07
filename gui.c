@@ -1447,10 +1447,15 @@ static void draw_code_pane(struct pane* pane)
 	}
 	pane->code.splash4_cache = ms->splash4;
 
-	const int num_carets = arrlen(ms->caret_arr);
 
 	static int* caret_coord_arr;
 	arrreset(caret_coord_arr);
+
+	struct caret other_carets[1<<6];
+	int num_other_carets = 0;
+	if ((ms->book_id>0) && (ms->doc_id>0)) {
+		num_other_carets = get_other_doc_carets(other_carets, ARRAY_LENGTH(other_carets), ms->book_id, ms->doc_id);
+	}
 
 	struct doc_iterator it = doc_iterator(doc);
 	while (doc_iterator_next(&it)) {
@@ -1459,8 +1464,10 @@ static void draw_code_pane(struct pane* pane)
 		float bg_color[3] = {0,0,0};
 
 		int min_y_dist = -1;
-		for (int i=0; i<num_carets; ++i) {
-			struct caret* c = arrchkptr(ms->caret_arr, i);
+		const int num_carets = arrlen(ms->caret_arr);
+		const int num_total = num_carets + num_other_carets;
+		for (int i=0; i<num_total; ++i) {
+			struct caret* c = i < num_carets ? arrchkptr(ms->caret_arr, i) : &other_carets[i-num_carets];
 			struct location* loc0 = &c->caret_loc;
 			struct location* loc1 = &c->anchor_loc;
 			location_sort2(&loc0, &loc1);
@@ -1591,6 +1598,7 @@ static void draw_code_pane(struct pane* pane)
 	g.state.is_dimming = 0;
 
 	if (pane->code.cpick_on) {
+		const int num_carets = arrlen(ms->caret_arr);
 		assert(arrlen(caret_coord_arr) == (2*num_carets));
 		for (int i=0; i<num_carets; ++i) {
 			const int cx = caret_coord_arr[i*2];

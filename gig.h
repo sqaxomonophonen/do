@@ -207,6 +207,8 @@ void mimi(int tag, const char*);
 
 int get_copy_of_state(int session_id, struct mim_state* out_mim_state);
 int get_copy_of_state_and_doc(int session_id, struct mim_state* out_mim_state, struct document* out_doc);
+int get_other_doc_carets(struct caret* out_carets, int cap, int book_id, int doc_id);
+
 
 int get_my_artist_id(void);
 void set_my_artist_id(int);

@@ -503,6 +503,25 @@ int get_copy_of_state_and_doc(int session_id, struct mim_state* out_mim_state, s
 	return 0;
 }
 
+int get_other_doc_carets(struct caret* out_carets, int cap, int book_id, int doc_id)
+{
+	struct snapshot* snap = &pg.fiddle_snapshot;
+	const int artist_id = get_my_artist_id();
+	const int num_states = arrlen(snap->mim_state_arr);
+	int nc = 0;
+	for (int i=0; nc<cap && i<num_states; ++i) {
+		struct mim_state* ms = arrchkptr(snap->mim_state_arr, i);
+		if (ms->artist_id == artist_id) continue;
+		if ((ms->book_id != book_id) || (ms->doc_id != doc_id)) continue;
+		const int num_carets = arrlen(ms->caret_arr);
+		for (int ii=0; nc<cap && ii<num_carets; ++i) {
+			out_carets[nc++] = ms->caret_arr[ii];
+		}
+	}
+	assert(nc<=cap);
+	return nc;
+}
+
 FORMATPRINTF1
 static int mimerr(const char* fmt, ...)
 {
