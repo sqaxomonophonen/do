@@ -1,4 +1,4 @@
-// cc -O0 -g -Wall stb_divide.c stb_ds.c stb_sprintf.c utf8.c path.c mie.c jio.c arg.c allocator.c gig.c test_gig.c -o _test_gig -lm
+// run with test_gig.sh
 #include <stdlib.h>
 #include <assert.h>
 #include <time.h>
@@ -37,28 +37,44 @@ void sleep_nanoseconds(int64_t ns)
 	nanosleep(&ts, NULL);
 }
 
-static int io_thread(void* usr)
-{
-	for (;;) {
-		jio_tick();
-		io_tick();
-		sleep_nanoseconds(500000L); // 500µs
-	}
-	return 0;
-}
-
 const static int VERBOSE = 0;
 static int growth_threshold;
 
-const char* base_dir;
-char* test_dir;
-int test_sequence;
+static const char* base_dir;
+static char* test_dir;
+static int test_sequence;
 
 static struct {
 	struct mim_state* ms;
 	struct document* doc;
 	struct caret* cr;
+	int is_up;
+	mtx_t mutex;
 } g;
+
+static void LOCK(void)
+{
+	assert(thrd_success == mtx_lock(&g.mutex));
+}
+
+static void UNLOCK(void)
+{
+	assert(thrd_success == mtx_unlock(&g.mutex));
+}
+
+static int io_thread_run(void* usr)
+{
+	for (;;) {
+		LOCK();
+		if (g.is_up) {
+			host_tick();
+		}
+		UNLOCK();
+		io_tick();
+		sleep_nanoseconds(500000L); // 500µs
+	}
+	return 0;
+}
 
 static void new_test(const char* name)
 {
@@ -74,6 +90,51 @@ static void new_test(const char* name)
 	assert(0 == mkdir(test_dir, 0777));
 }
 
+static void setup(const char* path)
+{
+	LOCK();
+	assert(gig_configure_as_host_and_peer(path) >= 0);
+	g.is_up = 1;
+	UNLOCK();
+}
+
+static void teardown(void)
+{
+	LOCK();
+	g.is_up = 0;
+	gig_unconfigure();
+	UNLOCK();
+}
+
+static void get_state_and_doc(int session_id, struct mim_state** out_ms, struct document** out_doc)
+{
+	struct snapshot* snap = get_snapshot();
+	struct mim_state* ms = NULL;
+	const int num_ms = arrlen(snap->mim_state_arr);
+	for (int i=0; i<num_ms; ++i) {
+		struct mim_state* m = &snap->mim_state_arr[i];
+		if (m->artist_id==get_my_artist_id() && m->session_id==session_id) {
+			ms = m;
+			break;
+		}
+	}
+	assert(ms != NULL);
+
+	const int num_doc = arrlen(snap->document_arr);
+	struct document* doc = NULL;
+	for (int i=0; i<num_doc; ++i) {
+		struct document* d = &snap->document_arr[i];
+		if ((d->book_id==ms->book_id) && (d->doc_id==ms->doc_id)) {
+			doc = d;
+			break;
+		}
+	}
+	assert(doc != NULL);
+
+	if (out_ms)  *out_ms  = ms;
+	if (out_doc) *out_doc = doc;
+}
+
 static void test_readwrite(int N)
 {
 	new_test("readwrite");
@@ -82,7 +143,7 @@ static void test_readwrite(int N)
 
 	for (int pass=0; pass<3; ++pass) {
 		if (VERBOSE) printf("  pass %d\n", pass);
-		gig_host(test_dir);
+		setup(test_dir);
 
 		if (pass == 0) {
 			peer_begin_mim(1);
@@ -106,7 +167,7 @@ static void test_readwrite(int N)
 			assert(g.doc->docchar_arr[i].colorchar.codepoint == ("hello"[i%5]));
 		}
 
-		gig_unhost();
+		teardown();
 	}
 }
 
@@ -146,7 +207,7 @@ static void expect_col_and_doc(int expected_col, const char* expected_doc)
 static void test_regress_0a(void)
 {
 	new_test("regress0");
-	gig_host(test_dir);
+	setup(test_dir);
 
 	peer_begin_mim(1);
 	mimex("newbook 1 mie-urlyd -");
@@ -171,17 +232,17 @@ static void test_regress_0a(void)
 	peer_end_mim();
 	expect_col_and_doc(4,"a12bc");
 
-	gig_unhost();
+	teardown();
 
-	gig_host(test_dir);
+	setup(test_dir);
 	expect_col_and_doc(4,"a12bc");
-	gig_unhost();
+	teardown();
 }
 
 static void test_regress_0b(void)
 {
 	new_test("regress0");
-	gig_host(test_dir);
+	setup(test_dir);
 
 	peer_begin_mim(1);
 	mimex("newbook 1 mie-urlyd -");
@@ -211,17 +272,17 @@ static void test_regress_0b(void)
 	peer_end_mim();
 	expect_col_and_doc(3,"12abc");
 
-	gig_unhost();
+	teardown();
 
-	gig_host(test_dir);
+	setup(test_dir);
 	expect_col_and_doc(3,"12abc");
-	gig_unhost();
+	teardown();
 }
 
 static void test_regress_0c(void)
 {
 	new_test("regress1");
-	gig_host(test_dir);
+	setup(test_dir);
 
 	peer_begin_mim(1);
 	mimex("newbook 1 mie-urlyd -");
@@ -238,17 +299,17 @@ static void test_regress_0c(void)
 	peer_end_mim();
 	expect_col_and_doc(4,"123abc");
 
-	gig_unhost();
+	teardown();
 
-	gig_host(test_dir);
+	setup(test_dir);
 	expect_col_and_doc(4,"123abc");
-	gig_unhost();
+	teardown();
 }
 
 static void test_regress_0d(void)
 {
 	new_test("regress1");
-	gig_host(test_dir);
+	setup(test_dir);
 
 	peer_begin_mim(1);
 	mimex("newbook 1 mie-urlyd -");
@@ -303,9 +364,9 @@ static void test_regress_0d(void)
 	peer_end_mim();
 	expect_col_and_doc(8,"123xxxyabc");
 
-	gig_unhost();
+	teardown();
 
-	gig_host(test_dir);
+	setup(test_dir);
 	expect_col_and_doc(8,"123xxxyabc");
 
 	peer_begin_mim(1);
@@ -318,11 +379,20 @@ static void test_regress_0d(void)
 	peer_end_mim();
 	expect_col_and_doc(6,"123--xxxyabc");
 
-	gig_unhost();
+	teardown();
 
-	gig_host(test_dir);
+	setup(test_dir);
 	expect_col_and_doc(6,"123--xxxyabc");
-	gig_unhost();
+	teardown();
+}
+
+int webserv_broadcast_journal(int64_t until_journal_cursor)
+{
+	return 0;
+}
+
+void transmit_mim(int mim_session_id, int64_t tracer, uint8_t* data, int count)
+{
 }
 
 int main(int argc, char** argv)
@@ -334,9 +404,10 @@ int main(int argc, char** argv)
 	}
 	base_dir = argv[1];
 
-	jio_init();
+	assert(thrd_success == mtx_init(&g.mutex, mtx_plain));
+
 	thrd_t t = {0};
-	assert(0 == thrd_create(&t, io_thread, NULL));
+	assert(0 == thrd_create(&t, io_thread_run, NULL));
 
 	mie_thread_init();
 	gig_init();

@@ -1,4 +1,4 @@
-// cc -O0 -g -Wall allocator.c stb_ds.c io.c jio.c test_jio.c -o _test_jio
+// run with test_jio.sh
 
 #include <stdlib.h>
 #include <stdio.h>

@@ -552,8 +552,9 @@ static int mimexscanner_init(struct mimexscanner* s, const char* c0, const char*
 {
 	memset(s, 0, sizeof *s);
 	const size_t num_bytes = (c1-c0);
-	arrsetlen(tlg.mimex_buffer_arr, num_bytes);
+	arrsetlen(tlg.mimex_buffer_arr, num_bytes+1);
 	memcpy(tlg.mimex_buffer_arr, c0, num_bytes);
+	tlg.mimex_buffer_arr[num_bytes] = 0;
 	s->all0=tlg.mimex_buffer_arr;
 	s->all1=s->all0 + num_bytes;
 	// search for space in command if it exists, so whether
