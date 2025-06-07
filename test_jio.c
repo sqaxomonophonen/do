@@ -52,7 +52,7 @@ static void simple_test(int i)
 
 	for (int i=0; i<3; ++i) {
 		char x[6];
-		assert(0 == jio_pread(jio, x, 6, i*6));
+		assert(jio_pread(jio, x, 6, i*6) == 6);
 		assert(0 == memcmp(x,"hello",5));
 		assert(x[5] == ('0'+i));
 	}
@@ -98,7 +98,7 @@ static void blocking_append_and_read_back(int i, int N)
 	for (int i=0; i<N; ++i) {
 		char x[15];
 		memset(x,0,sizeof x);
-		assert(0 == jio_pread(jio, x, 15, i*15));
+		assert(jio_pread(jio, x, 15, i*15) == 15);
 		if (0 != memcmp(x,seq,15)) {
 			fprintf(stderr,"at iteration %d, expected [", i);
 			for (int ii=0;ii<15;++ii) fprintf(stderr,"%c",seq[ii]);

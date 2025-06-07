@@ -5,6 +5,7 @@
 #include "utf8.h"
 int main(int argc, char** argv)
 {
-    utf8_unit_test();
-    return 0;
+	utf8_unit_test();
+	printf("OK\n");
+	return 0;
 }

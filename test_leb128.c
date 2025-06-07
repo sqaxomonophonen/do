@@ -6,5 +6,6 @@
 int main(int argc, char** argv)
 {
 	leb128_unit_test();
+	printf("OK\n");
 	return 0;
 }
