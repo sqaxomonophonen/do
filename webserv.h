@@ -7,7 +7,7 @@ int webserv_tick(void);
 
 void webserv_selftest(void);
 
-void webserv_broadcast_journal(int64_t until_journal_cursor);
+int webserv_broadcast_journal(int64_t until_journal_cursor);
 
 #define WEBSERV_H
 #endif

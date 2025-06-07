@@ -281,7 +281,6 @@ enum {
 
 bool ws_on_message(int type, const EmscriptenWebSocketMessageEvent* e, void *usr)
 {
-	printf("WS MESSAGE (n=%d)!\n", e->numBytes);
 	struct bufstream bs;
 	bufstream_init_from_memory(&bs, e->data, e->numBytes);
 	while (bs.offset < e->numBytes) {

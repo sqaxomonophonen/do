@@ -1264,8 +1264,8 @@ static void websocket_serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 
 			websocket_handle_data(conn, ws->fin, p, r);
 
-			for (int i=0; i<r; ++i) printf("%c", p[i]);
-			printf("]\n");
+			//for (int i=0; i<r; ++i) printf("%c", p[i]);
+			//printf("]\n");
 			ws->remaining -= r;
 			p += r;
 			if (ws->remaining == 0) {
@@ -1381,8 +1381,9 @@ int webserv_tick(void)
 	return did_work;
 }
 
-void webserv_broadcast_journal(int64_t until_journal_cursor)
+int webserv_broadcast_journal(int64_t until_journal_cursor)
 {
+	int did_work = 0;
 	for (int i=0; i<g.next; ++i) {
 		struct conn* conn = &g.conns[i];
 		if (conn->cstate != WEBSOCKET) continue;
@@ -1395,13 +1396,14 @@ void webserv_broadcast_journal(int64_t until_journal_cursor)
 		uint8_t** bb = &tlg.bb;
 		arrreset(*bb);
 		bb_append_u8(bb, WS1_JOURNAL_UPDATE);
-		// XXX I think we have to also "privately" send to each peer
 		bb_append_leb128(bb, count);
 		uint8_t* p = arraddnptr(*bb, count);
 		copy_journal(p, count, cdo->journal_cursor);
 		cdo->journal_cursor = until_journal_cursor;
 		websocket_send0(conn, *bb, arrlen(*bb));
+		did_work = 1;
 	}
+	return did_work;
 }
 
 void webserv_selftest(void)

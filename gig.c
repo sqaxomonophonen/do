@@ -285,7 +285,6 @@ static struct {
 struct peer_state {
 	int artist_id;
 	uint8_t* cmdbuf_arr;
-	//int64_t cmd_ack_cursor;
 };
 
 static struct {
@@ -326,7 +325,6 @@ static struct {
 	int64_t journal_cursor;
 	double artificial_mim_latency_mean;
 	double artificial_mim_latency_variance;
-	//_Atomic(int64_t) ackd_cmd_cursor;
 	int64_t tracer_sequence;
 	uint8_t* unackd_mimbuf_arr;
 } pg; // peer globals
@@ -2106,7 +2104,10 @@ void commit_mim_to_host(int artist_id, int session_id, int64_t tracer, uint8_t* 
 {
 	struct snapshot* snap = &hg.present_snapshot;
 	const int e = snapshot_spool(snap, data, count, artist_id, session_id);
-	if (e<0) fprintf(stderr, "SPOOL ERR/2 %d!\n", e);
+	if (e<0) {
+		fprintf(stderr, "SPOOL ERR/2 %d!\n", e);
+		return;
+	}
 	struct jio* jj = igo.jio_journal;
 	assert(jj != NULL);
 	uint8_t** bb = &pg.bb_arr;
@@ -2120,13 +2121,10 @@ void commit_mim_to_host(int artist_id, int session_id, int64_t tracer, uint8_t* 
 	bb_append_leb128(bb, count);
 	bb_append(bb, data, count);
 	jio_flush_bb(jj, bb);
-	const int64_t s = jio_get_size(jj);
-	if (it_is_time_for_a_snapshotcache_push(s)) {
-		snapshotcache_push(snap, s);
+	const int64_t jsz = jio_get_size(jj);
+	if (it_is_time_for_a_snapshotcache_push(jsz)) {
+		snapshotcache_push(snap, jsz);
 	}
-	#ifndef __EMSCRIPTEN__ // XXX not totally right?
-	webserv_broadcast_journal(jio_get_size(jj));
-	#endif
 }
 
 int host_tick(void)
@@ -2190,14 +2188,6 @@ int host_tick(void)
 			assert(cursor <= n);
 		}
 
-		#if 0
-		ps->cmd_ack_cursor += cursor;
-		if (g.is_peer && (ps->artist_id == get_my_artist_id())) {
-			// immediately report back acknowledged position to local peer
-			atomic_store(&pg.ackd_cmd_cursor, ps->cmd_ack_cursor);
-		}
-		#endif
-
 		assert(cursor <= n);
 		if (cursor == n) {
 			arrreset(ps->cmdbuf_arr);
@@ -2208,6 +2198,10 @@ int host_tick(void)
 			arrsetlen(ps->cmdbuf_arr, nn);
 		}
 	}
+
+	#ifndef __EMSCRIPTEN__ // XXX not totally right?
+	did_work |= webserv_broadcast_journal(jio_get_size(igo.jio_journal));
+	#endif
 
 	return did_work;
 }
