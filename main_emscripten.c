@@ -350,6 +350,7 @@ void transmit_mim(int mim_session_id, int64_t tracer, uint8_t* data, int count)
 	bb_append_u8(bb, WS0_MIM);
 	bb_append_leb128(bb, mim_session_id);
 	bb_append_leb128(bb, tracer);
+	bb_append_leb128(bb, count);
 	bb_append(bb, data, count);
 	emscripten_websocket_send_binary(g.socket, *bb, arrlen(*bb));
 }

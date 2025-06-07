@@ -324,7 +324,6 @@ static struct {
 	// also (optionally?) to see edits before receiving confirmation from the
 	// host (waiting for roundtrip latency and all)
 	int64_t journal_cursor;
-	unsigned  fiddle_ahead  :1;
 	double artificial_mim_latency_mean;
 	double artificial_mim_latency_variance;
 	//_Atomic(int64_t) ackd_cmd_cursor;
@@ -380,7 +379,6 @@ void peer_tick(void)
 			}
 
 			peer_spool_raw_journal_into_upstream_snapshot(*bb, size);
-			pg.fiddle_ahead = 0;
 			pg.journal_cursor = jc1;
 		}
 	} else if (g.is_peer && !g.is_host) {
@@ -388,12 +386,6 @@ void peer_tick(void)
 		// or XXX should we read from savedir journal here?
 	} else {
 		assert(!"unreachable");
-	}
-
-	struct snapshot* snap = &pg.fiddle_snapshot;
-	if (!pg.fiddle_ahead) {
-		snapshot_copy(snap, &pg.upstream_snapshot);
-		pg.fiddle_ahead = 1;
 	}
 }
 
@@ -1372,21 +1364,6 @@ void peer_set_artificial_mim_latency(double mean, double variance)
 	pg.artificial_mim_latency_variance = variance;
 }
 
-#if 0
-static void u8pp_write(uint8_t v, void* userdata)
-{
-	uint8_t** p = (uint8_t**)userdata;
-	**p = v;
-	++(*p);
-}
-
-static void write_varint64(uint8_t** pp, uint8_t* end, int64_t value)
-{
-	assert(((end - *pp) >= LEB128_MAX_LENGTH) && "not enough space for largest-case leb128 encoding");
-	leb128_encode_int64(u8pp_write, pp, value);
-}
-#endif
-
 static void document_to_colorchar_da(struct colorchar** arr, struct document* doc)
 {
 	const int num_src = arrlen(doc->docchar_arr);
@@ -1601,7 +1578,8 @@ void peer_end_mim(void)
 
 	struct snapshot* snap = &pg.fiddle_snapshot;
 	(void)snapshot_get_or_create_mim_state_by_ids(snap, artist_id, session_id);
-	snapshot_spool(snap, data, num_bytes, artist_id, session_id);
+	const int e = snapshot_spool(snap, data, num_bytes, artist_id, session_id);
+	if (e<0) fprintf(stderr, "SPOOL ERR/0 %d!\n", e);
 
 	if (arrlen(snap->document_arr)>0) {
 		//TODO(proper mie/vmie document stuff)
@@ -1620,7 +1598,7 @@ void peer_end_mim(void)
 				vmie_run();
 				#if 1
 				const char* err = mie_error();
-				if (err != NULL) printf("ERR: %s\n", err);
+				if ((err!=NULL) && (strlen(err)>0)) fprintf(stderr, "ERR: %s\n", err);
 				vmie_dump_stack();
 				#endif
 				mie_program_free(prg);
@@ -1658,7 +1636,8 @@ void peer_end_mim(void)
 	uint8_t** bb = &pg.bb_arr;
 	arrreset(*bb);
 	bb_append_leb128(bb, session_id);
-	bb_append_leb128(bb, ++pg.tracer_sequence);
+	const int tracer = ++pg.tracer_sequence;
+	bb_append_leb128(bb, tracer);
 	bb_append_leb128(bb, not_before_ts);
 	bb_append_leb128(bb, num_bytes);
 	bb_append(bb, data, num_bytes);
@@ -1672,7 +1651,7 @@ void peer_end_mim(void)
 	memcpy(p, *bb, arrlen(*bb));
 
 	if (!g.is_host) {
-		transmit_mim(session_id, ++pg.tracer_sequence, data, num_bytes);
+		transmit_mim(session_id, tracer, data, num_bytes);
 	}
 }
 
@@ -2056,8 +2035,6 @@ static int spool_raw_journal_bs(struct snapshot* snap, struct bufstream* bs, int
 		const int64_t num_bytes = bs_read_leb128(bs);
 		arrsetlen(mimbuf_arr, num_bytes);
 		bs_read(bs, mimbuf_arr, num_bytes);
-		//printf("going to spool [");for(int i=0;i<num_bytes;++i)printf("%c",mimbuf_arr[i]);printf("]\n");
-		fprintf(stderr,"SPOOL_RAW_JOURNAL_BS a=%ld s=%ld t=%ld nb=%ld at offff %ld\n", (long)artist_id, (long)session_id, (long)tracer, (long)num_bytes, (long)bs->offset);
 		int e = snapshot_spool(snap, mimbuf_arr, num_bytes, artist_id, session_id);
 		if (e<0) return e;
 	}
@@ -2071,21 +2048,24 @@ static int spool_raw_journal_bs(struct snapshot* snap, struct bufstream* bs, int
 int peer_spool_raw_journal_into_upstream_snapshot(void* data, int64_t count)
 {
 	assert(g.is_peer);
+
 	struct bufstream bs;
 	bufstream_init_from_memory(&bs, data, count);
-	hexdump(data,count);
 	int64_t max_tracer = -1;
-	struct snapshot* snap = &pg.upstream_snapshot;
-	const int e = spool_raw_journal_bs(snap, &bs, count, &max_tracer);
+	struct snapshot* upsnap = &pg.upstream_snapshot;
+	const int e = spool_raw_journal_bs(upsnap, &bs, count, &max_tracer);
 	if (e<0) {
 		dumperr();
 		fprintf(stderr, "spool_raw_journal_bs() of %d bytes => %d:\n", (int)count, e);
 		hexdump(data, count);
 		return -1;
 	}
-	if (max_tracer < 0) return 0;
+	assert((max_tracer != -1) && "expected tracer to be set");
 
 	// re-spool inflight mim that has not yet been ack'd
+	struct snapshot* fidsnap = &pg.fiddle_snapshot;
+	snapshot_copy(fidsnap, upsnap);
+
 	const int64_t num_total = arrlen(pg.unackd_mimbuf_arr);
 	bufstream_init_from_memory(&bs, pg.unackd_mimbuf_arr, num_total);
 	int64_t trunc_to = 0;
@@ -2108,7 +2088,8 @@ int peer_spool_raw_journal_into_upstream_snapshot(void* data, int64_t count)
 			assert(bs.offset > trunc_to);
 			trunc_to = bs.offset;
 		} else {
-			snapshot_spool(snap, &pg.unackd_mimbuf_arr[bs.offset], num_bytes, get_my_artist_id(), session_id);
+			const int e = snapshot_spool(fidsnap, &pg.unackd_mimbuf_arr[bs.offset], num_bytes, get_my_artist_id(), session_id);
+			if (e<0) fprintf(stderr, "SPOOL ERR/1 %d!\n", e);
 			bs_skip(&bs, num_bytes);
 		}
 	}
@@ -2124,7 +2105,8 @@ int peer_spool_raw_journal_into_upstream_snapshot(void* data, int64_t count)
 void commit_mim_to_host(int artist_id, int session_id, int64_t tracer, uint8_t* data, int count)
 {
 	struct snapshot* snap = &hg.present_snapshot;
-	snapshot_spool(snap, data, count, artist_id, session_id);
+	const int e = snapshot_spool(snap, data, count, artist_id, session_id);
+	if (e<0) fprintf(stderr, "SPOOL ERR/2 %d!\n", e);
 	struct jio* jj = igo.jio_journal;
 	assert(jj != NULL);
 	uint8_t** bb = &pg.bb_arr;
