@@ -31,6 +31,8 @@ utility code
   allocator.c  - allocator interface and allocators
   leb128.h     - LEB128 variable-length integer codec
   binary.h     - binary data codecs
+  bb.h         - binary builder
+  bufstream.h  - "buffer centric I/O"
   utf8.c       - UTF-8 code
   io.c         - I/O for files and tcp/ip (TODO: udp/ip)
   jio.c        - journaled I/O (append-only files, roughly)

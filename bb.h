@@ -1,4 +1,4 @@
-#ifndef BB_H // binary buffer
+#ifndef BB_H // binary builder
 
 // NOTE: depends on stb_ds.h, but it can be included+configured as either
 // stb_ds.h or stb_ds_sysalloc.h making it problematic to include it here.
