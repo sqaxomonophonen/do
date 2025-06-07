@@ -116,6 +116,12 @@ struct document {
 	// (update document_copy() and snapshot_copy() when adding arr-fields here)
 };
 
+struct snapshot {
+	struct book*      book_arr;
+	struct document*  document_arr;
+	struct mim_state* mim_state_arr;
+};
+
 struct doc_iterator {
 	struct document* doc;
 	int offset;
@@ -205,10 +211,7 @@ void mim8(uint8_t v);
 void mimex(const char*);
 void mimi(int tag, const char*);
 
-int get_copy_of_state(int session_id, struct mim_state* out_mim_state);
-int get_copy_of_state_and_doc(int session_id, struct mim_state* out_mim_state, struct document* out_doc);
-int get_other_doc_carets(struct caret* out_carets, int cap, int book_id, int doc_id);
-
+struct snapshot* get_snapshot(void);
 
 int get_my_artist_id(void);
 void set_my_artist_id(int);

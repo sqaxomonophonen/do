@@ -192,9 +192,6 @@ static struct {
 	char* text_buffer_arr;
 	int is_dragging;
 	struct draw_state state, save_state;
-
-	struct document  doc_copy;
-	struct mim_state ms_copy;
 } g;
 
 static inline int make_focus_id(void)
@@ -1179,6 +1176,16 @@ static inline int splash4_comp_set(int splash4, int comp, int value)
 	return splash4_implode(red, green, blue, shake);
 }
 
+#if 0
+static inline int splash4_add(int x, int y)
+{
+	int x0,x1,x2,x3,y0,y1,y2,y3;
+	splash4_explode(x,&x0,&x1,&x2,&x3);
+	splash4_explode(y,&y0,&y1,&y2,&y3);
+	return splash4_implode(x0+y0,x1+y1,x2+y2,x3+y3);
+}
+#endif
+
 static float splashc2f(int c)
 {
 	const float f0 = 0.25f;
@@ -1394,16 +1401,43 @@ static float randf(float v0, float v1)
 	return v0 + f*(v1-v0);
 }
 
+static struct mim_state* get_session_mim_state(int session_id)
+{
+	const int my_artist_id = get_my_artist_id();
+	struct snapshot* snap = get_snapshot();
+	const int num_states = arrlen(snap->mim_state_arr);
+	for (int i=0; i<num_states; ++i) {
+		struct mim_state* ms = &snap->mim_state_arr[i];
+		if ((ms->artist_id==my_artist_id) && (ms->session_id==session_id)) {
+			return ms;
+		}
+	}
+	return NULL;
+}
+
+static struct document* get_doc(int book_id, int doc_id)
+{
+	struct snapshot* snap = get_snapshot();
+	const int num_docs = arrlen(snap->document_arr);
+	for (int i=0; i<num_docs; ++i) {
+		struct document* doc = &snap->document_arr[i];
+		if ((doc->book_id==book_id) && (doc->doc_id==doc_id)) {
+			return doc;
+		}
+	}
+	return NULL;
+}
+
 static void draw_code_pane(struct pane* pane)
 {
 	assert(pane->type == CODE);
 
-	struct mim_state* ms  = &g.ms_copy;
 	if (pane->code.session_id == 0) {
 		pane->code.session_id = 1; // XXX no allocate?
 		int do_setdoc=0;
 		int do_addcar=0;
-		if (get_copy_of_state(pane->code.session_id, ms)) {
+		struct mim_state* ms = get_session_mim_state(pane->code.session_id);
+		if (ms != NULL) {
 			if ((ms->book_id == 0) || (ms->doc_id == 0)) do_setdoc=1;
 			if (arrlen(ms->caret_arr) == 0)              do_addcar=1;
 		} else {
@@ -1441,33 +1475,47 @@ static void draw_code_pane(struct pane* pane)
 	//set_color3f(.7, 2.7, .7);
 	set_color3f(.9,2.6,.9);
 
-	struct document*  doc = &g.doc_copy;
-	if (!get_copy_of_state_and_doc(pane->code.session_id, ms, doc)) {
-		return;
-	}
-	pane->code.splash4_cache = ms->splash4;
+	struct mim_state* ms = get_session_mim_state(pane->code.session_id);
+	if (ms == NULL) return;
 
+	struct document* doc = get_doc(ms->book_id, ms->doc_id);
+	if (doc==NULL) return;
+
+	pane->code.splash4_cache = ms->splash4;
 
 	static int* caret_coord_arr;
 	arrreset(caret_coord_arr);
 
-	struct caret other_carets[1<<6];
-	int num_other_carets = 0;
-	if ((ms->book_id>0) && (ms->doc_id>0)) {
-		num_other_carets = get_other_doc_carets(other_carets, ARRAY_LENGTH(other_carets), ms->book_id, ms->doc_id);
+	struct snapshot* snap = get_snapshot();
+	const int num_ms = arrlen(snap->mim_state_arr);
+	const int my_artist_id = get_my_artist_id();
+	static struct caret* other_caret_arr;
+	static int16_t* other_splash4_arr;
+	arrreset(other_caret_arr);
+	arrreset(other_splash4_arr);
+	for (int i=0; i<num_ms; ++i) {
+		struct mim_state* ms = &snap->mim_state_arr[i];
+		if (ms->artist_id == my_artist_id) continue;
+		if ((ms->book_id!=doc->book_id) || (ms->doc_id!=doc->doc_id)) continue;
+		const int num_carets = arrlen(ms->caret_arr);
+		for (int ii=0; ii<num_carets; ++ii) {
+			arrput(other_caret_arr, ms->caret_arr[ii]);
+			arrput(other_splash4_arr, ms->splash4);
+		}
 	}
+	assert(arrlen(other_caret_arr) == arrlen(other_splash4_arr));
 
 	struct doc_iterator it = doc_iterator(doc);
 	while (doc_iterator_next(&it)) {
-		int draw_caret = 0;
-
-		float bg_color[3] = {0,0,0};
+		int draw_caret=0, locate_caret=0;
+		float caret_color[3] = {0,0,0};
+		float bg_color[3]    = {0,0,0};
 
 		int min_y_dist = -1;
 		const int num_carets = arrlen(ms->caret_arr);
-		const int num_total = num_carets + num_other_carets;
+		const int num_total = num_carets + arrlen(other_caret_arr);
 		for (int i=0; i<num_total; ++i) {
-			struct caret* c = i < num_carets ? arrchkptr(ms->caret_arr, i) : &other_carets[i-num_carets];
+			struct caret* c = (i<num_carets) ? arrchkptr(ms->caret_arr, i) : arrchkptr(other_caret_arr, (i-num_carets));
 			struct location* loc0 = &c->caret_loc;
 			struct location* loc1 = &c->anchor_loc;
 			location_sort2(&loc0, &loc1);
@@ -1480,7 +1528,21 @@ static void draw_code_pane(struct pane* pane)
 			const int cmp1  = location_compare(&it.location, loc1);
 			const int cmp1r = location_compare(&it.location, crloc);
 			const int same  = (0 == location_compare(loc0, loc1));
-			if (cmp1r==0) draw_caret = 1;
+			if (cmp1r==0) {
+				draw_caret = 1;
+				int s4;
+				if (i < num_carets) {
+					locate_caret = 1;
+					s4 = pane->code.splash4_cache;
+				} else {
+					s4 = arrchkget(other_splash4_arr, (i-num_carets));
+				}
+				int red,green,blue;
+				splash4_explode(s4,&red,&green,&blue,NULL);
+				caret_color[0] += splashc2f(red);
+				caret_color[1] += splashc2f(green);
+				caret_color[2] += splashc2f(blue);
+			}
 			if (!same && cmp0>=0 && cmp1<0) {
 				bg_color[1] += 0.1f;
 				bg_color[2] += 0.3f;
@@ -1502,10 +1564,13 @@ static void draw_code_pane(struct pane* pane)
 
 		if (draw_caret) {
 			save();
-			set_color_splash4_mul(ms->splash4, 1.5f);
+			const float mul = 1.5f;
+			set_color3f(mul*caret_color[0],mul*caret_color[1],mul*caret_color[2]);
 			g.state.cursor_y += (int)y_height;
-			arrput(caret_coord_arr, g.state.cursor_x);
-			arrput(caret_coord_arr, g.state.cursor_y);
+			if (locate_caret) {
+				arrput(caret_coord_arr, g.state.cursor_x);
+				arrput(caret_coord_arr, g.state.cursor_y);
+			}
 			put_char(SPECIAL_CODEPOINT_CARET);
 			g.state.cursor_y -= (int)y_height;
 			restore();

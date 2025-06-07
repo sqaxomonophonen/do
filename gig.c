@@ -40,30 +40,6 @@ static int match_fundament(const char* s)
 	return _NO_FUNDAMENT_;
 }
 
-static void document_copy(struct document* dst, struct document* src)
-{
-	struct document tmp = *dst;
-	*dst = *src;
-	dst->docchar_arr = tmp.docchar_arr;
-	arrcpy(dst->docchar_arr, src->docchar_arr);
-	dst->name_arr = tmp.name_arr;
-	arrcpy(dst->name_arr, src->name_arr);
-}
-
-static void mim_state_copy(struct mim_state* dst, struct mim_state* src)
-{
-	struct mim_state tmp = *dst;
-	*dst = *src;
-	dst->caret_arr = tmp.caret_arr;
-	arrcpy(dst->caret_arr, src->caret_arr);
-}
-
-struct snapshot {
-	struct book*      book_arr;
-	struct document*  document_arr;
-	struct mim_state* mim_state_arr;
-};
-
 static void snapshot_copy(struct snapshot* dst, struct snapshot* src)
 {
 	// books
@@ -454,72 +430,9 @@ void free_artist_id(int artist_id)
 	TODO(free artist id)
 }
 
-int get_copy_of_state(int session_id, struct mim_state* out_mim_state)
+struct snapshot* get_snapshot(void)
 {
-	struct snapshot* snap = &pg.fiddle_snapshot;
-	const int artist_id = get_my_artist_id();
-	const int num_states = arrlen(snap->mim_state_arr);
-	for (int i=0; i<num_states; ++i) {
-		struct mim_state* ms = arrchkptr(snap->mim_state_arr, i);
-		if ((ms->artist_id!=artist_id) || (ms->session_id!=session_id)) {
-			continue;
-		}
-		if (out_mim_state) mim_state_copy(out_mim_state, ms);
-		return 1;
-	}
-	return 0;
-}
-
-int get_copy_of_state_and_doc(int session_id, struct mim_state* out_mim_state, struct document* out_doc)
-{
-	struct snapshot* snap = &pg.fiddle_snapshot;
-	const int artist_id = get_my_artist_id();
-	const int num_states = arrlen(snap->mim_state_arr);
-	for (int i=0; i<num_states; ++i) {
-		struct mim_state* ms = arrchkptr(snap->mim_state_arr, i);
-		if ((ms->artist_id!=artist_id) || (ms->session_id!=session_id)) {
-			continue;
-		}
-		const int book_id = ms->book_id;
-		if (book_id == 0) return 0;
-		//assert((book_id > 0) && "invalid book id in mim state");
-		const int doc_id = ms->doc_id;
-		if (doc_id == 0) return 0;
-		//assert((doc_id > 0) && "invalid document id in mim state");
-		struct document* doc = NULL;
-		const int num_documents = arrlen(snap->document_arr);
-		for (int i=0; i<num_documents; ++i) {
-			struct document* d = arrchkptr(snap->document_arr, i);
-			if ((d->book_id == book_id) && (d->doc_id == doc_id)) {
-				doc = d;
-				break;
-			}
-		}
-		assert((doc != NULL) && "invalid document id (not found) in mim state");
-		if (out_mim_state) mim_state_copy(out_mim_state, ms);
-		if (out_doc)        document_copy(out_doc, doc);
-		return 1;
-	}
-	return 0;
-}
-
-int get_other_doc_carets(struct caret* out_carets, int cap, int book_id, int doc_id)
-{
-	struct snapshot* snap = &pg.fiddle_snapshot;
-	const int artist_id = get_my_artist_id();
-	const int num_states = arrlen(snap->mim_state_arr);
-	int nc = 0;
-	for (int i=0; nc<cap && i<num_states; ++i) {
-		struct mim_state* ms = arrchkptr(snap->mim_state_arr, i);
-		if (ms->artist_id == artist_id) continue;
-		if ((ms->book_id != book_id) || (ms->doc_id != doc_id)) continue;
-		const int num_carets = arrlen(ms->caret_arr);
-		for (int ii=0; nc<cap && ii<num_carets; ++i) {
-			out_carets[nc++] = ms->caret_arr[ii];
-		}
-	}
-	assert(nc<=cap);
-	return nc;
+	return &pg.fiddle_snapshot;
 }
 
 FORMATPRINTF1
