@@ -2,7 +2,6 @@
 #include <stdlib.h>
 #include <assert.h>
 #include <time.h>
-#include <threads.h>
 #include <unistd.h>
 #include <sys/stat.h>
 
@@ -48,32 +47,17 @@ static struct {
 	struct mim_state* ms;
 	struct document* doc;
 	struct caret* cr;
-	int is_up;
-	mtx_t mutex;
 } g;
 
-static void LOCK(void)
-{
-	assert(thrd_success == mtx_lock(&g.mutex));
-}
-
-static void UNLOCK(void)
-{
-	assert(thrd_success == mtx_unlock(&g.mutex));
-}
-
-static int io_thread_run(void* usr)
+static void all_the_ticking(void)
 {
 	for (;;) {
-		LOCK();
-		if (g.is_up) {
-			host_tick();
-		}
-		UNLOCK();
-		io_tick();
-		sleep_nanoseconds(500000L); // 500µs
+		int did_work=0;
+		did_work |= peer_tick();
+		did_work |= host_tick();
+		did_work |= io_tick();
+		if (!did_work) return;
 	}
-	return 0;
 }
 
 static void new_test(const char* name)
@@ -92,18 +76,15 @@ static void new_test(const char* name)
 
 static void setup(const char* path)
 {
-	LOCK();
+	gig_init();
 	assert(gig_configure_as_host_and_peer(path) >= 0);
-	g.is_up = 1;
-	UNLOCK();
+	all_the_ticking();
 }
 
 static void teardown(void)
 {
-	LOCK();
-	g.is_up = 0;
+	all_the_ticking();
 	gig_unconfigure();
-	UNLOCK();
 }
 
 static void get_state_and_doc(int session_id, struct mim_state** out_ms, struct document** out_doc)
@@ -141,19 +122,23 @@ static void test_readwrite(int N)
 
 	if (VERBOSE) printf("N=%d\n", N);
 
+	setup(test_dir);
 	for (int pass=0; pass<3; ++pass) {
 		if (VERBOSE) printf("  pass %d\n", pass);
-		setup(test_dir);
 
 		if (pass == 0) {
 			peer_begin_mim(1);
+			#if 0
 			mimex("newbook 1 mie-urlyd -");
 			mimex("newdoc 1 50 art.mie");
+			#endif
 			mimex("setdoc 1 50");
 			mimf("0,1,1c");
 			for (int i=0; i<N; ++i) mimi(0,"hello");
 			peer_end_mim();
 		}
+
+		all_the_ticking();
 
 		get_state_and_doc(1, &g.ms, &g.doc);
 
@@ -167,8 +152,8 @@ static void test_readwrite(int N)
 			assert(g.doc->docchar_arr[i].colorchar.codepoint == ("hello"[i%5]));
 		}
 
-		teardown();
 	}
+	teardown();
 }
 
 static void expect_col_and_doc(int expected_col, const char* expected_doc)
@@ -210,8 +195,10 @@ static void test_regress_0a(void)
 	setup(test_dir);
 
 	peer_begin_mim(1);
+	#if 0
 	mimex("newbook 1 mie-urlyd -");
 	mimex("newdoc 1 50 art.mie");
+	#endif
 	mimex("setdoc 1 50");
 	mimf("0,1,1c");
 	peer_end_mim();
@@ -245,8 +232,10 @@ static void test_regress_0b(void)
 	setup(test_dir);
 
 	peer_begin_mim(1);
+	#if 0
 	mimex("newbook 1 mie-urlyd -");
 	mimex("newdoc 1 50 art.mie");
+	#endif
 	mimex("setdoc 1 50");
 	mimf("0,1,1c");
 	peer_end_mim();
@@ -285,8 +274,10 @@ static void test_regress_0c(void)
 	setup(test_dir);
 
 	peer_begin_mim(1);
+	#if 0
 	mimex("newbook 1 mie-urlyd -");
 	mimex("newdoc 1 50 art.mie");
+	#endif
 	mimex("setdoc 1 50");
 	mimf("0,1,1c");
 	peer_end_mim();
@@ -312,8 +303,10 @@ static void test_regress_0d(void)
 	setup(test_dir);
 
 	peer_begin_mim(1);
+	#if 0
 	mimex("newbook 1 mie-urlyd -");
 	mimex("newdoc 1 50 art.mie");
+	#endif
 	mimex("setdoc 1 50");
 	mimf("0,1,1c");
 	peer_end_mim();
@@ -386,6 +379,80 @@ static void test_regress_0d(void)
 	teardown();
 }
 
+static void test_caret_adjustment(void)
+{
+	new_test("caradj1");
+	setup(test_dir);
+	peer_begin_mim(1);
+	mimex("setdoc 1 50");
+	mimf("0,1,1c");
+	mimi(0,"abc");
+	mimf("1,1,1c");
+	mimi(1,"123");
+	peer_end_mim();
+	get_state_and_doc(1, &g.ms, &g.doc);
+	assert(arrlen(g.ms->caret_arr)==2);
+	struct caret c0 = g.ms->caret_arr[0];
+	struct caret c1 = g.ms->caret_arr[1];
+
+	assert(0==memcmp(&c0.caret_loc, &c0.anchor_loc, sizeof c0.caret_loc));
+	assert(0==memcmp(&c1.caret_loc, &c1.anchor_loc, sizeof c1.caret_loc));
+
+	assert(c0.caret_loc.line==1);
+	assert(c0.caret_loc.column==7);
+	assert(c1.caret_loc.line==1);
+	assert(c1.caret_loc.column==4);
+
+	peer_begin_mim(1);
+	mimi(1,"\n");
+	peer_end_mim();
+	get_state_and_doc(1, &g.ms, &g.doc);
+	c0 = g.ms->caret_arr[0];
+	c1 = g.ms->caret_arr[1];
+	assert(0==memcmp(&c0.caret_loc, &c0.anchor_loc, sizeof c0.caret_loc));
+	assert(0==memcmp(&c1.caret_loc, &c1.anchor_loc, sizeof c1.caret_loc));
+
+	assert(c0.caret_loc.line==2);
+	assert(c0.caret_loc.column==4);
+	assert(c1.caret_loc.line==2);
+	assert(c1.caret_loc.column==1);
+
+	peer_begin_mim(1);
+	mimf("1x1x");
+	peer_end_mim();
+	get_state_and_doc(1, &g.ms, &g.doc);
+	c0 = g.ms->caret_arr[0];
+	c1 = g.ms->caret_arr[1];
+	assert(0==memcmp(&c0.caret_loc, &c0.anchor_loc, sizeof c0.caret_loc));
+	assert(0==memcmp(&c1.caret_loc, &c1.anchor_loc, sizeof c1.caret_loc));
+
+	assert(c0.caret_loc.line==2);
+	assert(c0.caret_loc.column==2);
+	assert(c1.caret_loc.line==2);
+	assert(c1.caret_loc.column==1);
+
+	peer_begin_mim(1);
+	mimf("1X");
+	peer_end_mim();
+	get_state_and_doc(1, &g.ms, &g.doc);
+	c0 = g.ms->caret_arr[0];
+	c1 = g.ms->caret_arr[1];
+	assert(0==memcmp(&c0.caret_loc, &c0.anchor_loc, sizeof c0.caret_loc));
+	assert(0==memcmp(&c1.caret_loc, &c1.anchor_loc, sizeof c1.caret_loc));
+
+	assert(c0.caret_loc.line==1);
+	assert(c0.caret_loc.column==5);
+	assert(c1.caret_loc.line==1);
+	assert(c1.caret_loc.column==4);
+
+	// TODO '!'/'/' commit/cancel
+	// TODO range delete tests
+	// TODO "more of above"? (e.g. the "1X" test might not fully explore ''the
+	// possibility space of "1X"'')
+
+	teardown();
+}
+
 int webserv_broadcast_journal(int64_t until_journal_cursor)
 {
 	return 0;
@@ -404,13 +471,7 @@ int main(int argc, char** argv)
 	}
 	base_dir = argv[1];
 
-	assert(thrd_success == mtx_init(&g.mutex, mtx_plain));
-
-	thrd_t t = {0};
-	assert(0 == thrd_create(&t, io_thread_run, NULL));
-
 	mie_thread_init();
-	gig_init();
 
 	const int ts[] = {1000,100,10};
 	for (int i=0; i<ARRAY_LENGTH(ts); ++i) {
@@ -427,6 +488,8 @@ int main(int argc, char** argv)
 		test_regress_0b();
 		test_regress_0c();
 		test_regress_0d();
+
+		test_caret_adjustment();
 
 		printf("OK (gt=%d)\n", growth_threshold);
 	}

@@ -6,6 +6,7 @@
 #define BLOCKING
 const char* io_error_to_string(int error)
 {
+	// XXX a bit of a hack (ignores `error`)
 	return strerror(errno);
 }
 #endif
@@ -292,6 +293,7 @@ int jio_append(struct jio* jio, const void* ptr, int64_t size)
 // it sticks?
 int pread_ex(struct jio* jio, void* ptr, int64_t size, int64_t offset, int memonly)
 {
+	assert(!memonly);
 	// ignore read if an error has been signalled
 	if (jio->error < 0) return jio->error;
 	if (!((0L <= offset) && (offset <= jio->filesize))) {
@@ -304,6 +306,7 @@ int pread_ex(struct jio* jio, void* ptr, int64_t size, int64_t offset, int memon
 		size = (jio->filesize - offset);
 	}
 	assert(size >= 0);
+	if (size == 0) return 0;
 	assert(size <= INT_MAX);
 
 	const int ringbuf_size_log2 = jio->ringbuf_size_log2;

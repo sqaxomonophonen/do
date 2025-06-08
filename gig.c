@@ -95,11 +95,28 @@ static void snapshot_copy(struct snapshot* dst, struct snapshot* src)
 	}
 }
 
+static void snapshot_free(struct snapshot* snap)
+{
+	memset(snap, 0, sizeof *snap);
+	//TODO(free snapshot)
+}
+
 static int document_locate(struct document* doc, struct location* loc)
 {
 	struct doc_iterator it = doc_iterator(doc);
 	doc_iterator_locate(&it, loc);
 	return it.offset;
+}
+
+static struct location document_reverse_locate(struct document* doc, int index)
+{
+	struct doc_iterator it = doc_iterator(doc);
+	int i=0;
+	while (doc_iterator_next(&it)) {
+		if (i==index) return it.location;
+		i++;
+	}
+	assert(!"unreachable");
 }
 
 static struct document* snapshot_get_document_by_index(struct snapshot* snap, int index)
@@ -333,7 +350,7 @@ static int errf(const char* fmt, ...)
 #define FMTERR(PATH,MSG)    errf("%s (format error): %s (at %s:%d)", (PATH), (MSG), __FILE__, __LINE__)
 #define IOERR(PATH,ERRCODE) errf("%s (jio error): %s (at %s:%d)", (PATH), io_error_to_string_safe(ERRCODE), __FILE__, __LINE__)
 
-void peer_tick(void)
+int peer_tick(void)
 {
 	assert(g.is_peer);
 
@@ -349,18 +366,22 @@ void peer_tick(void)
 			arrsetlen(*bb, size);
 			if (jio_pread(igo.jio_journal, *bb, size, jc0) < 0) {
 				FIXME(handle peer_tick journal read error)
-				return;
+				return 1;
 			}
 
 			peer_spool_raw_journal_into_upstream_snapshot(*bb, size);
 			pg.journal_cursor = jc1;
+			return 1;
 		}
+		return 0;
 	} else if (g.is_peer && !g.is_host) {
 		// already handled elsewhere, no?
 		// or XXX should we read from savedir journal here?
+		return 0;
 	} else {
 		assert(!"unreachable");
 	}
+	assert(!"unreachable");
 }
 
 static char* get_mim_buffer_top(void)
@@ -505,6 +526,69 @@ static int mimop_has_doc(struct mimop* mo)
 	return (mo->ms != NULL) && (mimop_lookup_doc(mo) != NULL);
 }
 
+static void doc_del(struct document* doc, struct snapshot* snap, int index)
+{
+	struct location dloc = document_reverse_locate(doc, index);
+	const struct docchar dc = arrchkget(doc->docchar_arr, index);
+	const int cp = dc.colorchar.codepoint;
+	const int num_ms = arrlen(snap->mim_state_arr);
+	for (int i=0; i<num_ms; ++i) {
+		struct mim_state* ms = &snap->mim_state_arr[i];
+		const int num_carets = arrlen(ms->caret_arr);
+		for (int ii=0; ii<num_carets; ++ii) {
+			struct caret* c = &ms->caret_arr[ii];
+			for (int ca=0; ca<2; ++ca) {
+				struct location* loc = (ca==0) ? &c->caret_loc : (ca==1) ? &c->anchor_loc : NULL;
+				if (loc->line > dloc.line) {
+					if (cp=='\n') {
+						--loc->line;
+						if (loc->line == dloc.line) {
+							loc->column += (dloc.column-1);
+						}
+					}
+				} else if (loc->line == dloc.line) {
+					if (dloc.column < loc->column) {
+						assert(cp!='\n');
+						--loc->column;
+					}
+				}
+			}
+		}
+	}
+	arrdel(doc->docchar_arr, arrchk(doc->docchar_arr, index));
+}
+
+static void doc_ins(struct document* doc, struct snapshot* snap, int index, struct docchar dc)
+{
+	struct location iloc = document_reverse_locate(doc, index);
+	const int cp = dc.colorchar.codepoint;
+	const int num_ms = arrlen(snap->mim_state_arr);
+	for (int i=0; i<num_ms; ++i) {
+		struct mim_state* ms = &snap->mim_state_arr[i];
+		const int num_carets = arrlen(ms->caret_arr);
+		for (int ii=0; ii<num_carets; ++ii) {
+			struct caret* c = &ms->caret_arr[ii];
+			for (int ca=0; ca<2; ++ca) {
+				struct location* loc = (ca==0) ? &c->caret_loc : (ca==1) ? &c->anchor_loc : NULL;
+				if (loc->line > iloc.line) {
+					if (cp=='\n') ++loc->line;
+				} else if (loc->line == iloc.line) {
+					if (iloc.column < loc->column) {
+						if (cp=='\n') {
+							++loc->line;
+							loc->column -= (iloc.column-1);
+							assert(loc->column >= 1);
+						} else {
+							++loc->column;
+						}
+					}
+				}
+			}
+		}
+	}
+	arrins(doc->docchar_arr, index, dc);
+}
+
 static void mimop_delete(struct mimop* mo, struct location* loc0, struct location* loc1)
 {
 	struct document* rw_doc = mimop_get_doc(mo);
@@ -515,7 +599,7 @@ static void mimop_delete(struct mimop* mo, struct location* loc0, struct locatio
 	for (int o=o0; o<o1; ++o) {
 		struct docchar* fc = arrchkptr(rw_doc->docchar_arr, o);
 		if (fc->flags & FC_IS_INSERT) {
-			arrdel(rw_doc->docchar_arr, arrchk(rw_doc->docchar_arr, o));
+			doc_del(rw_doc, mo->snap, o);
 			--o;
 			--o1;
 		} else if (!(fc->flags & FC_IS_DELETE)) {
@@ -786,13 +870,13 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 								fc->flags &= ~(FC__FILL | FC_IS_INSERT);
 							}
 							if (fc->flags & FC_IS_DELETE) {
-								arrdel(rw_doc->docchar_arr, arrchk(rw_doc->docchar_arr, i));
+								doc_del(rw_doc, mo->snap, i);
 								--i;
 								--num_chars;
 							}
 						} else if (chr=='/') { // cancel
 							if (fc->flags & FC_IS_INSERT) {
-								arrdel(rw_doc->docchar_arr, arrchk(rw_doc->docchar_arr, i));
+								doc_del(rw_doc, mo->snap, i);
 								--i;
 								--num_chars;
 							}
@@ -918,11 +1002,13 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 						struct location* anchor_loc = &car->anchor_loc;
 						if (0 == location_compare(caret_loc, anchor_loc)) {
 							int o = document_locate(rw_doc, caret_loc);
-							int d,m0,m1;
+							int d,m0,m1,adj;
 							if (chr == 'X') { // backspace
 								d=-1; m0=-1; m1=-1;
+								adj=0;
 							} else if (chr == 'x') { // delete
 								d=0;  m0=0;  m1=1;
+								adj=1;
 							} else {
 								assert(!"unexpected char");
 							}
@@ -934,7 +1020,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 								if ((0 <= od) && (od < num_chars)) {
 									struct docchar* fc = arrchkptr(rw_doc->docchar_arr, od);
 									if (fc->flags & FC_IS_INSERT) {
-										arrdel(rw_doc->docchar_arr, od);
+										doc_del(rw_doc, mo->snap, od);
 										dc=m0;
 									} else if (fc->flags & FC_IS_DELETE) {
 										dc=m1;
@@ -946,8 +1032,10 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 										dc=m1;
 									}
 								}
-								caret_loc->column += dc;
-								doc_location_constraint(rw_doc, caret_loc);
+								if (adj) {
+									caret_loc->column += dc;
+									doc_location_constraint(rw_doc, caret_loc);
+								}
 								o += dc;
 							}
 						} else {
@@ -1036,7 +1124,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 
 					const int off = document_locate(rw_doc, loc);
 					const int n0 = arrlen(rw_doc->docchar_arr);
-					arrins(rw_doc->docchar_arr, off, ((struct docchar){
+					doc_ins(rw_doc, mo->snap, off, ((struct docchar){
 						.colorchar = {
 							.codepoint = chr,
 							.splash4 = splash4,
@@ -1523,11 +1611,11 @@ void peer_end_mim(void)
 		if (0 == setjmp(*mie_prep_scrallox_jmp_buf_for_out_of_memory())) {
 			const int prg = mie_compile_colorcode(dodoc_arr, arrlen(dodoc_arr));
 			if (prg < 0) {
-				TODO(handle compile error)
+				//TODO(handle compile error)
 			} else {
 				vmie_reset(prg);
 				vmie_run();
-				#if 1
+				#if 0
 				const char* err = mie_error();
 				if ((err!=NULL) && (strlen(err)>0)) fprintf(stderr, "ERR: %s\n", err);
 				vmie_dump_stack();
@@ -1643,7 +1731,7 @@ static int snapshotcache_open(const char* dir, uint64_t journal_insignia)
 
 	int err;
 	STATIC_PATH_JOIN(pathbuf, dir, FILENAME_SNAPSHOTCACHE_DATA);
-	struct jio* jdat = jio_open(pathbuf, IO_OPEN, igo.io_port_id, 10, &err);
+	struct jio* jdat = jio_open(pathbuf, IO_OPEN, igo.io_port_id, 16, &err);
 	if (jdat == NULL) return IOERR(pathbuf, err);
 	igo.jio_snapshotcache_data = jdat;
 	const int64_t szdat = jio_get_size(jdat);
@@ -1653,7 +1741,7 @@ static int snapshotcache_open(const char* dir, uint64_t journal_insignia)
 	}
 
 	STATIC_PATH_JOIN(pathbuf, dir, FILENAME_SNAPSHOTCACHE_INDEX);
-	struct jio* jidx = jio_open(pathbuf, IO_OPEN, igo.io_port_id, 10, &err);
+	struct jio* jidx = jio_open(pathbuf, IO_OPEN, igo.io_port_id, 16, &err);
 	if (jidx == NULL) return IOERR(pathbuf, err);
 	igo.jio_snapshotcache_index = jidx;
 	const int64_t szidx = jio_get_size(jidx);
@@ -1723,7 +1811,7 @@ static int snapshotcache_create(const char* dir, uint64_t journal_insignia)
 
 	STATIC_PATH_JOIN(pathbuf, dir, FILENAME_SNAPSHOTCACHE_DATA);
 	int err;
-	struct jio* jdat = jio_open(pathbuf, IO_CREATE, igo.io_port_id, 10, &err);
+	struct jio* jdat = jio_open(pathbuf, IO_CREATE, igo.io_port_id, 16, &err);
 	if (jdat == NULL) {
 		return IOERR(FILENAME_SNAPSHOTCACHE_DATA, err);
 	}
@@ -1735,7 +1823,7 @@ static int snapshotcache_create(const char* dir, uint64_t journal_insignia)
 	jio_flush_bb(jdat, bb);
 
 	STATIC_PATH_JOIN(pathbuf, dir, FILENAME_SNAPSHOTCACHE_INDEX);
-	struct jio* jidx = jio_open(pathbuf, IO_CREATE, igo.io_port_id, 10, &err);
+	struct jio* jidx = jio_open(pathbuf, IO_CREATE, igo.io_port_id, 16, &err);
 	if (jidx == NULL) {
 		jio_close(jdat);
 		return IOERR(FILENAME_SNAPSHOTCACHE_INDEX, err);
@@ -2198,7 +2286,7 @@ static int setup_datadir(const char* dir)
 	char pathbuf[1<<14];
 	STATIC_PATH_JOIN(pathbuf, dir, FILENAME_JOURNAL);
 	int err;
-	struct jio* jj = jio_open(pathbuf, IO_OPEN_OR_CREATE, igo.io_port_id, 10, &err);
+	struct jio* jj = jio_open(pathbuf, IO_OPEN_OR_CREATE, igo.io_port_id, 16, &err);
 	igo.jio_journal = jj;
 	if (jj == NULL) return IOERR(FILENAME_JOURNAL, err);
 
@@ -2324,15 +2412,34 @@ void gig_unconfigure(void)
 {
 	assert(g.is_configured);
 	assert(g.is_host || g.is_peer);
-	g.is_configured = 0;
+
+	// globals (g)
 	if (g.is_host && g.is_peer) {
 		ringbuf_free(&g.peer2host_mim_ringbuf);
 	} else {
 		assert(g.peer2host_mim_ringbuf.buf != NULL);
 	}
+	memset(&g, 0, sizeof g);
+
+	// I/O globals (igo)
 	jio_close(igo.jio_journal);
 	jio_close(igo.jio_snapshotcache_data);
 	jio_close(igo.jio_snapshotcache_index);
+	memset(&igo, 0, sizeof igo);
+
+	// host globals
+	arrfree(hg.bb_arr);
+	arrfree(hg.peer_state_arr);
+	snapshot_free(&hg.present_snapshot);
+	memset(&hg, 0, sizeof hg);
+
+	// peer globals
+	arrfree(pg.bb_arr);
+	arrfree(pg.unackd_mimbuf_arr);
+	snapshot_free(&pg.upstream_snapshot);
+	snapshot_free(&pg.fiddle_snapshot);
+	memset(&pg, 0, sizeof pg);
+
 }
 
 void gig_set_journal_snapshot_growth_threshold(int t)

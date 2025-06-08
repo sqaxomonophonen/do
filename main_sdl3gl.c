@@ -143,7 +143,7 @@ int main(int argc, char** argv)
 	//gig_maybe_setup_stub();
 
 	gui_init();
-	SDL_DetachThread(SDL_CreateThread(io_thread_run, "io", NULL));
+	SDL_DetachThread(SDL_CreateThread(io_thread_run, "I/O", NULL));
 
 	while (!g0.exiting && get_num_windows() > 0) {
 		gui_begin_frame();

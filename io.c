@@ -161,6 +161,7 @@ int io_open(const char* path, enum io_open_mode mode, int64_t* out_filesize)
 		const off_t o = lseek(posix_fd, 0, SEEK_END);
 		if (o < 0) {
 			(void)close(posix_fd);
+			printf("CLOSEEX\n");
 			return IO_ERROR;
 		}
 		*out_filesize = o;
@@ -212,10 +213,16 @@ int io_close(int file_id)
 	struct file* file = get_file(file_id);
 	const int num_sub = arrlen(file->submission_arr);
 	G_UNLOCK();
-	if (num_sub) return IO_PENDING;
+	if (num_sub) {
+		XXX_NOW(probably flush/spool now)
+		return IO_PENDING;
+	}
 	if (close(file->posix_fd) != 0) {
 		return IO_ERROR;
 	}
+	const int i = (file - g.file_arr);
+	assert((0 <= i) && (i < arrlen(g.file_arr)));
+	arrdel(g.file_arr, i);
 	return 0;
 }
 
@@ -659,7 +666,7 @@ int io_tick(void)
 	static struct fire* fire_arr;
 	arrreset(fire_arr);
 
-	int is_closing_any = 0;
+	int num_to_close = 0;
 
 	// convert poll() output to list of calls to make
 	G_LOCK();
@@ -672,12 +679,15 @@ int io_tick(void)
 			assert(!(revents & POLLNVAL) && "invalid fd added?");
 			struct file* file = get_file_by_posix_fd(pollfd->fd);
 			if (revents & (POLLERR | POLLHUP)) {
-				//io_port_close(file->port_id, file->file_kd);
+				const int e = close(pollfd->fd);
+				printf("BAD revents=%d; close(%d) => %d\n", revents, pollfd->fd, e);
+				file->do_close = 1;
+				++num_to_close;
 				continue;
 			}
 			revents &= (POLLIN | POLLOUT); // only consider these events from here on
 			int num_subs = arrlen(file->submission_arr);
-			const int is_closing = (num_subs == file->num_close);
+			const int is_closing = (num_subs>0) && (num_subs == file->num_close);
 			for (int ii=0; (revents || is_closing) && ii<num_subs; ++ii) {
 				struct submission* sub = &file->submission_arr[ii];
 				int do_fire=0;
@@ -687,7 +697,7 @@ int io_tick(void)
 					if (is_closing) {
 						do_fire = 1;
 						file->do_close = 1;
-						is_closing_any = 1;
+						++num_to_close;
 					}
 					break;
 
@@ -782,6 +792,7 @@ int io_tick(void)
 
 		case SUBMISSION_CLOSE: {
 			fire->status = close(posix_fd);
+			printf("SUBCLOSE\n");
 		}	break;
 
 		case SUBMISSION_READ: {
@@ -916,7 +927,7 @@ int io_tick(void)
 		assert(addr_index == num_addr);
 	}
 
-	if (is_closing_any) {
+	if (num_to_close > 0) {
 		int num_files = arrlen(g.file_arr);
 		int num_closed = 0;
 		for (int ii=0; ii<num_files; ++ii) {
@@ -928,10 +939,17 @@ int io_tick(void)
 			--num_files;
 			++num_closed;
 		}
-		assert(num_closed > 0);
+		assert(num_closed == num_to_close);
 	}
 
 	G_UNLOCK();
+
+	int num_files = arrlen(g.file_arr);
+	int num_do_close=0;
+	for (int i=0; i<num_files; ++i) {
+		struct file* f = &g.file_arr[i];
+		if (f->do_close) num_do_close++;
+	}
 
 	return 1;
 }

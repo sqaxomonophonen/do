@@ -154,7 +154,7 @@ static inline void doc_iterator_locate(struct doc_iterator* it, struct location*
 
 void gig_init(void);
 void gig_set_journal_snapshot_growth_threshold(int);
-void peer_tick(void);
+int peer_tick(void);
 int host_tick(void);
 void gig_selftest(void);
 

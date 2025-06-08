@@ -4,11 +4,33 @@ filter() {
 	grep -vF stb_ | grep -vF sha1. | grep -vF lonesha256. | grep -vF doc/ | grep -vF font0.c | grep -vF .gitignore
 }
 
-echo -n "lines of code: "
+echo -n "lines of code (wc): "
 cat $(git ls-files | filter) | wc -l
+
+clocloc=0
+if command -v cloc >/dev/null 2>&1 ; then
+	clocloc=$(cloc --csv $( git ls-files '*.c' '*.h' | grep -vF stb_ | grep -vF sha1. | grep -vF lonesha256. | grep -vF doc/ | grep -vF font0.c ) | grep SUM | cut -d, -f5)
+fi
+
+
+if [ $clocloc -gt 0 ] ; then
+	echo "lines of code (cloc): $clocloc"
+fi
+
+count_asserts() {
+	git grep -nw assert | filter | wc -l
+}
+
 echo -n "asserts: "
-git grep -nw assert | filter | wc -l
-echo "lines per assert $(( $(cat $(git ls-files | filter) | wc -l) / $(git grep -nw assert | filter | wc -l)  ))"
+count_asserts
+#echo -n "lines per assert (wc) "
+#printf "%.2f" $( echo "$(cat $(git ls-files | filter) | wc -l) / $(count_asserts)" | bc -l )
+#echo
+if [ $clocloc -gt 0 ] ; then
+	echo -n "lines per assert (cloc): "
+	printf "%.2f" $(echo "$clocloc / $(count_asserts)" | bc -l)
+	echo
+fi
 echo -n "bounds checked array accesses: "
 git grep -nF arrchk | filter | wc -l
 echo -n "XXXs: "

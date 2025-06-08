@@ -356,7 +356,7 @@ static void conn_read(struct conn* conn, void* buf, int64_t count)
 	conn->inflight_read=1;
 }
 
-static void conn_writeall(struct conn* conn, const void* ptr, int64_t count)
+static void conn_writeall_from_mem(struct conn* conn, const void* ptr, int64_t count)
 {
 	io_port_writeall(g.port_id, echo_write(get_conn_id_by_conn(conn)), conn->file_id, ptr, count);
 	++conn->num_inflight_writes;
@@ -389,7 +389,7 @@ void webserv_init(void)
 
 static void serve_static(struct conn* conn, const void* data, size_t size)
 {
-	conn_writeall(conn, data, size);
+	conn_writeall_from_mem(conn, data, size);
 }
 
 // use this with the "canned responses", R404 etc. assumes that sizeof(SS) is
@@ -439,7 +439,7 @@ static void conn_printf(struct conn* conn, const char* fmt, ...)
 	}
 }
 
-static void conn_print(struct conn* conn, const char* str)
+static void conn_append(struct conn* conn, const uint8_t* data, int count)
 {
 	assert(conn_can_write(conn));
 	size_t bufsize;
@@ -450,11 +450,19 @@ static void conn_print(struct conn* conn, const char* str)
 		return;
 	}
 	assert(r>0);
-	int num = strlen(str);
-	if (num > r) num = r;
+	if (count > r) {
+		count = r;
+		conn->buffer_full = 1;
+	}
 	uint8_t* p = (buf + conn->write_cursor);
-	memcpy(p, str, num);
-	conn->write_cursor += num;
+	memcpy(p, data, count);
+	conn->write_cursor += count;
+}
+
+
+static void conn_print(struct conn* conn, const char* str)
+{
+	conn_append(conn, (const uint8_t*)str, strlen(str));
 }
 
 static void conn_respond(struct conn* conn)
@@ -469,7 +477,7 @@ static void conn_respond(struct conn* conn)
 	size_t size;
 	uint8_t* buf = get_conn_http_write_buffer(conn, &size);
 	assert(conn->write_cursor <= size);
-	conn_writeall(conn, buf, conn->write_cursor);
+	conn_writeall_from_mem(conn, buf, conn->write_cursor);
 }
 
 static void conn_set_free_after_write_data(struct conn* conn, void* data)
@@ -775,10 +783,10 @@ static void http_serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 				"Content-Length: %d" CRLF
 				CRLF
 				, n);
-			conn_respond(conn);
 			if (method==GET) {
-				conn_writeall(conn, html, n);
+				conn_append(conn, (const uint8_t*)html, n);
 			} else assert(method==HEAD);
+			conn_respond(conn);
 			return;
 			#endif
 		} else {
@@ -795,7 +803,7 @@ static void http_serve(struct conn* conn, uint8_t* pstart, uint8_t* pend)
 			CRLF
 			, size);
 		conn_respond(conn);
-		conn_writeall(conn, data, size);
+		conn_writeall_from_mem(conn, data, size);
 		conn_set_free_after_write_data(conn, data);
 		return;
 
@@ -1179,7 +1187,7 @@ static int websocket_send0(struct conn* conn, void* payload, int payload_size)
 	p+=num;
 
 	assert((p-buf) <= bufsize);
-	conn_writeall(conn, buf, p-buf);
+	conn_writeall_from_mem(conn, buf, p-buf);
 
 	return num;
 }
