@@ -1,6 +1,7 @@
- - If you use the stb_ds.h dynamic array, please add an `_arr`-suffix to the
-   field name; normally a declaration reveals what the type is, but with this
-   it's "hidden" so I prefer "int* id_arr" instead of "int* ids"
+ - If you use dynamic arrays from stb_ds.h, name them like "int* id_arr"
+   instead of "int* ids"; that is, add an `_arr`-suffix. The reason is that the
+   (super-)type is hidden, and it's dangerous to confuse an "int pointer" with
+   a "dynamic array of ints".
 
  - Prefix out/return argument names with `out_`. These are pointer arguments
    used to return multiple/optional values. It should typically be valid to

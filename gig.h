@@ -16,7 +16,7 @@ struct colorchar {
 	int16_t splash4; // [0000:9999]
 };
 
-static inline int location_compare(struct location* a, struct location* b)
+static inline int location_compare(const struct location* a, const struct location* b)
 {
 	const int d0 = a->line - b->line;
 	if (d0 != 0) return d0;
@@ -24,7 +24,7 @@ static inline int location_compare(struct location* a, struct location* b)
 	return d1;
 }
 
-static inline int location_line_distance(struct location* a, struct location* b)
+static inline int location_line_distance(const struct location* a, const struct location* b)
 {
 	return abs(a->line - b->line);
 }
@@ -152,11 +152,17 @@ static inline void doc_iterator_locate(struct doc_iterator* it, struct location*
 	}
 }
 
+static inline int document_locate(struct document* doc, struct location* loc)
+{
+	struct doc_iterator it = doc_iterator(doc);
+	doc_iterator_locate(&it, loc);
+	return it.offset;
+}
+
 void gig_init(void);
 void gig_set_journal_snapshot_growth_threshold(int);
 int peer_tick(void);
 int host_tick(void);
-void gig_selftest(void);
 
 int gig_configure_as_host_and_peer(const char* rootdir);
 // configure gig to be both host and peer (example: you're performing with the
@@ -210,6 +216,7 @@ void mimf(const char* fmt, ...);
 void mim8(uint8_t v);
 void mimex(const char*);
 void mimi(int tag, const char*);
+void mimc(int tag, const struct colorchar*, int count);
 
 struct snapshot* get_snapshot(void);
 

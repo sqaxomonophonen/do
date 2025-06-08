@@ -8,10 +8,10 @@
 //    behavior" before). By including the test in your program you get the test
 //    without thinking about it.
 
-//  - Self testing seems like the only way we can conveniently test a
-//    compilation unit that depends on other compilation units (like gig.c). I
-//    don't think dynamic dependency injection is a good solution; you end up
-//    mocking every single little thing just so you can write a test.
+//  - Self testing is one way to test a compilation unit that depends on other
+//    compilation units. I don't think dynamic dependency injection is a good
+//    solution; you end up mocking every single little thing just so you can
+//    write a test. Some standalone tests are hybrids though (e.g. test_gig.c)
 
 //  - These tests cannot be expensive. They probably shouldn't have significant
 //    static memory requirements, and no dynamic memory requirements (no
@@ -47,8 +47,6 @@
 #define PATH_UNIT_TEST
 #include "path.h"
 
-#include "gig.h"
-
 #ifndef __EMSCRIPTEN__
 #include "webserv.h"
 #endif
@@ -59,7 +57,6 @@ void run_selftest(void)
 	utf8_unit_test();
 	leb128_unit_test();
 	path_unit_test();
-	gig_selftest();
 	mie_selftest();
 	#ifndef __EMSCRIPTEN__
 	webserv_selftest();

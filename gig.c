@@ -101,13 +101,6 @@ static void snapshot_free(struct snapshot* snap)
 	//TODO(free snapshot)
 }
 
-static int document_locate(struct document* doc, struct location* loc)
-{
-	struct doc_iterator it = doc_iterator(doc);
-	doc_iterator_locate(&it, loc);
-	return it.offset;
-}
-
 static struct location document_reverse_locate(struct document* doc, int index)
 {
 	struct doc_iterator it = doc_iterator(doc);
@@ -427,6 +420,25 @@ void mimex(const char* ex)
 void mimi(int tag, const char* text)
 {
 	mimf("%d,%zdi%s", tag, strlen(text), text);
+}
+
+void mimc(int tag, const struct colorchar* ccs, int count)
+{
+	int num_bytes=0;
+	char buf[16];
+	for (int i=0; i<count; ++i) {
+		char* p = utf8_encode(buf, ccs[i].codepoint);
+		num_bytes += (p-buf)+2;
+	}
+	mimf("%d,%dI", tag, num_bytes);
+	for (int i=0; i<count; ++i) {
+		const struct colorchar cc = ccs[i];
+		char* p = utf8_encode(buf, cc.codepoint);
+		const size_t n = (p-buf);
+		mimsrc((uint8_t*)buf, n);
+		mim8(cc.splash4 & 0xff);
+		mim8((cc.splash4 >> 8) & 0xff);
+	}
 }
 
 int get_my_artist_id(void)
@@ -2459,7 +2471,8 @@ void gig_init(void)
 	gig_set_journal_snapshot_growth_threshold(5000);
 }
 
-void gig_selftest(void)
-{
-	// TODO (used to be a mim test here)
-}
+// TODO: caret movement/adjustment improvements (reinforce with tests in
+// test_gig.c); home/end; arrow up/down when going to a shorter line (currently
+// skips a line)
+
+// TODO: time travel

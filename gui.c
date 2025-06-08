@@ -192,6 +192,9 @@ static struct {
 	char* text_buffer_arr;
 	int is_dragging;
 	struct draw_state state, save_state;
+
+	char* gray_copybuf_arr;
+	struct colorchar* color_copybuf_arr;
 } g;
 
 static inline int make_focus_id(void)
@@ -1310,6 +1313,44 @@ static void cpick_add_rgb(struct pane* p, int delta)
 	cpick_add_comp(p, 2, delta);
 }
 
+static struct mim_state* get_session_mim_state(int session_id)
+{
+	const int my_artist_id = get_my_artist_id();
+	struct snapshot* snap = get_snapshot();
+	const int num_states = arrlen(snap->mim_state_arr);
+	for (int i=0; i<num_states; ++i) {
+		struct mim_state* ms = &snap->mim_state_arr[i];
+		if ((ms->artist_id==my_artist_id) && (ms->session_id==session_id)) {
+			return ms;
+		}
+	}
+	return NULL;
+}
+
+struct carloc {
+	int caret_index;
+	struct location loc;
+};
+
+static int carloc_compar(const void* va, const void* vb)
+{
+	const struct carloc* a = va;
+	const struct carloc* b = vb;
+	return location_compare(&a->loc, &b->loc);
+}
+
+static struct document* get_doc(int book_id, int doc_id)
+{
+	struct snapshot* snap = get_snapshot();
+	const int num_docs = arrlen(snap->document_arr);
+	for (int i=0; i<num_docs; ++i) {
+		struct document* doc = &snap->document_arr[i];
+		if ((doc->book_id==book_id) && (doc->doc_id==doc_id)) {
+			return doc;
+		}
+	}
+	return NULL;
+}
 
 static void handle_editor_input(struct pane* pane)
 {
@@ -1361,10 +1402,89 @@ static void handle_editor_input(struct pane* pane)
 			}
 		}
 
+		int do_gray_copy=0, do_color_copy=0, do_paste=0;
+
 		if (down && mod==MOD_CONTROL) {
 			if (code==KEY_ENTER) mimf("0!"); // commit
 			if (code==' ')       mimf("0/"); // cancel
 			if (code=='P')       mimf("0P"); // paint
+			if (code=='C')       do_gray_copy=1;
+			if (code=='X') {
+				do_gray_copy=1;
+				mimf("0x");
+			}
+			if (code=='V') do_paste=1;
+		}
+
+		if (down && (mod==(MOD_CONTROL|MOD_SHIFT))) {
+			if (code=='C') do_color_copy=1;
+			if (code=='X') {
+				do_gray_copy=1;
+				mimf("0x");
+			}
+			if (code=='V') do_paste=1;
+		}
+
+		if (do_gray_copy || do_color_copy) {
+			struct mim_state* ms = get_session_mim_state(pane->code.session_id);
+			const int num_carets = arrlen(ms->caret_arr);
+			static struct carloc* carloc_arr;
+			arrreset(carloc_arr);
+			for (int i=0; i<num_carets; ++i) {
+				struct caret* car = &ms->caret_arr[i];
+				if (car->tag != 0) continue;
+				const int d = location_compare(&car->caret_loc, &car->anchor_loc);
+				if (d == 0) continue;
+				arrput(carloc_arr, ((struct carloc) {
+					.caret_index = i,
+					.loc = ((d<0) ? car->caret_loc : car->anchor_loc),
+				}));
+			}
+
+			const int num_carloc = arrlen(carloc_arr);
+			qsort(carloc_arr, num_carloc, sizeof carloc_arr[0], carloc_compar);
+
+			struct document* doc = get_doc(ms->book_id, ms->doc_id);
+			if (doc != NULL) {
+				arrreset(g.gray_copybuf_arr);
+				arrreset(g.color_copybuf_arr);
+				for (int i=0; i<num_carloc; ++i) {
+					struct caret* car = &ms->caret_arr[carloc_arr[i].caret_index];
+					int di0 = document_locate(doc, &car->caret_loc);
+					int di1 = document_locate(doc, &car->anchor_loc);
+					assert(di0 != di1);
+					if (di1 < di0) {
+						const int tmp = di0;
+						di0 = di1;
+						di1 = tmp;
+					}
+					for (int di=di0; di<di1; ++di) {
+						struct colorchar cc = doc->docchar_arr[di].colorchar;
+						if (do_color_copy) {
+							arrput(g.color_copybuf_arr, cc);
+						} else if (do_gray_copy) {
+							char buf[16];
+							char* p = utf8_encode(buf, cc.codepoint);
+							const size_t n = (p-buf);
+							char* dst = arraddnptr(g.gray_copybuf_arr, n);
+							memcpy(dst, buf, n);
+						} else {
+							assert(!"unreachable");
+						}
+					}
+					if (arrlen(g.gray_copybuf_arr) > 0) {
+						arrput(g.gray_copybuf_arr, 0);
+					}
+				}
+			}
+		}
+
+		if (do_paste) {
+			if (arrlen(g.color_copybuf_arr) > 0) {
+				mimc(0, g.color_copybuf_arr, arrlen(g.color_copybuf_arr));
+			} else if (arrlen(g.gray_copybuf_arr) > 0) {
+				mimi(0, g.gray_copybuf_arr);
+			}
 		}
 	}
 
@@ -1399,33 +1519,6 @@ static float randf(float v0, float v1)
 {
 	const float f = (float)rand() / (float)RAND_MAX;
 	return v0 + f*(v1-v0);
-}
-
-static struct mim_state* get_session_mim_state(int session_id)
-{
-	const int my_artist_id = get_my_artist_id();
-	struct snapshot* snap = get_snapshot();
-	const int num_states = arrlen(snap->mim_state_arr);
-	for (int i=0; i<num_states; ++i) {
-		struct mim_state* ms = &snap->mim_state_arr[i];
-		if ((ms->artist_id==my_artist_id) && (ms->session_id==session_id)) {
-			return ms;
-		}
-	}
-	return NULL;
-}
-
-static struct document* get_doc(int book_id, int doc_id)
-{
-	struct snapshot* snap = get_snapshot();
-	const int num_docs = arrlen(snap->document_arr);
-	for (int i=0; i<num_docs; ++i) {
-		struct document* doc = &snap->document_arr[i];
-		if ((doc->book_id==book_id) && (doc->doc_id==doc_id)) {
-			return doc;
-		}
-	}
-	return NULL;
 }
 
 static void draw_code_pane(struct pane* pane)
@@ -1791,16 +1884,21 @@ void gui_drop_file(const char* name, size_t num_bytes, uint8_t* bytes)
 	//  - NOTE: bytes might be freed after we return?
 }
 
-// TODO
+// TODO: secondary atlas for dynamic software rendered graphics (e.g. inline
+// curves in document); all entries have a resource id and dimensions (the same
+// resource id can be rendered at different scales), plus blur variants for
+// HDR. to render, do a "gather pass" to find the required resources and
+// dimensions; then do a lookup in the atlas to see which are missing (hash
+// table similar to primary atlas?); if any, pack and render them; if atlas
+// overflows, clear it and try again; if atlas still overflows, make the atlas
+// bigger and try again. consider blitting graphics from the old atlas when
+// rebuilding it. also, resource are proably "immutable", so resource edits
+// mean new resource ids?
 
-// - secondary atlas for dynamic software rendered graphics (e.g. inline curves
-//   in document); all entries have a resource id and dimensions (the same
-//   resource id can be rendered at different scales), plus blur variants for
-//   HDR. to render, do a "gather pass" to find the required resources and
-//   dimensions; then do a lookup in the atlas to see which are missing (hash
-//   table similar to primary atlas?); if any, pack and render them; if atlas
-//   overflows, clear it and try again; if atlas still overflows, make the
-//   atlas bigger and try again. consider blitting graphics from the old atlas
-//   when rebuilding it. also, resource are proably "immutable", so resource
-//   edits mean new resource ids?
+// TODO: selections should also be visible on empty lines (probably a thin
+// vertical line to the left, same color as the "selection body")
 
+// TODO: rendering "shake" color component; do better noise (possibly a
+// "random" fourier series) and motion blur? also rotational noise, not only
+// dx/dy noise. also, a detail, but caret and color picker should probably
+// display 'shake' a bit (can be "dimmed" a bit)

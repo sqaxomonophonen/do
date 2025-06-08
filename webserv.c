@@ -1461,3 +1461,8 @@ void webserv_selftest(void)
 		assert(!header_next(&hr));
 	}
 }
+
+// TODO: websocket_send0() should support multiple inflight writes, and should
+// probably have its own buffer pool serving this purpose. reusing the conn
+// buffer seems like bad design because http and ws are quite different
+// protocols, and they (and our usecase) have distinct needs.

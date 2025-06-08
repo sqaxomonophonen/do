@@ -395,8 +395,8 @@ static void test_caret_adjustment(void)
 	struct caret c0 = g.ms->caret_arr[0];
 	struct caret c1 = g.ms->caret_arr[1];
 
-	assert(0==memcmp(&c0.caret_loc, &c0.anchor_loc, sizeof c0.caret_loc));
-	assert(0==memcmp(&c1.caret_loc, &c1.anchor_loc, sizeof c1.caret_loc));
+	assert(0==location_compare(&c0.caret_loc, &c0.anchor_loc));
+	assert(0==location_compare(&c1.caret_loc, &c1.anchor_loc));
 
 	assert(c0.caret_loc.line==1);
 	assert(c0.caret_loc.column==7);
@@ -409,8 +409,8 @@ static void test_caret_adjustment(void)
 	get_state_and_doc(1, &g.ms, &g.doc);
 	c0 = g.ms->caret_arr[0];
 	c1 = g.ms->caret_arr[1];
-	assert(0==memcmp(&c0.caret_loc, &c0.anchor_loc, sizeof c0.caret_loc));
-	assert(0==memcmp(&c1.caret_loc, &c1.anchor_loc, sizeof c1.caret_loc));
+	assert(0==location_compare(&c0.caret_loc, &c0.anchor_loc));
+	assert(0==location_compare(&c1.caret_loc, &c1.anchor_loc));
 
 	assert(c0.caret_loc.line==2);
 	assert(c0.caret_loc.column==4);
@@ -423,8 +423,8 @@ static void test_caret_adjustment(void)
 	get_state_and_doc(1, &g.ms, &g.doc);
 	c0 = g.ms->caret_arr[0];
 	c1 = g.ms->caret_arr[1];
-	assert(0==memcmp(&c0.caret_loc, &c0.anchor_loc, sizeof c0.caret_loc));
-	assert(0==memcmp(&c1.caret_loc, &c1.anchor_loc, sizeof c1.caret_loc));
+	assert(0==location_compare(&c0.caret_loc, &c0.anchor_loc));
+	assert(0==location_compare(&c1.caret_loc, &c1.anchor_loc));
 
 	assert(c0.caret_loc.line==2);
 	assert(c0.caret_loc.column==2);
@@ -437,8 +437,8 @@ static void test_caret_adjustment(void)
 	get_state_and_doc(1, &g.ms, &g.doc);
 	c0 = g.ms->caret_arr[0];
 	c1 = g.ms->caret_arr[1];
-	assert(0==memcmp(&c0.caret_loc, &c0.anchor_loc, sizeof c0.caret_loc));
-	assert(0==memcmp(&c1.caret_loc, &c1.anchor_loc, sizeof c1.caret_loc));
+	assert(0==location_compare(&c0.caret_loc, &c0.anchor_loc));
+	assert(0==location_compare(&c1.caret_loc, &c1.anchor_loc));
 
 	assert(c0.caret_loc.line==1);
 	assert(c0.caret_loc.column==5);
