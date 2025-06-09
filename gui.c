@@ -1445,7 +1445,7 @@ static void handle_editor_input(struct pane* pane)
 			qsort(carloc_arr, num_carloc, sizeof carloc_arr[0], carloc_compar);
 
 			struct document* doc = get_doc(ms->book_id, ms->doc_id);
-			if (doc != NULL) {
+			if ((num_carloc>0) && (doc!=NULL)) {
 				arrreset(g.gray_copybuf_arr);
 				arrreset(g.color_copybuf_arr);
 				for (int i=0; i<num_carloc; ++i) {
