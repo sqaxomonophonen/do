@@ -1398,6 +1398,7 @@ int webserv_broadcast_journal(int64_t until_journal_cursor)
 		if (conn->num_inflight_writes) continue;
 		struct websock* ws = &conn->websock;
 		struct conndo* cdo = &ws->conndo;
+		if (!cdo->did_greet) continue;
 		int64_t count = (until_journal_cursor - cdo->journal_cursor);
 		if (count <= 0) continue;
 
