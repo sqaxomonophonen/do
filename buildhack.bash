@@ -71,7 +71,11 @@ while true ; do
 	desktop)
 		setbuild "$1"
 		cclean -x
-		time gmake -f Makefile.linux.sdl3gl -j$(nproc)
+		if [ "$(uname -s)" = "FreeBSD" ] ; then
+			time gmake -f MakefileGNU.bsd.sdl3gl -j$(nproc)
+		else
+			time gmake -f Makefile.linux.sdl3gl -j$(nproc)
+		fi
 		;;
 	webpack)
 		setbuild "$1"

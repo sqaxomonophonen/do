@@ -422,7 +422,6 @@ struct vmie {
 };
 
 static struct {
-	//mtx_t program_alloc_mutex;
 	struct program* program_arr;
 	int* program_freelist_arr;
 	unsigned globals_were_initialized  :1;
@@ -2000,7 +1999,6 @@ static void compiler_end(struct compiler* cm)
 static int alloc_program_index(void)
 {
 	assert((tlg.currently_compiling == 0) && "the compiler has a program reference, making it dangerous to mutate program_arr");
-	//assert(thrd_success == mtx_lock(&g.program_alloc_mutex));
 	int r;
 	struct program* program;
 	if (arrlen(g.program_freelist_arr) > 0) {
@@ -2011,21 +2009,18 @@ static int alloc_program_index(void)
 		program = arraddnptr(g.program_arr, 1);
 		program_init(program);
 	}
-	//assert(thrd_success == mtx_unlock(&g.program_alloc_mutex));
 	program_reset(program);
 	return r;
 }
 
 void mie_program_free(int program_index)
 {
-	//assert(thrd_success == mtx_lock(&g.program_alloc_mutex));
 	// XXX the following could be regarded as an "expensive assert"?
 	const int n = arrlen(g.program_freelist_arr);
 	for (int i=0; i<n; ++i) {
 		assert((program_index != g.program_freelist_arr[i]) && "program double-free!");
 	}
 	arrput(g.program_freelist_arr, program_index);
-	//assert(thrd_success == mtx_unlock(&g.program_alloc_mutex));
 }
 
 static struct program* get_program(int index)
@@ -2076,7 +2071,6 @@ static void init_globals(void)
 	if (g.globals_were_initialized) return;
 	g.globals_were_initialized = 1;
 
-	//assert(thrd_success == mtx_init(&g.program_alloc_mutex, mtx_plain));
 	arrinit(g.program_arr, &system_allocator);
 	arrinit(g.program_freelist_arr, &system_allocator);
 

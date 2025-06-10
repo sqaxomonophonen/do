@@ -6,4 +6,5 @@ ARTIFACT="do"
 OBJS+=main_sdl3gl.o
 
 include MKinclude.gui
+include MKinclude.io
 include MKinclude.common

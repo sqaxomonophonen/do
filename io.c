@@ -1,11 +1,20 @@
 #include <assert.h>
 #include <poll.h>
 #include <unistd.h>
-#include <threads.h>
+#include <pthread.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/socket.h>
+
+#ifdef __linux__
 #include <sys/sendfile.h>
+#endif
+
+#ifdef __FreeBSD__
+#include <sys/types.h>
+#include <sys/uio.h>
+#endif
+
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
@@ -105,7 +114,7 @@ struct fire {
 static struct {
 	int port_id_sequence;
 	int file_id_sequence;
-	mtx_t mutex;
+	pthread_mutex_t mutex;
 	struct file* file_arr;
 	struct port* port_arr;
 } g;
@@ -117,12 +126,12 @@ static int alloc_file_id(void)
 
 static void G_LOCK(void)
 {
-	assert(thrd_success == mtx_lock(&g.mutex));
+	assert(0 == pthread_mutex_lock(&g.mutex));
 }
 
 static void G_UNLOCK(void)
 {
-	assert(thrd_success == mtx_unlock(&g.mutex));
+	assert(0 == pthread_mutex_unlock(&g.mutex));
 }
 
 
@@ -522,6 +531,26 @@ struct listenecho {
 };
 
 
+static int our_sendfile(int dst_fd, int src_fd, off_t offset, size_t count)
+{
+	#if defined(__linux__)
+	return sendfile(dst_fd, src_fd, &offset, count);
+	#elif defined(__FreeBSD__)
+	off_t sbytes = 0;
+	const int e = sendfile(src_fd, dst_fd, offset, count, NULL, &sbytes, 0);
+	if (e == -1) {
+		if (errno == EAGAIN) {
+			return (int)sbytes;
+		} else {
+			return -1;
+		}
+	} else {
+		return (int)sbytes;
+	}
+	#else
+	#error "no sendfile implementation"
+	#endif
+}
 
 int io_tick(void)
 {
@@ -845,13 +874,13 @@ int io_tick(void)
 		case SUBMISSION_SENDFILE: {
 			const int src_fd = file_id_to_posix_fd(sub->sendfile.src_file_id);
 			off_t o = sub->sendfile.src_offset;
-			fire->status = sendfile(posix_fd, src_fd, &o, sub->sendfile.count);
+			fire->status = our_sendfile(posix_fd, src_fd, o, sub->sendfile.count);
 		}	break;
 
 		case SUBMISSION_SENDFILEALL: {
 			const int src_fd = file_id_to_posix_fd(sub->sendfile.src_file_id);
 			off_t o = sub->sendfile.src_offset;
-			fire->status = sendfile(posix_fd, src_fd, &o, sub->sendfile.count);
+			fire->status = our_sendfile(posix_fd, src_fd, o, sub->sendfile.count);
 			if (fire->status != -1) {
 				if (sub->sendfile.count > fire->status) {
 					resub_fd=posix_fd;
@@ -955,17 +984,10 @@ int io_tick(void)
 
 	G_UNLOCK();
 
-	int num_files = arrlen(g.file_arr);
-	int num_do_close=0;
-	for (int i=0; i<num_files; ++i) {
-		struct file* f = &g.file_arr[i];
-		if (f->do_close) num_do_close++;
-	}
-
 	return 1;
 }
 
 void io_init(void)
 {
-	assert(thrd_success == mtx_init(&g.mutex, mtx_plain));
+	assert(0 == pthread_mutex_init(&g.mutex, NULL));
 }
