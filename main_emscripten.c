@@ -233,16 +233,6 @@ void sleep_microseconds(int64_t us)
 	assert(!"don't sleep");
 }
 
-#if 0
-static void gig_thread_run(void)
-{
-	for (;;) {
-		gig_thread_tick();
-		emscripten_wasm_worker_sleep(2000000L);
-	}
-}
-#endif
-
 static char *WS_URL, *INFO_URL;
 
 static void request_journal(void)

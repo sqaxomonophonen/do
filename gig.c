@@ -2130,7 +2130,6 @@ int peer_spool_raw_journal_into_upstream_snapshot(void* data, int64_t count)
 	struct snapshot* upsnap = &pg.upstream_snapshot;
 	int64_t max_jam_ts = 0;
 	const int e = spool_raw_journal_bs(upsnap, &bs, count, -1, &max_tracer, &max_jam_ts);
-	maybe_adjust_jam_time(max_jam_ts);
 	if (e<0) {
 		dumperr();
 		fprintf(stderr, "spool_raw_journal_bs() of %d bytes => %d:\n", (int)count, e);
@@ -2138,6 +2137,7 @@ int peer_spool_raw_journal_into_upstream_snapshot(void* data, int64_t count)
 		return -1;
 	}
 	assert((max_tracer != -1) && "expected tracer to be set");
+	maybe_adjust_jam_time(max_jam_ts);
 
 	// re-spool inflight mim that has not yet been ack'd
 	struct snapshot* fidsnap = &pg.fiddle_snapshot;
