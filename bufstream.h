@@ -79,7 +79,17 @@ static inline int64_t bufstream_read_leu64(struct bufstream* bs)
 	bufstream_read(bs, raw, sizeof raw);
 	const uint8_t* p = raw;
 	uint64_t value = leu64_pdecode(&p);
-	assert(p == (raw+8));
+	assert(p == (raw+sizeof(raw)));
+	return value;
+}
+
+static inline int32_t bufstream_read_leu32(struct bufstream* bs)
+{
+	uint8_t raw[4];
+	bufstream_read(bs, raw, sizeof raw);
+	const uint8_t* p = raw;
+	int32_t value = leu32_pdecode(&p);
+	assert(p == (raw+sizeof(raw)));
 	return value;
 }
 
@@ -98,6 +108,7 @@ static inline void bs_read(struct bufstream* bs, uint8_t* data, size_t count) { 
 static inline uint16_t bs_read_u8(struct bufstream* bs)     { return bufstream_read_u8(bs); }
 static inline uint16_t bs_read_leu16(struct bufstream* bs)  { return bufstream_read_leu16(bs); }
 static inline int64_t  bs_read_leu64(struct bufstream* bs)  { return bufstream_read_leu64(bs); }
+static inline int32_t  bs_read_leu32(struct bufstream* bs)  { return bufstream_read_leu32(bs); }
 static inline int64_t  bs_read_leb128(struct bufstream* bs) { return bufstream_read_leb128(bs); }
 static inline void     bs_skip(struct bufstream* bs, int count) { bufstream_skip(bs, count); }
 

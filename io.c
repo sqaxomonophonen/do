@@ -226,7 +226,6 @@ int io_close(int file_id)
 	return 0;
 }
 
-#if 0
 static int pwriten(int posix_fd, const void* ptr, int64_t count, int64_t offset)
 {
 	int64_t remaining = count;
@@ -245,7 +244,6 @@ static int pwriten(int posix_fd, const void* ptr, int64_t count, int64_t offset)
 	assert(remaining == 0);
 	return 0;
 }
-#endif
 
 static int preadn(int posix_fd, void* ptr, int64_t count, int64_t offset)
 {
@@ -273,6 +271,19 @@ int io_pread(int file_id, void* ptr, int64_t count, int64_t offset)
 	const int posix_fd = file_id_to_posix_fd(file_id);
 	G_UNLOCK();
 	const int e = preadn(posix_fd, ptr, count, offset);
+	if (e == -1) {
+		return IO_READ_ERROR;
+	} else {
+		return 0;
+	}
+}
+
+int io_pwrite(int file_id, const void* ptr, int64_t count, int64_t offset)
+{
+	G_LOCK();
+	const int posix_fd = file_id_to_posix_fd(file_id);
+	G_UNLOCK();
+	const int e = pwriten(posix_fd, ptr, count, offset);
 	if (e == -1) {
 		return IO_READ_ERROR;
 	} else {

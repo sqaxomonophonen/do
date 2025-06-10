@@ -59,6 +59,7 @@ int io_open(const char* path, enum io_open_mode, int64_t* out_filesize);
 int io_close(int file_id);
 
 int io_pread(int file_id, void* ptr, int64_t count, int64_t offset);
+int io_pwrite(int file_id, const void* ptr, int64_t count, int64_t offset);
 
 int io_listen_tcp(int bind_port, int port_id, io_echo);
 // start listening on :bind_port (TODO addr?).

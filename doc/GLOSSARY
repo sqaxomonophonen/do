@@ -49,9 +49,13 @@ kinds of snapshots in use:
 snapshotcache.data and snapshotcache.index collectively store snapshots on
 disk. these files can be regenerated from the DO_JAM_JOURNAL file.
 
-: insignia
-random-ish number that is used to quickly detect if a snapshotcache file
-belongs to the DO_JAM_JOURNAL.
+: wax
+random 64-bit number that is used to "seal" a set of files that belong
+together; when do closes it generates a new wax value and stores it in these
+files; DO_JAM_JOURNAL, and derived files (snapshotcache, activitycache). this
+is used to detect "within reasonable doubt" if these files have been carelessly
+lumped together, diverged from each other, etc. also, when do opens a set of
+files, it clears the wax value to 0 (make_wax() never returns 0).
 
 : cursor vs caret
 "caret" is used for your "text editing caret" (also sometimes called a

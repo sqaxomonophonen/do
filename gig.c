@@ -23,15 +23,17 @@
 #include "webserv.h"
 #endif
 
-#define DOJJ_MAGIC ("DOJJ0001")
-#define DOSI_MAGIC ("DOSI0001")
-#define DOSD_MAGIC ("DOSD0001")
+#define DO_JAM_JOURNAL_MAGIC      ("DOJJ0001")
+#define SNAPSHOTCACHE_INDEX_MAGIC ("DOSI0001")
+#define SNAPSHOTCACHE_DATA_MAGIC  ("DOSD0001")
+#define ACTIVITYCACHE_MAGIC       ("DOAC0001")
 #define DO_FORMAT_VERSION (10000)
 #define JOURNAL_HEADER_SIZE (8*4)
 #define SYNC (0xfa)
 #define FILENAME_JOURNAL              "DO_JAM_JOURNAL"
 #define FILENAME_SNAPSHOTCACHE_DATA   "snapshotcache.data"
 #define FILENAME_SNAPSHOTCACHE_INDEX  "snapshotcache.index"
+#define FILENAME_ACTIVITYCACHE        "activitycache"
 #define INDEX_HEADER_SIZE     (16L)
 #define INDEX_ENTRY_SIZE_LOG2 (4)
 #define INDEX_ENTRY_SIZE      (1L << INDEX_ENTRY_SIZE_LOG2)
@@ -268,6 +270,7 @@ static struct {
 	struct jio* jio_journal;
 	struct jio* jio_snapshotcache_data;
 	struct jio* jio_snapshotcache_index;
+	struct jio* jio_activitycache;
 	//int64_t journal_time_zero_epoch_us;
 	int journal_snapshot_growth_threshold;
 	_Atomic(int64_t) jam_time_offset_us;
@@ -1745,11 +1748,6 @@ int doc_iterator_next(struct doc_iterator* it)
 	return 1;
 }
 
-static uint64_t make_insignia(void)
-{
-	return get_microseconds_epoch(); // FIXME a random number might be slightly better here (no biggie)
-}
-
 static int is_snapshotcache_index_size_valid(int64_t sz)
 {
 	if (sz < INDEX_HEADER_SIZE) return 0;
@@ -1762,7 +1760,7 @@ static int get_num_snapshotcache_index_entries_from_size(int64_t sz)
 	return (sz-INDEX_HEADER_SIZE) >> INDEX_ENTRY_SIZE_LOG2;
 }
 
-static int snapshotcache_open(const char* dir, uint64_t journal_insignia)
+static int snapshotcache_open(const char* dir, uint64_t journal_wax)
 {
 	char pathbuf[1<<14];
 
@@ -1793,7 +1791,7 @@ static int snapshotcache_open(const char* dir, uint64_t journal_insignia)
 		return FMTERR(pathbuf, "invalid index size");
 	}
 
-	// read&check snapshotcache headers and insignias
+	// read&check snapshotcache headers and wax
 
 	uint8_t idx_header[16];
 	err = jio_pread(jidx, idx_header, sizeof idx_header, 0);
@@ -1811,38 +1809,38 @@ static int snapshotcache_open(const char* dir, uint64_t journal_insignia)
 		return IOERR(FILENAME_SNAPSHOTCACHE_DATA, err);
 	}
 
-	assert(strlen(DOSI_MAGIC) == 8);
-	if (memcmp(idx_header, DOSI_MAGIC, 8) != 0) {
+	assert(strlen(SNAPSHOTCACHE_INDEX_MAGIC) == 8);
+	if (memcmp(idx_header, SNAPSHOTCACHE_INDEX_MAGIC, 8) != 0) {
 		jio_close(jidx);
 		jio_close(jdat);
 		return FMTERR(FILENAME_SNAPSHOTCACHE_INDEX, "magic missing from header");
 	}
 
-	const uint64_t index_insignia = leu64_decode(&idx_header[8]);
-	if (index_insignia != journal_insignia) {
+	const uint64_t index_wax = leu64_decode(&idx_header[8]);
+	if (index_wax != journal_wax) {
 		jio_close(jidx);
 		jio_close(jdat);
-		return FMTERR(FILENAME_SNAPSHOTCACHE_INDEX, "insignia mismatch");
+		return FMTERR(FILENAME_SNAPSHOTCACHE_INDEX, "wax mismatch");
 	}
 
-	assert(strlen(DOSD_MAGIC) == 8);
-	if (memcmp(dat_header, DOSD_MAGIC, 8) != 0) {
+	assert(strlen(SNAPSHOTCACHE_DATA_MAGIC) == 8);
+	if (memcmp(dat_header, SNAPSHOTCACHE_DATA_MAGIC, 8) != 0) {
 		jio_close(jidx);
 		jio_close(jdat);
 		return FMTERR(FILENAME_SNAPSHOTCACHE_DATA, "magic missing from header");
 	}
 
-	const uint64_t data_insignia = leu64_decode(&dat_header[8]);
-	if (data_insignia != journal_insignia) {
+	const uint64_t data_wax = leu64_decode(&dat_header[8]);
+	if (data_wax != journal_wax) {
 		jio_close(jidx);
 		jio_close(jdat);
-		return FMTERR(FILENAME_SNAPSHOTCACHE_DATA, "insignia mismatch");
+		return FMTERR(FILENAME_SNAPSHOTCACHE_DATA, "wax mismatch");
 	}
 
 	return 0;
 }
 
-static int snapshotcache_create(const char* dir, uint64_t journal_insignia)
+static int snapshotcache_create(const char* dir)
 {
 	char pathbuf[1<<14];
 
@@ -1855,8 +1853,8 @@ static int snapshotcache_create(const char* dir, uint64_t journal_insignia)
 	igo.jio_snapshotcache_data = jdat;
 	uint8_t** bb = &hg.bb_arr;
 	arrreset(*bb);
-	bb_append(bb, DOSD_MAGIC, strlen(DOSD_MAGIC));
-	bb_append_leu64(bb, journal_insignia);
+	bb_append(bb, SNAPSHOTCACHE_DATA_MAGIC, strlen(SNAPSHOTCACHE_DATA_MAGIC));
+	bb_append_leu64(bb, /*wax=*/0);
 	jio_flush_bb(jdat, bb);
 
 	STATIC_PATH_JOIN(pathbuf, dir, FILENAME_SNAPSHOTCACHE_INDEX);
@@ -1866,8 +1864,8 @@ static int snapshotcache_create(const char* dir, uint64_t journal_insignia)
 		return IOERR(FILENAME_SNAPSHOTCACHE_INDEX, err);
 	}
 	igo.jio_snapshotcache_index = jidx;
-	bb_append(bb, DOSI_MAGIC, strlen(DOSI_MAGIC));
-	bb_append_leu64(bb, journal_insignia);
+	bb_append(bb, SNAPSHOTCACHE_INDEX_MAGIC, strlen(SNAPSHOTCACHE_INDEX_MAGIC));
+	bb_append_leu64(bb, /*wax=*/0);
 	jio_flush_bb(jidx, bb);
 
 	return 0;
@@ -2119,6 +2117,7 @@ static void maybe_adjust_jam_time(int64_t jam_ts)
 			(long long)offset_us,
 			(long long)new_offset_us);
 	}
+	assert(get_monotonic_jam_time_us() >= 0);
 }
 
 int peer_spool_raw_journal_into_upstream_snapshot(void* data, int64_t count)
@@ -2151,7 +2150,7 @@ int peer_spool_raw_journal_into_upstream_snapshot(void* data, int64_t count)
 	while (bs.offset < num_total) {
 		const int64_t session_id     =  bs_read_leb128(&bs);
 		const int64_t tracer         =  bs_read_leb128(&bs);
-		/*const int64_t not_befor_ts =*/bs_read_leb128(&bs); // ignored
+		/*const int64_t not_before_ts=*/bs_read_leb128(&bs); // ignored
 		const int64_t num_bytes      =  bs_read_leb128(&bs);
 		if (tracer <= prev_tracer) {
 			fprintf(stderr, "unordered tracer sequence [%ld,%ld]\n", (long)prev_tracer, (long)tracer);
@@ -2219,6 +2218,7 @@ int host_tick(void)
 		did_work = 1;
 		io_echo ec = ev.echo;
 		if (igo.jio_journal             && jio_ack(igo.jio_journal             , ec)) continue;
+		if (igo.jio_activitycache       && jio_ack(igo.jio_activitycache       , ec)) continue;
 		if (igo.jio_snapshotcache_data  && jio_ack(igo.jio_snapshotcache_data  , ec)) continue;
 		if (igo.jio_snapshotcache_index && jio_ack(igo.jio_snapshotcache_index , ec)) continue;
 		assert(!"unhandled event");
@@ -2346,6 +2346,59 @@ static void setup_jam_time(int64_t journal_time_zero_epoch_us)
 	atomic_store(&igo.jam_time_offset_us, offset_us);
 }
 
+static uint64_t make_wax(void)
+{
+	// XXX improve this?
+	srand((int)get_nanoseconds_monotonic());
+	assert(RAND_MAX >= 255);
+	union {
+		uint64_t u64;
+		uint8_t  u8[8];
+	} both;
+	for (int i=0; i<8; ++i) both.u8[i] = (uint8_t)abs(rand());
+	if (both.u64 == 0) {
+		// wax value zero has a special meaning and is used to detect errors,
+		// so never generate wax value zero
+		XXX(unlikely 1-in-2**64 event or bad code) // throw a warning for good measure
+		return 1;
+	} else {
+		return both.u64;
+	}
+}
+
+static void setwax_all(uint64_t setwax)
+{
+	#ifndef __EMSCRIPTEN__
+	uint8_t data[8];
+	uint8_t* p = data;
+	leu64_pencode(&p, setwax);
+	assert((p-data)==sizeof(data));
+	const int64_t offset = 8;
+	if (jio_pwrite(igo.jio_journal, data, sizeof data, offset) < 0) {
+		fprintf(stderr, "failed to write journal wax\n");
+	}
+	if (jio_pwrite(igo.jio_snapshotcache_data, data, sizeof data, offset) < 0) {
+		fprintf(stderr, "failed to write snapshotcache data wax\n");
+	}
+	if (jio_pwrite(igo.jio_snapshotcache_index, data, sizeof data, offset) < 0) {
+		fprintf(stderr, "failed to write snapshotcache index wax\n");
+	}
+	if (jio_pwrite(igo.jio_activitycache, data, sizeof data, offset) < 0) {
+		fprintf(stderr, "failed to write activitycache wax\n");
+	}
+	#endif
+}
+
+static void unwax_all(void)
+{
+	setwax_all(0);
+}
+
+static void rewax_all(void)
+{
+	setwax_all(make_wax());
+}
+
 static int setup_datadir(const char* dir)
 {
 	char pathbuf[1<<14];
@@ -2357,17 +2410,19 @@ static int setup_datadir(const char* dir)
 
 	// TODO setup journal jio for fdatasync?
 
-	const int64_t sz = jio_get_size(jj);
-	if (sz == 0) {
+	uint64_t wax = 0;
+
+	const int64_t jjsz = jio_get_size(jj);
+	if (jjsz == 0) {
 		uint8_t** bb = &hg.bb_arr;
 		arrreset(*bb);
-		bb_append(bb, DOJJ_MAGIC, strlen(DOJJ_MAGIC));
+		bb_append(bb, DO_JAM_JOURNAL_MAGIC, strlen(DO_JAM_JOURNAL_MAGIC));
+		assert(wax == 0);
+		bb_append_leu64(bb, wax);
 		bb_append_leu64(bb, DO_FORMAT_VERSION);
 		const int64_t now = get_microseconds_epoch();
 		setup_jam_time(now);
 		bb_append_leu64(bb, now);
-		const uint64_t insignia = make_insignia();
-		bb_append_leu64(bb, insignia);
 		assert(arrlen(*bb) == JOURNAL_HEADER_SIZE);
 		jio_flush_bb(jj, bb);
 		err = jio_get_error(jj);
@@ -2375,7 +2430,7 @@ static int setup_datadir(const char* dir)
 			return IOERR(FILENAME_JOURNAL, err);
 		}
 
-		err = snapshotcache_create(dir, insignia);
+		err = snapshotcache_create(dir);
 		if (err<0) {
 			dumperr();
 			return IOERR(FILENAME_JOURNAL, err);
@@ -2392,22 +2447,22 @@ static int setup_datadir(const char* dir)
 		uint8_t buf0[1<<8];
 		bufstream_init_from_jio(&bs0, jj, 0, buf0, sizeof buf0);
 		bs_read(&bs0, magic, sizeof magic);
-		if (memcmp(magic, DOJJ_MAGIC, 8) != 0) {
+		if (memcmp(magic, DO_JAM_JOURNAL_MAGIC, 8) != 0) {
 			return FMTERR(pathbuf, "invalid magic in journal header");
 		}
+		wax = bs_read_leu64(&bs0);
 		const int64_t do_format_version = bs_read_leu64(&bs0);
 		if (do_format_version != DO_FORMAT_VERSION) {
 			return FMTERR(pathbuf, "unknown do-format-version");
 		}
 		setup_jam_time(bs_read_leu64(&bs0));
-		const uint64_t insignia = bs_read_leu64(&bs0);
 		assert(bs0.offset == JOURNAL_HEADER_SIZE);
 
 		int64_t snapshot_jam_ts = -1;
 
 		int64_t journal_spool_offset = JOURNAL_HEADER_SIZE;
 		struct snapshot* snap = &hg.present_snapshot;
-		int err = snapshotcache_open(dir, insignia);
+		int err = snapshotcache_open(dir, wax);
 		if (err == IO_NOT_FOUND) {
 			// OK just spool journal from beginning
 		} else {
@@ -2442,6 +2497,50 @@ static int setup_datadir(const char* dir)
 			? snapshot_jam_ts
 			:0);
 	}
+
+	STATIC_PATH_JOIN(pathbuf, dir, FILENAME_ACTIVITYCACHE);
+	struct jio* ja = jio_open(pathbuf, IO_OPEN_OR_CREATE, igo.io_port_id, 16, &err);
+	const int64_t jasz = jio_get_size(ja);
+	if (jasz == 0) {
+		uint8_t** bb = &hg.bb_arr;
+		arrreset(*bb);
+		bb_append(bb, ACTIVITYCACHE_MAGIC, strlen(ACTIVITYCACHE_MAGIC));
+		bb_append_leu64(bb, /*wax=*/0);
+		jio_flush_bb(ja, bb);
+		err = jio_get_error(ja);
+		if (err<0) return IOERR(FILENAME_ACTIVITYCACHE, err);
+
+		if (jjsz > 0) {
+			TODO_NOW(rebuild activitycache from journal)
+		}
+	} else {
+		struct bufstream bs;
+		uint8_t buf[1<<8];
+		bufstream_init_from_jio(&bs, ja, 0, buf, sizeof buf);
+		uint8_t magic[8];
+		bs_read(&bs, magic, sizeof magic);
+		if (memcmp(magic, ACTIVITYCACHE_MAGIC, 8) != 0) {
+			return FMTERR(pathbuf, "invalid magic in activitycache header");
+		}
+
+		const int64_t acwax = bs_read_leu64(&bs);
+		if (acwax != wax) {
+			return FMTERR(FILENAME_ACTIVITYCACHE, "wax mismatch");
+		}
+
+		while (bs.offset < jasz) {
+			const int64_t timestamp = bs_read_leu64(&bs);
+			const int32_t artist_id = bs_read_leu32(&bs);
+			const int32_t weight = bs_read_leu32(&bs);
+		}
+
+		if (bs.offset != jasz) {
+			return FMTERR(FILENAME_ACTIVITYCACHE, "activitycache: bad EOF alignment");
+		}
+	}
+	igo.jio_activitycache = ja;
+
+	unwax_all();
 
 	return 0;
 }
@@ -2496,10 +2595,13 @@ void gig_unconfigure(void)
 	}
 	memset(&g, 0, sizeof g);
 
+	rewax_all();
+
 	// I/O globals (igo)
 	jio_close(igo.jio_journal);
 	jio_close(igo.jio_snapshotcache_data);
 	jio_close(igo.jio_snapshotcache_index);
+	jio_close(igo.jio_activitycache);
 	memset(&igo, 0, sizeof igo);
 
 	// host globals
@@ -2525,7 +2627,6 @@ void gig_set_journal_snapshot_growth_threshold(int t)
 
 void gig_init(void)
 {
-	//assert(thrd_success == mtx_init(&g.snap_mutex, mtx_plain));
 	#ifdef __EMSCRIPTEN__
 	igo.io_port_id = -1;
 	#else
@@ -2645,9 +2746,13 @@ void unsuspend_time(void)
 // test_gig.c); home/end; arrow up/down when going to a shorter line (currently
 // skips a line)
 
-// TODO: time travel
+// TODO: time travel, improved
 
 // TODO: optimize snapshot_copy() by using content hashing or maybe even some
 // merkel-chain stuff to avoid having to hash the entire document for every
 // single edit (although I'm okay with large docs, like stdlib.mie, being less
 // performant when editing them, so content hashing is probably fine)
+
+// TODO: optimize suspend_time_at(): the previous call should know which time
+// interval it ended up restoring, so if the following call is within the same
+// interval, it's a no-op and should return immediately

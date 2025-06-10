@@ -289,11 +289,8 @@ int jio_append(struct jio* jio, const void* ptr, int64_t size)
 	return 0;
 }
 
-// XXX memonly never set currently; change pread_ex() back into jio_pread() if
-// it sticks?
-int pread_ex(struct jio* jio, void* ptr, int64_t size, int64_t offset, int memonly)
+int jio_pread(struct jio* jio, void* ptr, int64_t size, int64_t offset)
 {
-	assert(!memonly);
 	// ignore read if an error has been signalled
 	if (jio->error < 0) return jio->error;
 	if (!((0L <= offset) && (offset <= jio->filesize))) {
@@ -353,13 +350,7 @@ int pread_ex(struct jio* jio, void* ptr, int64_t size, int64_t offset, int memon
 		read_from_backend = 1;
 	}
 
-	if (read_from_backend && memonly) {
-		jio->error = IO_READ_ERROR;
-		return jio->error;
-	}
-
 	if (read_from_backend) {
-		assert(!memonly);
 		assert(rr1>rr0);
 		#ifdef BLOCKING
 		if (-1 == pread(jio->file_id, rrp, (rr1-rr0), rr0)) {
@@ -393,17 +384,11 @@ int pread_ex(struct jio* jio, void* ptr, int64_t size, int64_t offset, int memon
 	return size;
 }
 
-int jio_pread(struct jio* jio, void* ptr, int64_t size, int64_t offset)
+int jio_pwrite(struct jio* jio, const void* ptr, int64_t size, int64_t offset)
 {
-	return pread_ex(jio, ptr, size, offset, 0);
+	XXX(jio_pwrite should potentially write to ringbuf or changes may be invisible to jio_pread)
+	return io_pwrite(jio->file_id, ptr, size, offset);
 }
-
-#if 0
-int jio_pread_memonly(struct jio* jio, void* ptr, int64_t size, int64_t offset)
-{
-	return pread_ex(jio, ptr, size, offset, 1);
-}
-#endif
 
 int jio_get_error(struct jio* jio)
 {
