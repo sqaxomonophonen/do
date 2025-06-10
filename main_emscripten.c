@@ -218,17 +218,17 @@ static void main_loop(void)
 	gl_render_gui_draw_lists();
 }
 
-int64_t get_nanoseconds_epoch(void)
+int64_t get_microseconds_epoch(void)
 {
-	return emscripten_get_now()*1e6;
+	return emscripten_get_now()*1e3;
 }
 
-int64_t get_nanoseconds(void)
+int64_t get_nanoseconds_monotonic(void)
 {
 	return (emscripten_get_now()-g.start_time)*1e6;
 }
 
-void sleep_nanoseconds(int64_t ns)
+void sleep_microseconds(int64_t us)
 {
 	assert(!"don't sleep");
 }

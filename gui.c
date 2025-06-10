@@ -46,7 +46,7 @@ struct pane {
 			int session_id;
 			int focus_id;
 			int splash4_comp, splash4_cache;
-			int cpick_on;
+			int colorpick_on;
 			// TODO presentation shader id? (can be built-in, or user-defined?)
 		} code;
 		struct {
@@ -182,8 +182,8 @@ static struct {
 	struct draw_list* draw_list_arr;
 	struct vertex* vertex_arr;
 	vertex_index* vertex_index_arr;
-	int64_t last_frame_time;
-	float fps;
+	int64_t last_frame_timestamp_ns;
+	double fps;
 	struct render_mode render_mode;
 	struct window* current_window;
 	int focus_sequence;
@@ -195,6 +195,17 @@ static struct {
 
 	char* gray_copybuf_arr;
 	struct colorchar* color_copybuf_arr;
+
+	unsigned   key_control :1;
+	unsigned   key_shift   :1;
+	unsigned   key_alt     :1;
+	unsigned   key_z       :1; // XXX should be remappable?
+
+	unsigned tt_is_suspended  :1;
+	unsigned tt_is_scrubbing  :1;
+	int64_t tt_range_ts0, tt_range_ts1;
+	double tt_time_velocity;
+	int64_t tt_timestamp_us;
 } g;
 
 static inline int make_focus_id(void)
@@ -324,7 +335,7 @@ static inline double gaussian(double v, double x)
 
 static int build_atlas(void)
 {
-	const int64_t t0 = get_nanoseconds();
+	const int64_t t0 = get_nanoseconds_monotonic();
 
 	struct font_config* fc = &g.font_config;
 
@@ -729,7 +740,7 @@ static int build_atlas(void)
 		}
 	}
 
-	const int64_t dt = get_nanoseconds()-t0;
+	const int64_t dt = get_nanoseconds_monotonic()-t0;
 
 	printf("atlas %d×%d, %zd rects, %d samplers, %d resizes, built in %.5fs\n",
 		atlas_width, atlas_height,
@@ -1212,10 +1223,10 @@ static void set_color_splash4(uint16_t splash4)
 
 static void update_fps(void)
 {
-	const int64_t t  = get_nanoseconds();
-	const int64_t dt = t - g.last_frame_time;
-	g.fps = 1.0f / ((float)dt * 1e-9f);
-	g.last_frame_time = t;
+	const int64_t t  = get_nanoseconds_monotonic();
+	const int64_t dt = t - g.last_frame_timestamp_ns;
+	g.last_frame_timestamp_ns = t;
+	g.fps = 1.0 / ((double)dt * 1e-9);
 	#if 0
 	printf("%f\n", g.fps);
 	#endif
@@ -1255,13 +1266,13 @@ void gui_begin_frame(void)
 	arrput(g.text_buffer_arr, 0); // terminate cstr
 }
 
-static void cpick_on(struct pane* p, int on)
+static void set_colorpick_on(struct pane* p, int on)
 {
 	assert(p->type == CODE);
-	p->code.cpick_on = on;
+	p->code.colorpick_on = on;
 }
 
-static void cpick_select(struct pane* p, int d)
+static void colorpick_select(struct pane* p, int d)
 {
 	assert(p->type == CODE);
 	int c = p->code.splash4_comp;
@@ -1279,38 +1290,38 @@ static void cpick_select(struct pane* p, int d)
 	p->code.splash4_comp = c;
 }
 
-static void cpick_add_comp(struct pane* p, int comp, int delta)
+static void colorpick_add_comp(struct pane* p, int comp, int delta)
 {
 	assert(p->type == CODE);
 	p->code.splash4_cache = splash4_comp_delta(p->code.splash4_cache, comp, delta);
 	mimf("%d~", p->code.splash4_cache);
 }
 
-static void cpick_set_comp(struct pane* p, int comp, int value)
+static void colorpick_set_comp(struct pane* p, int comp, int value)
 {
 	assert(p->type == CODE);
 	p->code.splash4_cache = splash4_comp_set(p->code.splash4_cache, comp, value);
 	mimf("%d~", p->code.splash4_cache);
 }
 
-static void cpick_add(struct pane* p, int delta)
+static void colorpick_add(struct pane* p, int delta)
 {
 	assert(p->type == CODE);
-	cpick_add_comp(p, p->code.splash4_comp, delta);
+	colorpick_add_comp(p, p->code.splash4_comp, delta);
 }
 
-static void cpick_set(struct pane* p, int value)
+static void colorpick_set(struct pane* p, int value)
 {
 	assert(p->type == CODE);
-	cpick_set_comp(p, p->code.splash4_comp, value);
+	colorpick_set_comp(p, p->code.splash4_comp, value);
 }
 
-static void cpick_add_rgb(struct pane* p, int delta)
+static void colorpick_add_rgb(struct pane* p, int delta)
 {
 	assert(p->type == CODE);
-	cpick_add_comp(p, 0, delta);
-	cpick_add_comp(p, 1, delta);
-	cpick_add_comp(p, 2, delta);
+	colorpick_add_comp(p, 0, delta);
+	colorpick_add_comp(p, 1, delta);
+	colorpick_add_comp(p, 2, delta);
 }
 
 static struct mim_state* get_session_mim_state(int session_id)
@@ -1352,17 +1363,82 @@ static struct document* get_doc(int book_id, int doc_id)
 	return NULL;
 }
 
+static void suspend_time(void)
+{
+	if (g.tt_is_suspended) return;
+	get_time_travel_range(&g.tt_range_ts0, &g.tt_range_ts1);
+	g.tt_timestamp_us = g.tt_range_ts1;
+	suspend_time_at(g.tt_timestamp_us);
+	g.tt_is_suspended = 1;
+}
+
+static void return_to_present(void)
+{
+	if (!g.tt_is_suspended) return;
+	unsuspend_time();
+	g.tt_is_suspended = 0;
+}
+
+static void toggle_time_scrub(void)
+{
+	suspend_time();
+	if (g.tt_is_scrubbing) {
+		TODO(begin time scrub)
+	} else {
+		TODO(end time scrub)
+	}
+	g.tt_is_scrubbing = !g.tt_is_scrubbing;
+}
+
+static void time_accelerate(int direction)
+{
+	if (g.fps <= 1.0) {
+		g.tt_time_velocity = 0;
+		return;
+	}
+
+	if (direction == 0) {
+		g.tt_time_velocity = 0;
+		return;
+	}
+
+	const double accel = 15.0;
+	const double drag_coeff = 500.0;
+	// FIXME make these configurable?
+
+	const double frame_duration = 1.0 / g.fps;
+	const double dtsqr = frame_duration * frame_duration;
+	const double vsqr = (g.tt_time_velocity * g.tt_time_velocity);
+	double drag = vsqr * drag_coeff;
+	if (g.tt_time_velocity < 0) drag = -drag;
+	const double a = accel * (double)direction - drag;
+	g.tt_time_velocity += a * dtsqr;
+
+	g.tt_timestamp_us += (double)g.tt_time_velocity * 1e6;
+	if (g.tt_timestamp_us < g.tt_range_ts0) g.tt_timestamp_us = g.tt_range_ts0;
+	if (g.tt_timestamp_us > g.tt_range_ts1) g.tt_timestamp_us = g.tt_range_ts1;
+
+	printf("tvel = %f\n", g.tt_time_velocity);
+	suspend_time_at(g.tt_timestamp_us);
+}
+
 static void handle_editor_input(struct pane* pane)
 {
 	assert(pane->type == CODE);
 	peer_begin_mim(pane->code.session_id);
 	int last_mod = 0;
 	for (int i=0; i<arrlen(g.key_buffer_arr); ++i) {
-		const int key = arrchkget(g.key_buffer_arr, i);
-		const int down = get_key_down(key);
-		const int mod = get_key_mod(key);
+		const int key  = arrchkget(g.key_buffer_arr, i);
+		const int down = !!get_key_down(key);
+		const int mod  = get_key_mod(key);
 		last_mod = mod;
 		const int code = get_key_code(key);
+
+		if (code == KEY_CONTROL) g.key_control = down;
+		if (code == KEY_SHIFT)   g.key_shift   = down;
+		if (code == KEY_ALT)     g.key_alt     = down;
+		if (code == 'Z')         g.key_z       = down;
+
 		if (down && mod==0) {
 			switch (code) {
 			// XXX
@@ -1386,19 +1462,19 @@ static void handle_editor_input(struct pane* pane)
 			}
 		}
 
-		const int is_cpick_mod = (mod == (MOD_CONTROL | MOD_ALT));
-		cpick_on(pane, is_cpick_mod);
-		if (down && is_cpick_mod) {
+		const int is_colorpick_mod = (g.key_control && g.key_alt && !g.key_shift);
+		set_colorpick_on(pane, is_colorpick_mod);
+		if (down && is_colorpick_mod) {
 			switch (code) {
-			case KEY_ARROW_LEFT : cpick_select(pane  , -1); break;
-			case KEY_ARROW_RIGHT: cpick_select(pane  ,  1); break;
-			case KEY_ARROW_UP   : cpick_add(pane     ,  1); break;
-			case KEY_ARROW_DOWN : cpick_add(pane     , -1); break;
-			case KEY_PAGE_UP    : cpick_add_rgb(pane ,  1); break;
-			case KEY_PAGE_DOWN  : cpick_add_rgb(pane , -1); break;
+			case KEY_ARROW_LEFT : colorpick_select(pane  , -1); break;
+			case KEY_ARROW_RIGHT: colorpick_select(pane  ,  1); break;
+			case KEY_ARROW_UP   : colorpick_add(pane     ,  1); break;
+			case KEY_ARROW_DOWN : colorpick_add(pane     , -1); break;
+			case KEY_PAGE_UP    : colorpick_add_rgb(pane ,  1); break;
+			case KEY_PAGE_DOWN  : colorpick_add_rgb(pane , -1); break;
 			}
 			if (('0' <= code) && (code <= '9')) {
-				cpick_set(pane, code-'0');
+				colorpick_set(pane, code-'0');
 			}
 		}
 
@@ -1414,6 +1490,9 @@ static void handle_editor_input(struct pane* pane)
 				mimf("0x");
 			}
 			if (code=='V') do_paste=1;
+			if (code=='Z') suspend_time();
+			if (code=='.') toggle_time_scrub();
+			if (code==',') return_to_present();
 		}
 
 		if (down && (mod==(MOD_CONTROL|MOD_SHIFT))) {
@@ -1498,6 +1577,14 @@ static void handle_editor_input(struct pane* pane)
 	}
 
 	peer_end_mim();
+
+	if (g.key_control && !g.key_shift && !g.key_alt && g.key_z) {
+		time_accelerate(-1);
+	} else if (g.key_control && g.key_shift && !g.key_alt && g.key_z) {
+		time_accelerate(1);
+	} else {
+		time_accelerate(0);
+	}
 }
 
 static void save(void)
@@ -1545,7 +1632,7 @@ static void draw_code_pane(struct pane* pane)
 		}
 	}
 
-	g.state.is_dimming = pane->code.cpick_on;
+	g.state.is_dimming = pane->code.colorpick_on;
 
 	struct rect pr = get_pane_rect(pane);
 
@@ -1755,7 +1842,7 @@ static void draw_code_pane(struct pane* pane)
 
 	g.state.is_dimming = 0;
 
-	if (pane->code.cpick_on) {
+	if (pane->code.colorpick_on) {
 		const int num_carets = arrlen(ms->caret_arr);
 		assert(arrlen(caret_coord_arr) == (2*num_carets));
 		for (int i=0; i<num_carets; ++i) {

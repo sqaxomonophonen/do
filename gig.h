@@ -113,7 +113,7 @@ struct document {
 	uint64_t snapshotcache_offset;
 	char* name_arr;
 	struct docchar* docchar_arr;
-	// (update document_copy() and snapshot_copy() when adding arr-fields here)
+	// (update snapshot_copy() when adding arr-fields here)
 };
 
 struct snapshot {
@@ -227,12 +227,22 @@ int alloc_artist_id(void);
 void free_artist_id(int);
 
 int copy_journal(void* dst, int64_t count, int64_t offset);
-void* get_present_snapshot_data(size_t* out_size);
+
 void commit_mim_to_host(int artist_id, int session_id, int64_t tracer, uint8_t* data, int count);
+
 int64_t restore_upstream_snapshot_from_data(void* data, size_t sz);
+
 int peer_spool_raw_journal_into_upstream_snapshot(void* data, int64_t count);
 
+void* get_present_snapshot_data(size_t* out_size);
 // returns snapshot data. you're responsible for free()ing it when done
+
+int64_t get_monotonic_jam_time_us(void);
+
+void get_time_travel_range(int64_t* out_ts0, int64_t* out_ts1);
+void render_activity(uint8_t* image1d, int image1d_width, int64_t ts0, int64_t ts1);
+void suspend_time_at(int64_t ts);
+void unsuspend_time(void);
 
 #define GIG_H
 #endif

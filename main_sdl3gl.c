@@ -72,7 +72,7 @@ static int io_thread_run(void* usr)
 		did_work |= io_tick();
 		if (!did_work) {
 			// sleep 500µs when idle-ing
-			sleep_nanoseconds(500000L);
+			sleep_microseconds(500L);
 		}
 	}
 	return 0;

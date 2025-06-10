@@ -7,7 +7,7 @@
 #include "arg.h"
 #include "gig.h"
 
-int64_t get_nanoseconds(void)
+int64_t get_nanoseconds_monotonic(void)
 {
 	struct timespec t;
 	clock_gettime(CLOCK_MONOTONIC, &t);
@@ -24,7 +24,7 @@ int main(int argc, char** argv)
 	gig_init();
 	for (;;) {
 		gig_thread_tick();
-		sleep_nanoseconds(3000000L); // 3ms
+		sleep_microseconds(3000L); // 3ms
 	}
 	return EXIT_SUCCESS;
 }

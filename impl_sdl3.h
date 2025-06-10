@@ -1,36 +1,46 @@
 #include <SDL3/SDL.h>
 #include "gui.h"
 #include "utf8.h"
+#include "util.h"
 
 // this is fairly new?
 #ifndef SDLK_EXTENDED_MASK
 #define SDLK_EXTENDED_MASK          (1u << 29)
 #endif
 
-int64_t get_nanoseconds(void)
+static struct {
+	int exiting;
+} g0;
+
+THREAD_LOCAL static struct {
+	int64_t last_ticks_ns;
+} tlg0;
+
+int64_t get_nanoseconds_monotonic(void)
 {
-	return SDL_GetTicksNS();
+	const int64_t ticks_ns = SDL_GetTicksNS();
+	// guarantee "monotonicness"
+	if (ticks_ns > tlg0.last_ticks_ns) {
+		tlg0.last_ticks_ns = ticks_ns;
+	}
+	return tlg0.last_ticks_ns;
 }
 
-int64_t get_nanoseconds_epoch(void)
+int64_t get_microseconds_epoch(void)
 {
 	SDL_Time ticks;
 	assert(SDL_GetCurrentTime(&ticks));
-	return ticks;
+	return ticks / 1000LL;
 }
 
-void sleep_nanoseconds(int64_t ns)
+void sleep_microseconds(int64_t us)
 {
-	SDL_DelayNS(ns);
+	SDL_DelayNS(us*1000LL);
 }
 
 struct window_extra {
 	SDL_Window* sdl_window;
 };
-
-static struct {
-	int exiting;
-} g0;
 
 static inline SDL_Window* get_sdl_window(struct window* window)
 {

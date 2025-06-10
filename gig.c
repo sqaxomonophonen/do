@@ -23,14 +23,18 @@
 #include "webserv.h"
 #endif
 
-#define DOJO_MAGIC ("DOJO0001")
+#define DOJJ_MAGIC ("DOJJ0001")
 #define DOSI_MAGIC ("DOSI0001")
 #define DOSD_MAGIC ("DOSD0001")
 #define DO_FORMAT_VERSION (10000)
+#define JOURNAL_HEADER_SIZE (8*4)
 #define SYNC (0xfa)
 #define FILENAME_JOURNAL              "DO_JAM_JOURNAL"
 #define FILENAME_SNAPSHOTCACHE_DATA   "snapshotcache.data"
 #define FILENAME_SNAPSHOTCACHE_INDEX  "snapshotcache.index"
+#define INDEX_HEADER_SIZE     (16L)
+#define INDEX_ENTRY_SIZE_LOG2 (4)
+#define INDEX_ENTRY_SIZE      (1L << INDEX_ENTRY_SIZE_LOG2)
 
 static int match_fundament(const char* s)
 {
@@ -264,8 +268,9 @@ static struct {
 	struct jio* jio_journal;
 	struct jio* jio_snapshotcache_data;
 	struct jio* jio_snapshotcache_index;
-	int64_t journal_timestamp_start;
+	//int64_t journal_time_zero_epoch_us;
 	int journal_snapshot_growth_threshold;
+	_Atomic(int64_t) jam_time_offset_us;
 } igo; // I/O globals
 
 struct peer_state {
@@ -301,18 +306,25 @@ static struct {
 	int my_artist_id;
 	uint8_t* bb_arr;
 	int mim_session_id;
+
 	struct snapshot upstream_snapshot;
 	// "upstream snapshot" is the latest snapshot received from the host
+
 	struct snapshot fiddle_snapshot;
 	// "fiddle snapshot" is based on "upstream snapshot" but used for applying
 	// edits; to run&verify code edits before pushing them to the host, but
 	// also (optionally?) to see edits before receiving confirmation from the
 	// host (waiting for roundtrip latency and all)
+
+	struct snapshot jiggawatt_snapshot;
+
 	int64_t journal_cursor;
 	double artificial_mim_latency_mean;
 	double artificial_mim_latency_variance;
 	int64_t tracer_sequence;
 	uint8_t* unackd_mimbuf_arr;
+
+	unsigned is_time_travelling   :1;
 } pg; // peer globals
 
 THREAD_LOCAL static struct {
@@ -348,7 +360,7 @@ int peer_tick(void)
 	assert(g.is_peer);
 
 	if (pg.journal_cursor == 0) {
-		pg.journal_cursor = 8*3; // XXX hack to skip header...
+		pg.journal_cursor = JOURNAL_HEADER_SIZE;
 	}
 	const int64_t jc0 = pg.journal_cursor;
 	if (g.is_peer && g.is_host) {
@@ -465,7 +477,7 @@ void free_artist_id(int artist_id)
 
 struct snapshot* get_snapshot(void)
 {
-	return &pg.fiddle_snapshot;
+	return pg.is_time_travelling ? &pg.jiggawatt_snapshot : &pg.fiddle_snapshot;
 }
 
 FORMATPRINTF1
@@ -745,6 +757,18 @@ static int mimex_matches(struct mimexscanner* s, const char* cmd, const char* fm
 	return !s->has_error;
 }
 
+#if 0
+static inline int64_t get_journal_timestamp_us(void)
+{
+	return (get_microseconds_epoch() - igo.journal_time_zero_epoch_us);
+}
+#endif
+
+int64_t get_monotonic_jam_time_us(void)
+{
+	return atomic_load(&igo.jam_time_offset_us) + get_microseconds_monotonic();
+}
+
 // parses a mim message, typically written by mimf()/mim8()
 static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes)
 {
@@ -774,7 +798,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 	int arg_tag = -1;
 	int arg_num = -1;
 	int motion_cmd = -1;
-	const int64_t now = get_nanoseconds();
+	const int64_t now = get_monotonic_jam_time_us();
 	int chr=0;
 	uint16_t u16val=0;
 	const char* ex0 = NULL;
@@ -1529,7 +1553,7 @@ int copy_journal(void* dst, int64_t count, int64_t offset)
 	return jio_pread(igo.jio_journal, dst, count, offset);
 }
 
-static void snapshotcache_push(struct snapshot* snap, uint64_t journal_offset)
+static void snapshotcache_push(struct snapshot* snap, uint64_t journal_offset, int64_t jam_ts)
 {
 	struct jio* jdat = igo.jio_snapshotcache_data;
 	struct jio* jidx = igo.jio_snapshotcache_index;
@@ -1564,6 +1588,7 @@ static void snapshotcache_push(struct snapshot* snap, uint64_t journal_offset)
 
 	const int64_t snapshot_manifest_offset = jdat0 + arrlen(*bb);
 	bb_append_u8(bb, SYNC);
+	bb_append_leb128(bb, journal_offset);
 	bb_append_leb128(bb, num_books);
 	bb_append_leb128(bb, num_documents);
 	bb_append_leb128(bb, num_mim_states);
@@ -1583,10 +1608,9 @@ static void snapshotcache_push(struct snapshot* snap, uint64_t journal_offset)
 
 	arrreset(*bb);
 
-	// write index triplet
-	bb_append_leu64(bb, get_nanoseconds_epoch()); // XXX correct timestamp?
+	// write index tuple
+	bb_append_leu64(bb, jam_ts);
 	bb_append_leu64(bb, snapshot_manifest_offset);
-	bb_append_leu64(bb, journal_offset);
 	jio_flush_bb(jidx, bb);
 
 	igo.journal_offset_at_last_snapshotcache_push = journal_offset;
@@ -1661,7 +1685,7 @@ void peer_end_mim(void)
 		const double scalar = 1.0 / (double)RAND_MAX;
 		for (int i=0; i<12; ++i) uacc += (double)rand() * scalar;
 		double dt = (uacc * pg.artificial_mim_latency_variance) + pg.artificial_mim_latency_mean;
-		not_before_ts = get_nanoseconds_epoch() + (int64_t)(dt*1e9);
+		not_before_ts = get_nanoseconds_monotonic() + (int64_t)(dt*1e9);
 	}
 
 	uint8_t** bb = &pg.bb_arr;
@@ -1723,18 +1747,19 @@ int doc_iterator_next(struct doc_iterator* it)
 
 static uint64_t make_insignia(void)
 {
-	return get_nanoseconds_epoch(); // FIXME a random number might be slightly better here (no biggie)
+	return get_microseconds_epoch(); // FIXME a random number might be slightly better here (no biggie)
 }
 
 static int is_snapshotcache_index_size_valid(int64_t sz)
 {
-	return ((sz-16L) % 24L) == 0L;
+	if (sz < INDEX_HEADER_SIZE) return 0;
+	return ((sz-INDEX_HEADER_SIZE) & (INDEX_ENTRY_SIZE-1)) == 0L;
 }
 
 static int get_num_snapshotcache_index_entries_from_size(int64_t sz)
 {
 	assert(is_snapshotcache_index_size_valid(sz));
-	return (sz-16L) / 24L;
+	return (sz-INDEX_HEADER_SIZE) >> INDEX_ENTRY_SIZE_LOG2;
 }
 
 static int snapshotcache_open(const char* dir, uint64_t journal_insignia)
@@ -1963,7 +1988,7 @@ int64_t restore_upstream_snapshot_from_data(void* data, size_t sz)
 	return journal_cursor;
 }
 
-static int restore_snapshot_from_disk(struct snapshot* snap, uint64_t snapshot_manifest_offset)
+static int restore_snapshot_from_disk(struct snapshot* snap, uint64_t snapshot_manifest_offset, int64_t* out_journal_offset)
 {
 	memset(snap, 0, sizeof *snap);
 
@@ -1976,6 +2001,9 @@ static int restore_snapshot_from_disk(struct snapshot* snap, uint64_t snapshot_m
 	uint8_t sync = bs_read_u8(&bs0);
 	const char* path = FILENAME_SNAPSHOTCACHE_DATA;
 	if (sync != SYNC) return FMTERR(path, "expected SYNC");
+
+	const int64_t journal_offset      = bs_read_leb128(&bs0);
+	if (out_journal_offset) *out_journal_offset = journal_offset;
 
 	const int64_t num_books      = bs_read_leb128(&bs0);
 	const int64_t num_documents  = bs_read_leb128(&bs0);
@@ -2025,7 +2053,7 @@ static int can_restore_latest_snapshot(void)
 	return get_num_snapshotcache_index_entries_from_size(sz) > 0;
 }
 
-static int restore_latest_snapshot(struct snapshot* snap, int64_t* out_journal_offset)
+static int snapshot_restore_latest_from_cache(struct snapshot* snap, int64_t* out_journal_offset, int64_t* out_jam_ts)
 {
 	if (!can_restore_latest_snapshot()) {
 		return FMTERR(FILENAME_SNAPSHOTCACHE_INDEX, "bad index file");
@@ -2037,16 +2065,16 @@ static int restore_latest_snapshot(struct snapshot* snap, int64_t* out_journal_o
 	struct bufstream bs0;
 	uint8_t buf0[1<<8];
 	bufstream_init_from_jio(&bs0, jidx, o, buf0, sizeof buf0);
+	const int64_t jam_ts = bs_read_leu64(&bs0);
+	if (out_jam_ts) *out_jam_ts = jam_ts;
 	const uint64_t snapshot_manifest_offset = bs_read_leu64(&bs0);
-	const uint64_t journal_offset = bs_read_leu64(&bs0);
 	if (bs0.error) {
 		return IOERR(FILENAME_SNAPSHOTCACHE_INDEX, bs0.error);
 	}
-	if (out_journal_offset) *out_journal_offset = journal_offset;
-	return restore_snapshot_from_disk(snap, snapshot_manifest_offset);
+	return restore_snapshot_from_disk(snap, snapshot_manifest_offset, out_journal_offset);
 }
 
-static int spool_raw_journal_bs(struct snapshot* snap, struct bufstream* bs, int64_t until_offset, int64_t* out_max_tracer)
+static int spool_raw_journal_bs(struct snapshot* snap, struct bufstream* bs, int64_t until_offset, int64_t until_timestamp, int64_t* out_max_tracer, int64_t* out_max_jam_ts)
 {
 	static uint8_t* mimbuf_arr = NULL;
 
@@ -2056,7 +2084,9 @@ static int spool_raw_journal_bs(struct snapshot* snap, struct bufstream* bs, int
 			return FMTERR(FILENAME_JOURNAL, "expected SYNC");
 		}
 		const int64_t timestamp_us = bs_read_leb128(bs);
-		(void)timestamp_us; // XXX? remove?
+		if ((until_timestamp >= 0) && (timestamp_us > until_timestamp)) {
+			break;
+		}
 		const int64_t artist_id = bs_read_leb128(bs);
 		const int64_t session_id = bs_read_leb128(bs);
 		const int64_t tracer = bs_read_leb128(bs);
@@ -2070,10 +2100,25 @@ static int spool_raw_journal_bs(struct snapshot* snap, struct bufstream* bs, int
 		if (e<0) return e;
 	}
 
-	if (bs->offset != until_offset) {
+	if ((until_timestamp < 0) && (bs->offset != until_offset)) {
 		return FMTERR(FILENAME_JOURNAL, "expected to spool journal until end-of-file");
 	}
 	return 0;
+}
+
+static void maybe_adjust_jam_time(int64_t jam_ts)
+{
+	assert(jam_ts >= 0);
+	const int64_t offset_us = atomic_load(&igo.jam_time_offset_us);
+	const int64_t now = get_microseconds_monotonic();
+	if (jam_ts > (now+offset_us)) {
+		// now + offset = jam_ts
+		const int64_t new_offset_us = jam_ts - now;
+		atomic_store(&igo.jam_time_offset_us, new_offset_us);
+		fprintf(stderr, "WARNING: funky timestamps, changing jam_time_offset_us from %lld to %lld\n",
+			(long long)offset_us,
+			(long long)new_offset_us);
+	}
 }
 
 int peer_spool_raw_journal_into_upstream_snapshot(void* data, int64_t count)
@@ -2084,7 +2129,9 @@ int peer_spool_raw_journal_into_upstream_snapshot(void* data, int64_t count)
 	bufstream_init_from_memory(&bs, data, count);
 	int64_t max_tracer = -1;
 	struct snapshot* upsnap = &pg.upstream_snapshot;
-	const int e = spool_raw_journal_bs(upsnap, &bs, count, &max_tracer);
+	int64_t max_jam_ts = 0;
+	const int e = spool_raw_journal_bs(upsnap, &bs, count, -1, &max_tracer, &max_jam_ts);
+	maybe_adjust_jam_time(max_jam_ts);
 	if (e<0) {
 		dumperr();
 		fprintf(stderr, "spool_raw_journal_bs() of %d bytes => %d:\n", (int)count, e);
@@ -2146,8 +2193,8 @@ void commit_mim_to_host(int artist_id, int session_id, int64_t tracer, uint8_t* 
 	uint8_t** bb = &pg.bb_arr;
 	arrreset(*bb);
 	bb_append_u8(bb, SYNC);
-	const int64_t journal_timestamp = (get_nanoseconds() - igo.journal_timestamp_start)/1000LL;
-	bb_append_leb128(bb, journal_timestamp);
+	const int64_t ts = get_monotonic_jam_time_us();
+	bb_append_leb128(bb, ts);
 	bb_append_leb128(bb, artist_id);
 	bb_append_leb128(bb, session_id);
 	bb_append_leb128(bb, tracer);
@@ -2156,7 +2203,7 @@ void commit_mim_to_host(int artist_id, int session_id, int64_t tracer, uint8_t* 
 	jio_flush_bb(jj, bb);
 	const int64_t jsz = jio_get_size(jj);
 	if (it_is_time_for_a_snapshotcache_push(jsz)) {
-		snapshotcache_push(snap, jsz);
+		snapshotcache_push(snap, jsz, ts);
 	}
 }
 
@@ -2208,7 +2255,7 @@ int host_tick(void)
 			const int64_t session_id = bs_read_leb128(&bs);
 			const int64_t tracer = bs_read_leb128(&bs);
 			const int64_t not_before_ts  = bs_read_leb128(&bs);
-			const int is_released = (not_before_ts == 0) || (get_nanoseconds_epoch() > not_before_ts);
+			const int is_released = (not_before_ts == 0) || (get_nanoseconds_monotonic() > not_before_ts);
 			if (!is_released) break;
 			const int64_t num_bytes  = bs_read_leb128(&bs);
 			const int64_t o1 = bs.offset;
@@ -2292,6 +2339,12 @@ static void setup_default_stub(void)
 	host_end_mim();
 }
 
+static void setup_jam_time(int64_t journal_time_zero_epoch_us)
+{
+	const int64_t jam_time_now_us = (get_microseconds_epoch() - journal_time_zero_epoch_us);
+	const int64_t offset_us = jam_time_now_us - get_microseconds_monotonic();
+	atomic_store(&igo.jam_time_offset_us, offset_us);
+}
 
 static int setup_datadir(const char* dir)
 {
@@ -2308,17 +2361,19 @@ static int setup_datadir(const char* dir)
 	if (sz == 0) {
 		uint8_t** bb = &hg.bb_arr;
 		arrreset(*bb);
-		bb_append(bb, DOJO_MAGIC, strlen(DOJO_MAGIC));
+		bb_append(bb, DOJJ_MAGIC, strlen(DOJJ_MAGIC));
 		bb_append_leu64(bb, DO_FORMAT_VERSION);
+		const int64_t now = get_microseconds_epoch();
+		setup_jam_time(now);
+		bb_append_leu64(bb, now);
 		const uint64_t insignia = make_insignia();
 		bb_append_leu64(bb, insignia);
-		// TODO epoch timestamp?
+		assert(arrlen(*bb) == JOURNAL_HEADER_SIZE);
 		jio_flush_bb(jj, bb);
 		err = jio_get_error(jj);
 		if (err<0) {
 			return IOERR(FILENAME_JOURNAL, err);
 		}
-		igo.journal_timestamp_start = get_nanoseconds();
 
 		err = snapshotcache_create(dir, insignia);
 		if (err<0) {
@@ -2337,27 +2392,28 @@ static int setup_datadir(const char* dir)
 		uint8_t buf0[1<<8];
 		bufstream_init_from_jio(&bs0, jj, 0, buf0, sizeof buf0);
 		bs_read(&bs0, magic, sizeof magic);
-		if (memcmp(magic, DOJO_MAGIC, 8) != 0) {
+		if (memcmp(magic, DOJJ_MAGIC, 8) != 0) {
 			return FMTERR(pathbuf, "invalid magic in journal header");
 		}
 		const int64_t do_format_version = bs_read_leu64(&bs0);
 		if (do_format_version != DO_FORMAT_VERSION) {
 			return FMTERR(pathbuf, "unknown do-format-version");
 		}
+		setup_jam_time(bs_read_leu64(&bs0));
 		const uint64_t insignia = bs_read_leu64(&bs0);
+		assert(bs0.offset == JOURNAL_HEADER_SIZE);
 
-		int64_t journal_spool_offset = -1;
+		int64_t snapshot_jam_ts = -1;
 
+		int64_t journal_spool_offset = JOURNAL_HEADER_SIZE;
 		struct snapshot* snap = &hg.present_snapshot;
 		int err = snapshotcache_open(dir, insignia);
 		if (err == IO_NOT_FOUND) {
 			// OK just spool journal from beginning
 		} else {
 			if (can_restore_latest_snapshot()) {
-				err = restore_latest_snapshot(snap, &journal_spool_offset);
-				if (err<0) {
-					return err;
-				}
+				err = snapshot_restore_latest_from_cache(snap, &journal_spool_offset, &snapshot_jam_ts);
+				if (err<0) return err;
 				assert(journal_spool_offset > 0);
 			} else {
 				// spool from beginning
@@ -2365,19 +2421,26 @@ static int setup_datadir(const char* dir)
 		}
 
 		const int64_t jjsz = jio_get_size(jj);
-		if (journal_spool_offset > 0) {
-			if (journal_spool_offset  > jjsz) {
-				return FMTERR(FILENAME_JOURNAL, "journal spool offset past end-of-file");
-			}
-			bufstream_init_from_jio(&bs0, jj, journal_spool_offset, buf0, sizeof buf0);
+		if (journal_spool_offset > jjsz) {
+			return FMTERR(FILENAME_JOURNAL, "journal spool offset past end-of-file");
 		}
+		assert(journal_spool_offset >= JOURNAL_HEADER_SIZE);
+		bufstream_init_from_jio(&bs0, jj, journal_spool_offset, buf0, sizeof buf0);
 
-		if (spool_raw_journal_bs(snap, &bs0, jjsz, NULL) < 0) {
+		int64_t journal_jam_ts = -1;
+		if (spool_raw_journal_bs(snap, &bs0, jjsz, -1, NULL, &journal_jam_ts) < 0) {
 			return bs0.error;
 		}
 		if (bs0.error<0) {
 			return IOERR(FILENAME_JOURNAL, bs0.error);
 		}
+
+		maybe_adjust_jam_time(
+			 (journal_jam_ts>=0)
+			? journal_jam_ts
+			:(snapshot_jam_ts>=0)
+			? snapshot_jam_ts
+			:0);
 	}
 
 	return 0;
@@ -2450,8 +2513,8 @@ void gig_unconfigure(void)
 	arrfree(pg.unackd_mimbuf_arr);
 	snapshot_free(&pg.upstream_snapshot);
 	snapshot_free(&pg.fiddle_snapshot);
+	snapshot_free(&pg.jiggawatt_snapshot);
 	memset(&pg, 0, sizeof pg);
-
 }
 
 void gig_set_journal_snapshot_growth_threshold(int t)
@@ -2468,11 +2531,123 @@ void gig_init(void)
 	#else
 	igo.io_port_id = io_port_create();
 	#endif
-	gig_set_journal_snapshot_growth_threshold(5000);
+	gig_set_journal_snapshot_growth_threshold(2000);
 }
+
+void get_time_travel_range(int64_t* out_ts0, int64_t* out_ts1)
+{
+	assert(g.is_peer);
+	int64_t ts0;
+	if (g.is_host) {
+		ts0=0;
+	} else {
+		TODO_NOW(not implemented for peers) //ts0= ... how far back we have data?
+	}
+	const int64_t ts1=get_monotonic_jam_time_us();
+	assert(ts0 >= 0);
+	assert(ts1 >= ts0);
+	if (out_ts0) *out_ts0 = ts0;
+	if (out_ts1) *out_ts1 = ts1;
+}
+
+void render_activity(uint8_t* image1d, int image1d_width, int64_t ts0, int64_t ts1)
+{
+	// XXX test pattern
+	for (int i=0; i<image1d_width; ++i) {
+		image1d[i] = (i&4) ? 0xc0 : 0x40;
+	}
+	TODO(render activity)
+}
+
+static void suspend_time_ex(int64_t seek_ts)
+{
+	printf("seeking %lld\n", (long long)seek_ts);
+	if (seek_ts < 0) {
+		pg.is_time_travelling = 0;
+		return;
+	}
+	pg.is_time_travelling = 1;
+
+	struct snapshot* snap = &pg.jiggawatt_snapshot;
+	snapshot_free(snap);
+
+	struct jio* jidx = igo.jio_snapshotcache_index;
+	int64_t size = jio_get_size(jidx);
+	const int num = get_num_snapshotcache_index_entries_from_size(size);
+	int left = 0;
+	int right = num;
+	while (left < right) {
+		const int mid = (left + right) >> 1;
+		uint8_t entry[8];
+		if (jio_pread(jidx, entry, sizeof entry, (mid << INDEX_ENTRY_SIZE_LOG2)) < 0) {
+			fprintf(stderr, "pread error\n");
+			return;
+		}
+		struct bufstream bs;
+		bufstream_init_from_memory(&bs, entry, sizeof entry);
+		const int64_t jam_ts = bs_read_leu64(&bs);
+		if (jam_ts < seek_ts) {
+			left = mid + 1;
+		} else {
+			right = mid;
+		}
+	}
+	--left;
+	int64_t journal_spool_offset = JOURNAL_HEADER_SIZE;
+	if (left >= 0) {
+		uint8_t entry[INDEX_ENTRY_SIZE];
+		if (jio_pread(jidx, entry, sizeof entry, (left << INDEX_ENTRY_SIZE_LOG2)) < 0) {
+			fprintf(stderr, "pread error\n");
+			return;
+		}
+		struct bufstream bs;
+		bufstream_init_from_memory(&bs, entry, sizeof entry);
+		bs_read_leu64(&bs); // jam_ts
+		const uint64_t snapshot_manifest_offset = bs_read_leu64(&bs);
+		restore_snapshot_from_disk(snap, snapshot_manifest_offset, &journal_spool_offset);
+	}
+
+	struct jio* jj = igo.jio_journal;
+
+	const int64_t jjsz = jio_get_size(jj);
+	if (journal_spool_offset  > jjsz) {
+		fprintf(stderr, "journal spool offset past end-of-file\n");
+		return;
+	}
+
+	struct bufstream bs;
+	uint8_t buf0[1<<8];
+	bufstream_init_from_jio(&bs, jj, journal_spool_offset, buf0, sizeof buf0);
+	int64_t journal_jam_ts = -1;
+	if (spool_raw_journal_bs(snap, &bs, jjsz, seek_ts, NULL, &journal_jam_ts) < 0) {
+		fprintf(stderr, "spool error\n");
+		return;
+	}
+	if (bs.error<0) {
+		fprintf(stderr, "spool i/o error\n");
+		return;
+	}
+}
+
+void suspend_time_at(int64_t ts)
+{
+	assert(ts >= 0);
+	suspend_time_ex(ts);
+}
+
+void unsuspend_time(void)
+{
+	suspend_time_ex(-1);
+}
+
 
 // TODO: caret movement/adjustment improvements (reinforce with tests in
 // test_gig.c); home/end; arrow up/down when going to a shorter line (currently
 // skips a line)
 
 // TODO: time travel
+
+// TODO: optimize snapshot_copy() by using content hashing or maybe even some
+// merkel-chain stuff to avoid having to hash the entire document for every
+// single edit (although I'm okay with large docs, like stdlib.mie, being less
+// performant when editing them, so content hashing is probably fine)

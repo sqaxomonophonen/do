@@ -13,25 +13,27 @@
 #include "util.h"
 #include "stb_ds.h" // XXX?
 
-int64_t get_nanoseconds_epoch(void)
+int64_t get_microseconds_epoch(void)
 {
 	// XXX for testing purposes maybe make this "settable"?
 	struct timespec ts;
 	clock_gettime(CLOCK_REALTIME, &ts);
+	return (int64_t)ts.tv_sec * 1000000LL + (ts.tv_nsec / 1000LL);
+}
+
+int64_t get_nanoseconds_monotonic(void)
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
 	return (int64_t)ts.tv_sec * 1000000000LL + ts.tv_nsec;
 }
 
-int64_t get_nanoseconds(void)
+void sleep_microseconds(int64_t us)
 {
-	return get_nanoseconds_epoch();
-}
-
-void sleep_nanoseconds(int64_t ns)
-{
-	const int64_t one_billion = 1000000000LL;
+	const int64_t one_million = 1000000LL;
 	const struct timespec ts = {
-		.tv_nsec = ns % one_billion,
-		.tv_sec  = ns / one_billion,
+		.tv_nsec = (us % one_million) * 1000LL,
+		.tv_sec  = us / one_million,
 	};
 	nanosleep(&ts, NULL);
 }

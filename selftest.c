@@ -53,7 +53,7 @@
 
 void run_selftest(void)
 {
-	const int64_t t0 = get_nanoseconds();
+	const int64_t t0 = get_nanoseconds_monotonic();
 	utf8_unit_test();
 	leb128_unit_test();
 	path_unit_test();
@@ -61,6 +61,6 @@ void run_selftest(void)
 	#ifndef __EMSCRIPTEN__
 	webserv_selftest();
 	#endif
-	const int64_t dt = get_nanoseconds() - t0;
+	const int64_t dt = get_nanoseconds_monotonic() - t0;
 	printf("selftest took %.5fs\n", (double)dt * 1e-9);
 }

@@ -11,12 +11,12 @@
 #define PATH_IMPLEMENTATION
 #include "path.h"
 
-void sleep_nanoseconds(int64_t ns)
+void sleep_microseconds(int64_t us)
 {
-	const int64_t one_billion = 1000000000LL;
+	const int64_t one_million = 1000000LL;
 	const struct timespec ts = {
-		.tv_nsec = ns % one_billion,
-		.tv_sec  = ns / one_billion,
+		.tv_nsec = (us % one_million) * 1000LL,
+		.tv_sec  = us / one_million,
 	};
 	nanosleep(&ts, NULL);
 }
@@ -25,7 +25,7 @@ static int io_thread(void* usr)
 {
 	for (;;) {
 		io_tick();
-		sleep_nanoseconds(500000L); // 500µs
+		sleep_microseconds(500L);
 	}
 	return 0;
 }
