@@ -205,7 +205,6 @@ static struct {
 
 	unsigned tt_is_suspended  :1;
 	unsigned tt_is_scrubbing  :1;
-	int64_t tt_range_ts0, tt_range_ts1;
 	double tt_time_velocity;
 	int64_t tt_timestamp_us;
 } g;
@@ -1369,8 +1368,7 @@ static struct document* get_doc(int book_id, int doc_id)
 static void suspend_time(void)
 {
 	if (g.tt_is_suspended) return;
-	get_time_travel_range(&g.tt_range_ts0, &g.tt_range_ts1);
-	g.tt_timestamp_us = g.tt_range_ts1;
+	get_time_travel_range(NULL, &g.tt_timestamp_us);
 	suspend_time_at(g.tt_timestamp_us);
 	g.tt_is_suspended = 1;
 }
@@ -1418,8 +1416,10 @@ static void time_accelerate(int direction)
 	g.tt_time_velocity += a * dtsqr;
 
 	g.tt_timestamp_us += (double)g.tt_time_velocity * 1e6;
-	if (g.tt_timestamp_us < g.tt_range_ts0) g.tt_timestamp_us = g.tt_range_ts0;
-	if (g.tt_timestamp_us > g.tt_range_ts1) g.tt_timestamp_us = g.tt_range_ts1;
+	int64_t r0,r1;
+	get_time_travel_range(&r0, &r1);
+	if (g.tt_timestamp_us < r0) g.tt_timestamp_us = r0;
+	if (g.tt_timestamp_us > r1) g.tt_timestamp_us = r1;
 
 	printf("tvel = %f\n", g.tt_time_velocity);
 	suspend_time_at(g.tt_timestamp_us);
