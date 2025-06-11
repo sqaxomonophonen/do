@@ -93,6 +93,13 @@ enum key_state_flag {
 	KEY_IS_DOWN = (1<<30),
 };
 
+struct mouse_state {
+	uint32_t flags;
+	double x,y;
+	double dx,dy;
+	double wheel_x, wheel_y;
+};
+
 #define MOD_MASK (MOD_SHIFT | MOD_CONTROL | MOD_ALT | MOD_GUI)
 #define KEY_MASK ((1<<22)-1)
 
@@ -104,6 +111,8 @@ void gui_init(void);
 void gui_setup_gpu_resources(void);
 void gui_on_key(int);
 void gui_on_text(const char*);
+void gui_mouse_state(struct mouse_state);
+
 
 void gui_begin_frame(void);
 void gui_draw(struct window*);
@@ -163,6 +172,23 @@ struct draw_list {
 int gui_get_num_draw_lists(void);
 struct draw_list* gui_get_draw_list(int index);
 
+#define MB_DOWN(x)  (1<<(x))
+#define MB_FLIP(x)  ((0x100)<<(x))
+#define MB_CLICK(x) (MB_DOWN(x) | MB_FLIP(x))
+#define M_FLIPMASK  (0xff00)
+#define M_INSIDE    (0x10000)
+#define LMB (0)
+#define MMB (1)
+#define RMB (2)
+#define LMB_DOWN    MB_DOWN(LMB)
+#define MMB_DOWN    MB_DOWN(MMB)
+#define RMB_DOWN    MB_DOWN(RMB)
+#define LMB_FLIP    MB_FLIP(LMB)
+#define MMB_FLIP    MB_FLIP(MMB)
+#define RMB_FLIP    MB_FLIP(RMB)
+#define LMB_CLICK   MB_CLICK(LMB)
+#define MMB_CLICK   MB_CLICK(MMB)
+#define RMB_CLICK   MB_CLICK(RMB)
 
 #define TT(s)       ((s)<<2)
 #define TTMASK(s)   (TT((s)+1)-1)

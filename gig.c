@@ -1661,7 +1661,8 @@ void peer_end_mim(void)
 	assert(artist_id>0);
 	assert(session_id>0);
 
-	struct snapshot* snap = &pg.fiddle_snapshot;
+	const int tt = pg.is_time_travelling;
+	struct snapshot* snap = tt ? &pg.jiggawatt_snapshot : &pg.fiddle_snapshot;
 	(void)snapshot_get_or_create_mim_state_by_ids(snap, artist_id, session_id);
 	const int e = snapshot_spool(snap, data, num_bytes, artist_id, session_id);
 	if (e<0) fprintf(stderr, "SPOOL ERR/0 %d!\n", e);
@@ -1703,40 +1704,42 @@ void peer_end_mim(void)
 		mie_end_scrallox();
 	}
 
-	int64_t not_before_ts = 0;
-	// set not_before_ts to now plus added artificial latency if it's
-	// configured. not_before_ts=0 means "as soon as possible" (plus it takes
-	// up less space due to LEB128)
-	if ((pg.artificial_mim_latency_mean != 0) || (pg.artificial_mim_latency_variance != 0)) {
-		// using a simple approximation to generate a values from the normal
-		// distribution, see:
-		// https://en.wikipedia.org/wiki/Irwin%E2%80%93Hall_distribution#Approximating_a_Normal_distribution
-		double uacc = -6.0;
-		const double scalar = 1.0 / (double)RAND_MAX;
-		for (int i=0; i<12; ++i) uacc += (double)rand() * scalar;
-		double dt = (uacc * pg.artificial_mim_latency_variance) + pg.artificial_mim_latency_mean;
-		not_before_ts = get_nanoseconds_monotonic() + (int64_t)(dt*1e9);
-	}
-
-	uint8_t** bb = &pg.bb_arr;
-	arrreset(*bb);
-	bb_append_leb128(bb, session_id);
-	const int tracer = ++pg.tracer_sequence;
-	bb_append_leb128(bb, tracer);
-	bb_append_leb128(bb, not_before_ts);
-	bb_append_leb128(bb, num_bytes);
-	bb_append(bb, data, num_bytes);
-	if (g.is_host) {
-		if (ringbuf_write(&g.peer2host_mim_ringbuf, *bb, arrlen(*bb)) < 0) {
-			fprintf(stderr, "peer2host_mim_ringbuf is full!\n");
-			abort();
+	if (!tt) {
+		int64_t not_before_ts = 0;
+		// set not_before_ts to now plus added artificial latency if it's
+		// configured. not_before_ts=0 means "as soon as possible" (plus it takes
+		// up less space due to LEB128)
+		if ((pg.artificial_mim_latency_mean != 0) || (pg.artificial_mim_latency_variance != 0)) {
+			// using a simple approximation to generate a values from the normal
+			// distribution, see:
+			// https://en.wikipedia.org/wiki/Irwin%E2%80%93Hall_distribution#Approximating_a_Normal_distribution
+			double uacc = -6.0;
+			const double scalar = 1.0 / (double)RAND_MAX;
+			for (int i=0; i<12; ++i) uacc += (double)rand() * scalar;
+			double dt = (uacc * pg.artificial_mim_latency_variance) + pg.artificial_mim_latency_mean;
+			not_before_ts = get_nanoseconds_monotonic() + (int64_t)(dt*1e9);
 		}
-	}
-	uint8_t* p = arraddnptr(pg.unackd_mimbuf_arr, arrlen(*bb));
-	memcpy(p, *bb, arrlen(*bb));
 
-	if (!g.is_host) {
-		transmit_mim(session_id, tracer, data, num_bytes);
+		uint8_t** bb = &pg.bb_arr;
+		arrreset(*bb);
+		bb_append_leb128(bb, session_id);
+		const int tracer = ++pg.tracer_sequence;
+		bb_append_leb128(bb, tracer);
+		bb_append_leb128(bb, not_before_ts);
+		bb_append_leb128(bb, num_bytes);
+		bb_append(bb, data, num_bytes);
+		if (g.is_host) {
+			if (ringbuf_write(&g.peer2host_mim_ringbuf, *bb, arrlen(*bb)) < 0) {
+				fprintf(stderr, "peer2host_mim_ringbuf is full!\n");
+				abort();
+			}
+		}
+		uint8_t* p = arraddnptr(pg.unackd_mimbuf_arr, arrlen(*bb));
+		memcpy(p, *bb, arrlen(*bb));
+
+		if (!g.is_host) {
+			transmit_mim(session_id, tracer, data, num_bytes);
+		}
 	}
 }
 
@@ -2740,6 +2743,16 @@ void render_activity(uint8_t* image1d, int image1d_width, int64_t ts0, int64_t t
 {
 	memset(image1d, 0, image1d_width);
 
+	int64_t r0, r1;
+	get_time_travel_range(&r0, &r1);
+	int64_t t = ts0;
+	int64_t dt = (ts1-ts0) / image1d_width;
+	for (int i=0; i<image1d_width; t+=dt, ++i) {
+		if ((r0 <= t) && (t <= r1)) {
+			image1d[i] = 0x30;
+		}
+	}
+
 	if (ts0 >= ts1) return;
 
 	const int num = arrlen(pg.activitycache_entry_arr);
@@ -2790,7 +2803,6 @@ void render_activity(uint8_t* image1d, int image1d_width, int64_t ts0, int64_t t
 
 static void suspend_time_ex(int64_t seek_ts)
 {
-	printf("seeking %lld\n", (long long)seek_ts);
 	if (seek_ts < 0) {
 		pg.is_time_travelling = 0;
 		return;
@@ -2874,8 +2886,6 @@ void unsuspend_time(void)
 // test_gig.c); home/end; arrow up/down when going to a shorter line (currently
 // skips a line)
 
-// TODO: time travel, improved
-
 // TODO: optimize snapshot_copy() by using content hashing or maybe even some
 // merkel-chain stuff to avoid having to hash the entire document for every
 // single edit (although I'm okay with large docs, like stdlib.mie, being less
@@ -2884,3 +2894,6 @@ void unsuspend_time(void)
 // TODO: optimize suspend_time_at(): the previous call should know which time
 // interval it ended up restoring, so if the following call is within the same
 // interval, it's a no-op and should return immediately
+
+// TODO: perf problem: copy an entire line and insert to try and fill the
+// screen; stuff slows down when pasting... suspend_time_at() is also slow?

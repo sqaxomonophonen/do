@@ -185,11 +185,13 @@ static struct {
 	struct vertex* vertex_arr;
 	vertex_index* vertex_index_arr;
 	int64_t last_frame_timestamp_ns;
+	double time;
 	double fps;
 	struct render_mode render_mode;
 	struct window* current_window;
 	int focus_sequence;
 	int current_focus_id;
+	struct mouse_state mstate;
 	int* key_buffer_arr;
 	char* text_buffer_arr;
 	int is_dragging;
@@ -201,12 +203,17 @@ static struct {
 	unsigned   key_control :1;
 	unsigned   key_shift   :1;
 	unsigned   key_alt     :1;
-	unsigned   key_z       :1; // XXX should be remappable?
+	unsigned   key_left    :1;
+	unsigned   key_right   :1;
+	unsigned   key_up      :1;
+	unsigned   key_down    :1;
 
-	unsigned tt_is_suspended  :1;
 	unsigned tt_is_scrubbing  :1;
+	unsigned tt_is_suspended  :1;
+	unsigned tt_is_dragging   :1;
 	double tt_time_velocity;
 	int64_t tt_timestamp_us;
+	double tt_scale_log2;
 } g;
 
 static inline int make_focus_id(void)
@@ -886,6 +893,11 @@ void gui_on_text(const char* text)
 	assert(arrlen(g.text_buffer_arr) == (1+strlen(g.text_buffer_arr)));
 }
 
+void gui_mouse_state(struct mouse_state mstate)
+{
+	g.mstate = mstate;
+}
+
 static void set_blend_mode(enum blend_mode blend_mode)
 {
 	g.render_mode.blend_mode = blend_mode;
@@ -1226,6 +1238,8 @@ static void set_color_splash4(uint16_t splash4)
 static void update_fps(void)
 {
 	const int64_t t  = get_nanoseconds_monotonic();
+	g.time = (double)t * 1e-9;
+
 	const int64_t dt = t - g.last_frame_timestamp_ns;
 	g.last_frame_timestamp_ns = t;
 	g.fps = 1.0 / ((double)dt * 1e-9);
@@ -1365,29 +1379,18 @@ static struct document* get_doc(int book_id, int doc_id)
 	return NULL;
 }
 
-static void suspend_time(void)
+static double get_tt_scale(void)
 {
-	if (g.tt_is_suspended) return;
-	get_time_travel_range(NULL, &g.tt_timestamp_us);
-	suspend_time_at(g.tt_timestamp_us);
-	g.tt_is_suspended = 1;
+	return exp2(g.tt_scale_log2);
 }
 
-static void return_to_present(void)
+static double get_time_radius(void)
 {
-	if (!g.tt_is_suspended) return;
-	unsuspend_time();
-	g.tt_is_suspended = 0;
+	return 10.0 * get_tt_scale();
 }
 
 static void toggle_time_scrub(void)
 {
-	suspend_time();
-	if (g.tt_is_scrubbing) {
-		TODO(begin time scrub)
-	} else {
-		TODO(end time scrub)
-	}
 	g.tt_is_scrubbing = !g.tt_is_scrubbing;
 }
 
@@ -1398,9 +1401,20 @@ static void time_accelerate(int direction)
 		return;
 	}
 
-	if (direction == 0) {
+	const int do_funny_bug = 0;
+	if ((direction == 0) || (!do_funny_bug && ((direction*g.tt_time_velocity)<0))) {
 		g.tt_time_velocity = 0;
 		return;
+	}
+
+	if (!g.tt_is_suspended && (direction >= 0)) {
+		g.tt_time_velocity = 0;
+		return;
+	}
+
+	if (!g.tt_is_suspended) {
+		g.tt_is_suspended = 1;
+		get_time_travel_range(NULL, &g.tt_timestamp_us);
 	}
 
 	const double accel = 15.0;
@@ -1415,19 +1429,30 @@ static void time_accelerate(int direction)
 	const double a = accel * (double)direction - drag;
 	g.tt_time_velocity += a * dtsqr;
 
-	g.tt_timestamp_us += (double)g.tt_time_velocity * 1e6;
+	g.tt_timestamp_us += (double)g.tt_time_velocity * 1e6 * get_tt_scale();
 	int64_t r0,r1;
 	get_time_travel_range(&r0, &r1);
-	if (g.tt_timestamp_us < r0) g.tt_timestamp_us = r0;
-	if (g.tt_timestamp_us > r1) g.tt_timestamp_us = r1;
+	if (g.tt_timestamp_us < r0) {
+		g.tt_timestamp_us = r0;
+	}
+	if (g.tt_timestamp_us > r1) {
+		g.tt_timestamp_us = r1;
+		if (direction > 0) {
+			g.tt_is_suspended = 0;
+			unsuspend_time();
+		}
+	}
 
-	printf("tvel = %f\n", g.tt_time_velocity);
-	suspend_time_at(g.tt_timestamp_us);
+	if (g.tt_is_suspended) {
+		suspend_time_at(g.tt_timestamp_us);
+	}
 }
 
 static void handle_editor_input(struct pane* pane)
 {
 	assert(pane->type == CODE);
+	const struct rect pr = get_pane_rect(pane);
+	const int can_edit = !g.tt_is_suspended;
 	peer_begin_mim(pane->code.session_id);
 	int last_mod = 0;
 	for (int i=0; i<arrlen(g.key_buffer_arr); ++i) {
@@ -1440,132 +1465,155 @@ static void handle_editor_input(struct pane* pane)
 		if (code == KEY_CONTROL) g.key_control = down;
 		if (code == KEY_SHIFT)   g.key_shift   = down;
 		if (code == KEY_ALT)     g.key_alt     = down;
-		if (code == 'Z')         g.key_z       = down;
+		if (code == KEY_ARROW_LEFT)  g.key_left  = down;
+		if (code == KEY_ARROW_RIGHT) g.key_right = down;
+		if (code == KEY_ARROW_UP)    g.key_up    = down;
+		if (code == KEY_ARROW_DOWN)  g.key_down  = down;
 
-		if (down && mod==0) {
-			switch (code) {
-			// XXX
-			case KEY_ARROW_LEFT  : mimf("0Mh"); break;
-			case KEY_ARROW_RIGHT : mimf("0Ml"); break;
-			case KEY_ARROW_UP    : mimf("0Mk"); break;
-			case KEY_ARROW_DOWN  : mimf("0Mj"); break;
-			case KEY_ENTER       : mimi(0,"\n"); break;
-			case KEY_BACKSPACE   : mimf("0X"); break;
-			case KEY_DELETE      : mimf("0x"); break;
-			//case KEY_ESCAPE       mimf("\033"); break;
+		if (g.tt_is_scrubbing) {
+			if (down && (mod==MOD_CONTROL) && (code=='Z')) {
+				toggle_time_scrub();
 			}
-		}
-
-		if (down && mod==MOD_SHIFT) {
-			switch (code) {
-			case KEY_ARROW_LEFT  : mimf("0Sh"); break;
-			case KEY_ARROW_RIGHT : mimf("0Sl"); break;
-			case KEY_ARROW_UP    : mimf("0Sk"); break;
-			case KEY_ARROW_DOWN  : mimf("0Sj"); break;
+			if (down && mod==0 && code==KEY_HOME) {
+				g.tt_is_suspended = 1;
+				get_time_travel_range(&g.tt_timestamp_us, NULL);
+				suspend_time_at(g.tt_timestamp_us);
 			}
-		}
-
-		const int is_colorpick_mod = (g.key_control && g.key_alt && !g.key_shift);
-		set_colorpick_on(pane, is_colorpick_mod);
-		if (down && is_colorpick_mod) {
-			switch (code) {
-			case KEY_ARROW_LEFT : colorpick_select(pane  , -1); break;
-			case KEY_ARROW_RIGHT: colorpick_select(pane  ,  1); break;
-			case KEY_ARROW_UP   : colorpick_add(pane     ,  1); break;
-			case KEY_ARROW_DOWN : colorpick_add(pane     , -1); break;
-			case KEY_PAGE_UP    : colorpick_add_rgb(pane ,  1); break;
-			case KEY_PAGE_DOWN  : colorpick_add_rgb(pane , -1); break;
-			}
-			if (('0' <= code) && (code <= '9')) {
-				colorpick_set(pane, code-'0');
-			}
-		}
-
-		int do_gray_copy=0, do_color_copy=0, do_paste=0;
-
-		if (down && mod==MOD_CONTROL) {
-			if (code==KEY_ENTER) mimf("0!"); // commit
-			if (code==' ')       mimf("0/"); // cancel
-			if (code=='P')       mimf("0P"); // paint
-			if (code=='C')       do_gray_copy=1;
-			if (code=='X') {
-				do_gray_copy=1;
-				mimf("0x");
-			}
-			if (code=='V') do_paste=1;
-			if (code=='Z') suspend_time();
-			if (code=='.') toggle_time_scrub();
-			if (code==',') return_to_present();
-		}
-
-		if (down && (mod==(MOD_CONTROL|MOD_SHIFT))) {
-			if (code=='C') do_color_copy=1;
-			if (code=='X') {
-				do_gray_copy=1;
-				mimf("0x");
-			}
-			if (code=='V') do_paste=1;
-		}
-
-		if (do_gray_copy || do_color_copy) {
-			struct mim_state* ms = get_session_mim_state(pane->code.session_id);
-			const int num_carets = arrlen(ms->caret_arr);
-			static struct carloc* carloc_arr;
-			arrreset(carloc_arr);
-			for (int i=0; i<num_carets; ++i) {
-				struct caret* car = &ms->caret_arr[i];
-				if (car->tag != 0) continue;
-				const int d = location_compare(&car->caret_loc, &car->anchor_loc);
-				if (d == 0) continue;
-				arrput(carloc_arr, ((struct carloc) {
-					.caret_index = i,
-					.loc = ((d<0) ? car->caret_loc : car->anchor_loc),
-				}));
+			if (down && mod==0 && code==KEY_END) {
+				g.tt_is_suspended = 0;
+				unsuspend_time();
 			}
 
-			const int num_carloc = arrlen(carloc_arr);
-			qsort(carloc_arr, num_carloc, sizeof carloc_arr[0], carloc_compar);
+		} else if (!g.tt_is_scrubbing) {
+			if (down && mod==0) {
+				switch (code) {
+				// XXX
+				case KEY_ARROW_LEFT  : mimf("0Mh"); break;
+				case KEY_ARROW_RIGHT : mimf("0Ml"); break;
+				case KEY_ARROW_UP    : mimf("0Mk"); break;
+				case KEY_ARROW_DOWN  : mimf("0Mj"); break;
+				case KEY_ENTER       : if (can_edit) { mimi(0,"\n"); } break;
+				case KEY_BACKSPACE   : if (can_edit) { mimf("0X");   } break;
+				case KEY_DELETE      : if (can_edit) { mimf("0x");   } break;
+				//case KEY_ESCAPE       mimf("\033"); break;
+				}
+			}
 
-			struct document* doc = get_doc(ms->book_id, ms->doc_id);
-			if ((num_carloc>0) && (doc!=NULL)) {
-				arrreset(g.gray_copybuf_arr);
-				arrreset(g.color_copybuf_arr);
-				for (int i=0; i<num_carloc; ++i) {
-					struct caret* car = &ms->caret_arr[carloc_arr[i].caret_index];
-					int di0 = document_locate(doc, &car->caret_loc);
-					int di1 = document_locate(doc, &car->anchor_loc);
-					assert(di0 != di1);
-					if (di1 < di0) {
-						const int tmp = di0;
-						di0 = di1;
-						di1 = tmp;
+			if (down && mod==MOD_SHIFT) {
+				switch (code) {
+				case KEY_ARROW_LEFT  : mimf("0Sh"); break;
+				case KEY_ARROW_RIGHT : mimf("0Sl"); break;
+				case KEY_ARROW_UP    : mimf("0Sk"); break;
+				case KEY_ARROW_DOWN  : mimf("0Sj"); break;
+				}
+			}
+
+			if (can_edit) {
+				const int is_colorpick_mod = (g.key_control && g.key_alt && !g.key_shift);
+				set_colorpick_on(pane, is_colorpick_mod);
+				if (down && is_colorpick_mod) {
+					switch (code) {
+					case KEY_ARROW_LEFT : colorpick_select(pane  , -1); break;
+					case KEY_ARROW_RIGHT: colorpick_select(pane  ,  1); break;
+					case KEY_ARROW_UP   : colorpick_add(pane     ,  1); break;
+					case KEY_ARROW_DOWN : colorpick_add(pane     , -1); break;
+					case KEY_PAGE_UP    : colorpick_add_rgb(pane ,  1); break;
+					case KEY_PAGE_DOWN  : colorpick_add_rgb(pane , -1); break;
 					}
-					for (int di=di0; di<di1; ++di) {
-						struct colorchar cc = doc->docchar_arr[di].colorchar;
-						if (do_color_copy) {
-							arrput(g.color_copybuf_arr, cc);
-						} else if (do_gray_copy) {
-							char buf[16];
-							char* p = utf8_encode(buf, cc.codepoint);
-							const size_t n = (p-buf);
-							char* dst = arraddnptr(g.gray_copybuf_arr, n);
-							memcpy(dst, buf, n);
-						} else {
-							assert(!"unreachable");
-						}
-					}
-					if (arrlen(g.gray_copybuf_arr) > 0) {
-						arrput(g.gray_copybuf_arr, 0);
+					if (('0' <= code) && (code <= '9')) {
+						colorpick_set(pane, code-'0');
 					}
 				}
 			}
-		}
 
-		if (do_paste) {
-			if (arrlen(g.color_copybuf_arr) > 0) {
-				mimc(0, g.color_copybuf_arr, arrlen(g.color_copybuf_arr));
-			} else if (arrlen(g.gray_copybuf_arr) > 0) {
-				mimi(0, g.gray_copybuf_arr);
+			int do_gray_copy=0, do_color_copy=0, do_paste=0;
+
+			if (down && mod==MOD_CONTROL) {
+				if (can_edit) {
+					if (code==KEY_ENTER) mimf("0!"); // commit
+					if (code==' ')       mimf("0/"); // cancel
+					if (code=='P')       mimf("0P"); // paint
+				}
+				if (code=='C')       do_gray_copy=1;
+				if (code=='X') {
+					do_gray_copy=1;
+					if (can_edit) mimf("0x");
+				}
+				if (can_edit) {
+					if (code=='V') do_paste=1;
+				}
+				if (code=='Z') toggle_time_scrub();
+			}
+
+			if (down && (mod==(MOD_CONTROL|MOD_SHIFT))) {
+				if (code=='C') do_color_copy=1;
+				if (code=='X') {
+					do_gray_copy=1;
+					if (can_edit) mimf("0x");
+				}
+				if (code=='V') do_paste=1;
+			}
+
+			if (do_gray_copy || do_color_copy) {
+				struct mim_state* ms = get_session_mim_state(pane->code.session_id);
+				const int num_carets = arrlen(ms->caret_arr);
+				static struct carloc* carloc_arr;
+				arrreset(carloc_arr);
+				for (int i=0; i<num_carets; ++i) {
+					struct caret* car = &ms->caret_arr[i];
+					if (car->tag != 0) continue;
+					const int d = location_compare(&car->caret_loc, &car->anchor_loc);
+					if (d == 0) continue;
+					arrput(carloc_arr, ((struct carloc) {
+						.caret_index = i,
+						.loc = ((d<0) ? car->caret_loc : car->anchor_loc),
+					}));
+				}
+
+				const int num_carloc = arrlen(carloc_arr);
+				qsort(carloc_arr, num_carloc, sizeof carloc_arr[0], carloc_compar);
+
+				struct document* doc = get_doc(ms->book_id, ms->doc_id);
+				if ((num_carloc>0) && (doc!=NULL)) {
+					arrreset(g.gray_copybuf_arr);
+					arrreset(g.color_copybuf_arr);
+					for (int i=0; i<num_carloc; ++i) {
+						struct caret* car = &ms->caret_arr[carloc_arr[i].caret_index];
+						int di0 = document_locate(doc, &car->caret_loc);
+						int di1 = document_locate(doc, &car->anchor_loc);
+						assert(di0 != di1);
+						if (di1 < di0) {
+							const int tmp = di0;
+							di0 = di1;
+							di1 = tmp;
+						}
+						for (int di=di0; di<di1; ++di) {
+							struct colorchar cc = doc->docchar_arr[di].colorchar;
+							if (do_color_copy) {
+								arrput(g.color_copybuf_arr, cc);
+							} else if (do_gray_copy) {
+								char buf[16];
+								char* p = utf8_encode(buf, cc.codepoint);
+								const size_t n = (p-buf);
+								char* dst = arraddnptr(g.gray_copybuf_arr, n);
+								memcpy(dst, buf, n);
+							} else {
+								assert(!"unreachable");
+							}
+						}
+						if (arrlen(g.gray_copybuf_arr) > 0) {
+							arrput(g.gray_copybuf_arr, 0);
+						}
+					}
+				}
+			}
+
+			if (can_edit && do_paste) {
+				if (arrlen(g.color_copybuf_arr) > 0) {
+					mimc(0, g.color_copybuf_arr, arrlen(g.color_copybuf_arr));
+				} else if (arrlen(g.gray_copybuf_arr) > 0) {
+					mimi(0, g.gray_copybuf_arr);
+				}
 			}
 		}
 	}
@@ -1581,12 +1629,52 @@ static void handle_editor_input(struct pane* pane)
 
 	peer_end_mim();
 
-	if (g.key_control && !g.key_shift && !g.key_alt && g.key_z) {
-		time_accelerate(-1);
-	} else if (g.key_control && g.key_shift && !g.key_alt && g.key_z) {
-		time_accelerate(1);
-	} else {
-		time_accelerate(0);
+	if (g.tt_is_scrubbing) {
+		g.tt_scale_log2 -= g.mstate.wheel_y * 1e-1; // TODO CONFIG
+		uint32_t mflags = g.mstate.flags;
+		const int drag_button = LMB; // TODO CONFIG?
+		const double x_scale = (get_time_radius()*2.0 / (double)(pr.w));
+		if ((mflags & MB_CLICK(drag_button)) == MB_CLICK(drag_button)) {
+			g.tt_is_dragging = 1;
+		}
+		if (g.tt_is_dragging && !(mflags & MB_DOWN(drag_button))) {
+			g.tt_is_dragging = 0;
+		}
+		const double dx = g.mstate.dx;
+		if (g.tt_is_dragging && (dx!=0)) {
+			int64_t r0,r1;
+			get_time_travel_range(&r0, &r1);
+			if (!g.tt_is_suspended && dx > 0) {
+				g.tt_is_suspended = 1;
+				g.tt_timestamp_us = r1;
+			}
+			if (g.tt_is_suspended) {
+				g.tt_timestamp_us -= 1e6 * dx * x_scale;
+				if (g.tt_timestamp_us < r0) g.tt_timestamp_us = r0;
+			}
+			if (g.tt_is_suspended && dx < 0) {
+				if (g.tt_timestamp_us >= r1) {
+					g.tt_is_suspended = 0;
+					unsuspend_time();
+				}
+			}
+			if (g.tt_is_suspended && g.tt_timestamp_us > r1) {
+				g.tt_timestamp_us = r1;
+			}
+			if (g.tt_is_suspended) {
+				suspend_time_at(g.tt_timestamp_us);
+			}
+		}
+	}
+
+	if (g.tt_is_scrubbing) {
+		int time_accel = 0;
+		if (g.key_left)  --time_accel;
+		if (g.key_right) ++time_accel;
+		time_accelerate(time_accel);
+		const double scale_zoom_speed = 1.6 / g.fps; // TODO CONFIG
+		if (g.key_up)    g.tt_scale_log2 -= scale_zoom_speed;
+		if (g.key_down)  g.tt_scale_log2 += scale_zoom_speed;
 	}
 }
 
@@ -1877,17 +1965,23 @@ static void draw_code_pane(struct pane* pane)
 		}
 	}
 
-	if (g.tt_is_suspended) {
-
+	if (g.tt_is_scrubbing) {
 		// XXX ugly and temporary? :)
-		g.state.cursor_x = pr.w/2;
-		g.state.cursor_y = pr.h/2;
-		put_char('x');
 
 		static uint8_t* image1d_arr;
 		arrsetlen(image1d_arr, pr.w);
-		const int64_t r = 20000000;
-		render_activity(image1d_arr, pr.w, g.tt_timestamp_us-r, g.tt_timestamp_us+r);
+		const int64_t r = (int64_t)(1e6 * get_time_radius());
+
+		int64_t t;
+		if (g.tt_is_suspended) {
+			t = g.tt_timestamp_us;
+		} else {
+			get_time_travel_range(NULL, &t);
+		}
+		render_activity(image1d_arr, pr.w, t-r, t+r);
+		const double F = 0.1;
+		const int fi = (pr.w/2) + ((fmod(g.time, F) < (F*.5)) ? 1 : -1);
+		if ((0 <= fi && fi < pr.w)) image1d_arr[fi] += 50;
 		if ((g.activity_texture_width != pr.w) || (g.activity_texture_id == -1)) {
 			if (g.activity_texture_id >= 0) destroy_texture(g.activity_texture_id);
 			g.activity_texture_id = create_texture(TT_LUMEN8 | TT_PIXELATED | TT_STREAM, pr.w, 1);
@@ -1897,8 +1991,8 @@ static void draw_code_pane(struct pane* pane)
 
 		set_blend_mode(ADDITIVE);
 		set_texture(g.activity_texture_id);
-		const int r0 = 20;
-		push_mesh_quad(0, pr.h/2-r0, pr.w, r0*2, 0, 0, pr.w, 1, 0xffffffff);
+		const int r0 = 64;
+		push_mesh_quad(0, pr.h-r0*2, pr.w, r0*2, 0, 0, pr.w, 1, 0xff8040ff);
 	}
 }
 
@@ -2014,3 +2108,19 @@ void gui_drop_file(const char* name, size_t num_bytes, uint8_t* bytes)
 // "random" fourier series) and motion blur? also rotational noise, not only
 // dx/dy noise. also, a detail, but caret and color picker should probably
 // display 'shake' a bit (can be "dimmed" a bit)
+
+// TODO: mouse caret/selection
+
+// TODO: time travel topics:
+// - bar placement? dimming?
+// - bar tics?
+// - when time is suspended in the past it would be nice with a "dreamlike" or
+//   "floaty" effect
+// - mine-vs-theirs coloring of activity dots in time scrub mode (activitycache
+//   already has artist id)
+// - waveform display alongside activity dots? anything that lets you orient
+//   yourself is good, but it should still be somewhat optional because this
+//   one is particularly expensive/troublesome to recalc? (if you're doing a
+//   50% CPU usage gig on average, then it takes 1 hour to recalc a 2 hour
+//   set). i.e. the UI should be perfectly useable without, but it's an extra
+//   luxury when available

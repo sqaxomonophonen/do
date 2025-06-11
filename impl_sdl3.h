@@ -10,6 +10,7 @@
 
 static struct {
 	int exiting;
+	struct mouse_state mouse_state;
 } g0;
 
 THREAD_LOCAL static struct {
@@ -117,11 +118,42 @@ static void drop_path(const char* path)
 static void handle_events()
 {
 	SDL_Event event;
+	struct mouse_state msc = g0.mouse_state;
 	while (SDL_PollEvent(&event)) {
 		struct window* window = get_event_window(&event);
 
 		if (event.type == SDL_EVENT_QUIT) {
 			g0.exiting = 1;
+		} else if (event.type == SDL_EVENT_WINDOW_MOUSE_ENTER) {
+			msc.flags |= M_INSIDE;
+		} else if (event.type == SDL_EVENT_WINDOW_MOUSE_LEAVE) {
+			msc.flags &= ~M_INSIDE;
+		} else if ((event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) || (event.type == SDL_EVENT_MOUSE_BUTTON_UP)) {
+			int b=-1;
+			switch (event.button.button) {
+			case SDL_BUTTON_LEFT:   b=0; break;
+			case SDL_BUTTON_MIDDLE: b=1; break;
+			case SDL_BUTTON_RIGHT:  b=2; break;
+			}
+			if (b<0) continue;
+			const unsigned mask = MB_DOWN(b);
+			const unsigned flip = MB_FLIP(b);
+			if (event.button.down) {
+				if (!(msc.flags & mask)) {
+					msc.flags |= (mask | flip);
+				}
+			} else {
+				if (msc.flags & mask) {
+					msc.flags &= ~mask;
+					msc.flags |= flip;
+				}
+			}
+		} else if (event.type == SDL_EVENT_MOUSE_WHEEL) {
+			msc.wheel_x += event.wheel.x;
+			msc.wheel_y += event.wheel.y;
+		} else if (event.type == SDL_EVENT_MOUSE_MOTION) {
+			msc.x = event.motion.x;
+			msc.y = event.motion.y;
 		} else if (event.type == SDL_EVENT_TEXT_INPUT) {
 			gui_on_text(event.text.text);
 		} else if ((event.type == SDL_EVENT_KEY_DOWN) || (event.type == SDL_EVENT_KEY_UP)) {
@@ -258,4 +290,10 @@ static void handle_events()
 			gui_set_dragging(window, 0);
 		}
 	}
+	msc.dx = msc.x - g0.mouse_state.x;
+	msc.dy = msc.y - g0.mouse_state.y;
+	gui_mouse_state(msc);
+	msc.flags &= ~M_FLIPMASK;
+	msc.wheel_x = msc.wheel_y = 0;
+	g0.mouse_state = msc;
 }

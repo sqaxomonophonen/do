@@ -187,57 +187,6 @@ ui (main):
    contains lots of unassigned codepoints and such; these are trivial to skip
    with stb_truetype.h, but impossible to reliably skip with web.
 
-video synth engine: I'm seriously considering something more like TIC-80 than
-Hydra, i.e. low-res CPU-driven, rather than high-res GPU-driven. because:
- - it feels as if the gap between low-end and high-end CPUs is way smaller than
-   the gap between low-end and high-end GPUs; i.e. it's easier to inadvertently
-   make a shader that causes low-end clients to drop to single-digit FPS's on
-   GPUs than CPUs? conversely, it's way easier to cycle-limit a CPU-based
-   "shader" (to make it fair and accessible for everybody)
- - I can't say that the TIC-80 stuff I see on FieldFxDemo (twitch) is any less
-   interesting than the Hydra stuff I see, despite TIC-80 being 240x136 pixels,
-   16 colors.
- - TIC-80 style is much more hands-on, where something like Hydra is more
-   "functional"? in a functional shader, if you want the pixel at [42,69] to be
-   white, then it needs to be part of the formula for every pixel. but
-   something like TIC-80 is procedural and you can just putpixel(42,69,WHITE)
-   at the end.
- - easier to do proper network sync if the CPU-based VM has limited RAM? say
-   the VM has 256kB, and maybe you can even mark which pages are "long memory
-   pages", then that's all that needs to be kept in sync. long memory is good
-   for stuff like conway's game of life, if you want everybody to see the same
-   chaotically generated glider at roughly the same time. a functional shader
-   (f(x,y,time)=color) would have no "long memory" and thus no state sync.
- - it's easier to port when you don't need to compile shaders on the fly (some
-   graphics APIs [like vulkan?] benefit from pre-compiled shaders). a rp2350
-   port of the video synth may even be possible :) (the rp2040 can run a
-   faithful doom!)
- - and.. the GPU industry smelled awful even long before they got involved with
-   crypto mining and AI. the industry has always favored the rich (like
-   triple-A game studios) and/or those with no cross-platform requirements
-   (like crypto/AI)
- - high-end GPUs open a lot of doors. I've seen DJs on twitch do real-time
-   stable diffusion (?) hallucinations based on both cam input and keywords
-   from chat. but this is bleeding edge. and there are also many other things
-   you can do with GPUs, like shader language live coding (shadertoy style),
-   hydra-like, engines (e.g. godot). these vary a lot in their "requirements".
-   so rather than try to accomodate everything in mainline-do, these are best
-   integrated via a common interface or protocol like OSC and websockets?
-negatives:
- - it's more "pixellated" which is not in everybody's taste (ross scott of
-   accursed farms has talked about his dislike for "shimmering", although I
-   don't think he dislikes pixel art in general, just the aliasing effects)
- - steals valuable CPU cycles from audio
-
-alternative video synth engine: textured triangle soup.
- - fits into the existing cross-platform rendering engine I have in mind
-   (pretty much the same as what dear imgui does; textures and triangles)
- - not pixellated/shimmering; allows for a different style
- - could perhaps fit into the existing video synth, as its own "playfield" or
-   "video mode", so it can be mixed with pixellated graphics.
-
-
-
 platforms:
  - sdl3 desktop (bsd, linux, windows, macos) using "gl" or "gpu" renderer
  - emscripten web/webgl using "gl" renderer
@@ -385,3 +334,11 @@ are there any good execuses for having multi-room support in the Do-executable?
 
 idea: curated views.. follow somebody's caret (curator caret)? you can maybe
 designate a view as either broadcasting a curator caret, or following one.
+
+
+
+idea: "video synth apps"; do serves a web app that receives updates (documents,
+OSC-events) via websockets (probably). you can edit the JS, or other documents,
+and depend on libraries via /dok/. this could support hydra, but also just
+about anything else, like: tic-80 style retro stuff, polygon soups, direct
+glsl/shadertoy-like hacking, and so on.
