@@ -30,6 +30,15 @@ static inline void bb_append_leu16(uint8_t** bbarr, uint16_t value)
 	assert(p == (p0+2));
 }
 
+static inline void bb_append_leu32(uint8_t** bbarr, uint32_t value)
+{
+	uint8_t* p0 = arraddnptr(*bbarr, 4);
+	uint8_t* p = p0;
+	leu32_pencode(&p, value);
+	assert(p == (p0+4));
+}
+
+
 static inline void bb_append_leu64(uint8_t** bbarr, uint64_t value)
 {
 	uint8_t* p0 = arraddnptr(*bbarr, 8);

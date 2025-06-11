@@ -19,10 +19,10 @@ static inline void leu64_encode(uint8_t* data, uint64_t value)
 static inline uint32_t leu32_pdecode(const uint8_t** pp)
 {
 	uint32_t val =
-		  (*pp[0])
-		+ (*pp[1] << 8)
-		+ (*pp[2] << 16)
-		+ (*pp[3] << 24);
+		  ((*pp)[0])
+		+ ((*pp)[1] << 8)
+		+ ((*pp)[2] << 16)
+		+ ((*pp)[3] << 24);
 	(*pp) += 4;
 	return val;
 }
@@ -41,6 +41,13 @@ static inline uint16_t leu16_pdecode(const uint8_t** pp)
 		+ ((*pp)[1] << 8);
 	(*pp) += 2;
 	return val;
+}
+
+static inline void leu32_pencode(uint8_t** pp, uint32_t value)
+{
+	for (int i=0; i<4; ++i) {
+		*((*pp)++) = ((value >> (i*8)) & 0xff);
+	}
 }
 
 static inline void leu64_pencode(uint8_t** pp, uint64_t value)

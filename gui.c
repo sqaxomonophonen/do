@@ -179,6 +179,8 @@ static struct {
 		struct atlas_lut_info value;
 	}* atlas_lut;
 	int atlas_texture_id;
+	int activity_texture_id;
+	int activity_texture_width;
 	struct draw_list* draw_list_arr;
 	struct vertex* vertex_arr;
 	vertex_index* vertex_index_arr;
@@ -820,6 +822,7 @@ void gui_init(void)
 	fonts_init();
 
 	g.atlas_texture_id = -1;
+	g.activity_texture_id = -1;
 
 	// XXX a lot of this code is bad "getting started code" that shouldn't
 	// survive for too long
@@ -1248,7 +1251,7 @@ static struct rect get_pane_rect(struct pane* pane)
 #define HAS_FOCUS    (1<<1)
 #define WAS_CLICKED  (1<<2)
 
-static int keyboard_input_area(struct rect* r, int focus_id)
+static int keyboard_input_area(const struct rect* r, int focus_id)
 {
 	int flags = 0;
 	if (focus_id == g.current_focus_id) flags |= HAS_FOCUS;
@@ -1634,7 +1637,7 @@ static void draw_code_pane(struct pane* pane)
 
 	g.state.is_dimming = pane->code.colorpick_on;
 
-	struct rect pr = get_pane_rect(pane);
+	const struct rect pr = get_pane_rect(pane);
 
 	const int flags = keyboard_input_area(&pr, pane->code.focus_id);
 	if (flags & WAS_CLICKED) {
@@ -1656,225 +1659,247 @@ static void draw_code_pane(struct pane* pane)
 	set_color3f(.9,2.6,.9);
 
 	struct mim_state* ms = get_session_mim_state(pane->code.session_id);
-	if (ms == NULL) return;
+	struct document* doc = (ms == NULL) ? NULL : get_doc(ms->book_id, ms->doc_id);
+	if ((ms != NULL) && (doc != NULL)) {
 
-	struct document* doc = get_doc(ms->book_id, ms->doc_id);
-	if (doc==NULL) return;
+		pane->code.splash4_cache = ms->splash4;
 
-	pane->code.splash4_cache = ms->splash4;
+		static int* caret_coord_arr;
+		arrreset(caret_coord_arr);
 
-	static int* caret_coord_arr;
-	arrreset(caret_coord_arr);
-
-	struct snapshot* snap = get_snapshot();
-	const int num_ms = arrlen(snap->mim_state_arr);
-	const int my_artist_id = get_my_artist_id();
-	static struct caret* other_caret_arr;
-	static int16_t* other_splash4_arr;
-	arrreset(other_caret_arr);
-	arrreset(other_splash4_arr);
-	for (int i=0; i<num_ms; ++i) {
-		struct mim_state* ms = &snap->mim_state_arr[i];
-		if (ms->artist_id == my_artist_id) continue;
-		if ((ms->book_id!=doc->book_id) || (ms->doc_id!=doc->doc_id)) continue;
-		const int num_carets = arrlen(ms->caret_arr);
-		for (int ii=0; ii<num_carets; ++ii) {
-			arrput(other_caret_arr, ms->caret_arr[ii]);
-			arrput(other_splash4_arr, ms->splash4);
+		struct snapshot* snap = get_snapshot();
+		const int num_ms = arrlen(snap->mim_state_arr);
+		const int my_artist_id = get_my_artist_id();
+		static struct caret* other_caret_arr;
+		static int16_t* other_splash4_arr;
+		arrreset(other_caret_arr);
+		arrreset(other_splash4_arr);
+		for (int i=0; i<num_ms; ++i) {
+			struct mim_state* ms = &snap->mim_state_arr[i];
+			if (ms->artist_id == my_artist_id) continue;
+			if ((ms->book_id!=doc->book_id) || (ms->doc_id!=doc->doc_id)) continue;
+			const int num_carets = arrlen(ms->caret_arr);
+			for (int ii=0; ii<num_carets; ++ii) {
+				arrput(other_caret_arr, ms->caret_arr[ii]);
+				arrput(other_splash4_arr, ms->splash4);
+			}
 		}
-	}
-	assert(arrlen(other_caret_arr) == arrlen(other_splash4_arr));
+		assert(arrlen(other_caret_arr) == arrlen(other_splash4_arr));
 
-	struct doc_iterator it = doc_iterator(doc);
-	while (doc_iterator_next(&it)) {
-		int draw_caret=0, locate_caret=0;
-		float caret_color[3] = {0,0,0};
-		float bg_color[3]    = {0,0,0};
+		struct doc_iterator it = doc_iterator(doc);
+		while (doc_iterator_next(&it)) {
+			int draw_caret=0, locate_caret=0;
+			float caret_color[3] = {0,0,0};
+			float bg_color[3]    = {0,0,0};
 
-		int min_y_dist = -1;
-		const int num_carets = arrlen(ms->caret_arr);
-		const int num_total = num_carets + arrlen(other_caret_arr);
-		for (int i=0; i<num_total; ++i) {
-			struct caret* c = (i<num_carets) ? arrchkptr(ms->caret_arr, i) : arrchkptr(other_caret_arr, (i-num_carets));
-			struct location* loc0 = &c->caret_loc;
-			struct location* loc1 = &c->anchor_loc;
-			location_sort2(&loc0, &loc1);
-			struct location* crloc = &c->caret_loc;
-			const int d0 = location_line_distance(loc0 , &it.location);
-			const int d1 = location_line_distance(loc1 , &it.location);
-			if (min_y_dist < 0 || d0 < min_y_dist) min_y_dist = d0;
-			if (min_y_dist < 0 || d1 < min_y_dist) min_y_dist = d1;
-			const int cmp0  = location_compare(&it.location, loc0);
-			const int cmp1  = location_compare(&it.location, loc1);
-			const int cmp1r = location_compare(&it.location, crloc);
-			const int same  = (0 == location_compare(loc0, loc1));
-			if (cmp1r==0) {
-				draw_caret = 1;
-				int s4;
-				if (i < num_carets) {
-					locate_caret = 1;
-					s4 = pane->code.splash4_cache;
-				} else {
-					s4 = arrchkget(other_splash4_arr, (i-num_carets));
+			int min_y_dist = -1;
+			const int num_carets = arrlen(ms->caret_arr);
+			const int num_total = num_carets + arrlen(other_caret_arr);
+			for (int i=0; i<num_total; ++i) {
+				struct caret* c = (i<num_carets) ? arrchkptr(ms->caret_arr, i) : arrchkptr(other_caret_arr, (i-num_carets));
+				struct location* loc0 = &c->caret_loc;
+				struct location* loc1 = &c->anchor_loc;
+				location_sort2(&loc0, &loc1);
+				struct location* crloc = &c->caret_loc;
+				const int d0 = location_line_distance(loc0 , &it.location);
+				const int d1 = location_line_distance(loc1 , &it.location);
+				if (min_y_dist < 0 || d0 < min_y_dist) min_y_dist = d0;
+				if (min_y_dist < 0 || d1 < min_y_dist) min_y_dist = d1;
+				const int cmp0  = location_compare(&it.location, loc0);
+				const int cmp1  = location_compare(&it.location, loc1);
+				const int cmp1r = location_compare(&it.location, crloc);
+				const int same  = (0 == location_compare(loc0, loc1));
+				if (cmp1r==0) {
+					draw_caret = 1;
+					int s4;
+					if (i < num_carets) {
+						locate_caret = 1;
+						s4 = pane->code.splash4_cache;
+					} else {
+						s4 = arrchkget(other_splash4_arr, (i-num_carets));
+					}
+					int red,green,blue;
+					splash4_explode(s4,&red,&green,&blue,NULL);
+					caret_color[0] += splashc2f(red);
+					caret_color[1] += splashc2f(green);
+					caret_color[2] += splashc2f(blue);
 				}
-				int red,green,blue;
-				splash4_explode(s4,&red,&green,&blue,NULL);
-				caret_color[0] += splashc2f(red);
-				caret_color[1] += splashc2f(green);
-				caret_color[2] += splashc2f(blue);
+				if (!same && cmp0>=0 && cmp1<0) {
+					bg_color[1] += 0.1f;
+					bg_color[2] += 0.3f;
+				}
 			}
-			if (!same && cmp0>=0 && cmp1<0) {
-				bg_color[1] += 0.1f;
-				bg_color[2] += 0.3f;
-			}
-		}
 
-		{
-			int ylvl;
-			if (min_y_dist < 0) {
-				ylvl = 0;
+			{
+				int ylvl;
+				if (min_y_dist < 0) {
+					ylvl = 0;
+				} else {
+					ylvl = g.font_config.num_y_stretch_levels-1-min_y_dist;
+					if (ylvl < 0) ylvl = 0;
+				}
+				set_y_stretch_index(ylvl);
+			}
+
+			const float y_height = get_y_advance();
+
+			if (draw_caret) {
+				save();
+				const float mul = 1.5f;
+				set_color3f(mul*caret_color[0],mul*caret_color[1],mul*caret_color[2]);
+				g.state.cursor_y += (int)y_height;
+				if (locate_caret) {
+					arrput(caret_coord_arr, g.state.cursor_x);
+					arrput(caret_coord_arr, g.state.cursor_y);
+				}
+				put_char(SPECIAL_CODEPOINT_CARET);
+				g.state.cursor_y -= (int)y_height;
+				restore();
+			}
+
+			struct docchar* fc = it.docchar;
+			const unsigned cp = fc != NULL ? fc->colorchar.codepoint : 0;
+			int splash4 = 0;
+
+			if (fc != NULL) {
+				if (fc->flags & FC_IS_INSERT) bg_color[1] += 0.2f;
+				if (fc->flags & FC_IS_DELETE) bg_color[0] += 0.3f;
+				splash4 = fc->colorchar.splash4;
+			}
+			const int shake = splash4 % 10;
+
+			if (has_light(bg_color) && cp >= ' ') {
+				save();
+				set_colorv(bg_color);
+				g.state.cursor_y += (int)y_height;
+				put_char(SPECIAL_CODEPOINT_BLOCK);
+				g.state.cursor_y -= (int)y_height;
+				restore();
+			}
+
+			if (cp == 0) continue;
+
+			if (cp == '\n') {
+				g.state.cursor_x = g.state.cursor_x0;
+				g.state.cursor_y += y_height;
+			}
+
+			set_color_splash4(splash4);
+
+			// XXX ostensibly I also need to subtract "ascent" from y? but it looks
+			// wrong... text formatting is hard!
+			if (shake > 0) {
+				// FIXME quick'n'dirty shake viz that ought to be improved:
+				//  - render multiple chars to make "motion blur", especially
+				//    for higher shake levels?
+				//  - shake radius should probably not be a quad like it is
+				//    here, and should also be proportional to text size
+				//    (currently it's 0-9 pixels)
+				//  - kinda want to do rotational transforms too (currently not
+				//    supported by push_mesh_quad())
+				//  - maybe even spark particles at high shake levels? :D
+				save();
+				const float m = (float)shake;
+				g.state.cursor_x += randf(-m,m);
+				g.state.cursor_y += randf(-m,m);
+				const float x0 = g.state.cursor_x;
+				const float y0 = g.state.cursor_y;
+				g.state.cursor_y += (int)y_height;
+				put_char(cp);
+				g.state.cursor_y -= (int)y_height;
+				const float dx = g.state.cursor_x - x0;
+				const float dy = g.state.cursor_y - y0;
+				restore();
+				g.state.cursor_x += dx;
+				g.state.cursor_y += dy;
 			} else {
-				ylvl = g.font_config.num_y_stretch_levels-1-min_y_dist;
-				if (ylvl < 0) ylvl = 0;
+				g.state.cursor_y += (int)y_height;
+				put_char(cp);
+				g.state.cursor_y -= (int)y_height;
 			}
-			set_y_stretch_index(ylvl);
 		}
 
-		const float y_height = get_y_advance();
-
-		if (draw_caret) {
-			save();
-			const float mul = 1.5f;
-			set_color3f(mul*caret_color[0],mul*caret_color[1],mul*caret_color[2]);
-			g.state.cursor_y += (int)y_height;
-			if (locate_caret) {
-				arrput(caret_coord_arr, g.state.cursor_x);
-				arrput(caret_coord_arr, g.state.cursor_y);
-			}
-			put_char(SPECIAL_CODEPOINT_CARET);
-			g.state.cursor_y -= (int)y_height;
-			restore();
-		}
-
-		struct docchar* fc = it.docchar;
-		const unsigned cp = fc != NULL ? fc->colorchar.codepoint : 0;
-		int splash4 = 0;
-
-		if (fc != NULL) {
-			if (fc->flags & FC_IS_INSERT) bg_color[1] += 0.2f;
-			if (fc->flags & FC_IS_DELETE) bg_color[0] += 0.3f;
-			splash4 = fc->colorchar.splash4;
-		}
-		const int shake = splash4 % 10;
-
-		if (has_light(bg_color) && cp >= ' ') {
-			save();
-			set_colorv(bg_color);
-			g.state.cursor_y += (int)y_height;
-			put_char(SPECIAL_CODEPOINT_BLOCK);
-			g.state.cursor_y -= (int)y_height;
-			restore();
-		}
-
-		if (cp == 0) continue;
-
-		if (cp == '\n') {
-			g.state.cursor_x = g.state.cursor_x0;
-			g.state.cursor_y += y_height;
-		}
-
-		set_color_splash4(splash4);
-
-		// XXX ostensibly I also need to subtract "ascent" from y? but it looks
-		// wrong... text formatting is hard!
-		if (shake > 0) {
-			// FIXME quick'n'dirty shake viz that ought to be improved:
-			//  - render multiple chars to make "motion blur", especially
-			//    for higher shake levels?
-			//  - shake radius should probably not be a quad like it is
-			//    here, and should also be proportional to text size
-			//    (currently it's 0-9 pixels)
-			//  - kinda want to do rotational transforms too (currently not
-			//    supported by push_mesh_quad())
-			//  - maybe even spark particles at high shake levels? :D
-			save();
-			const float m = (float)shake;
-			g.state.cursor_x += randf(-m,m);
-			g.state.cursor_y += randf(-m,m);
-			const float x0 = g.state.cursor_x;
-			const float y0 = g.state.cursor_y;
-			g.state.cursor_y += (int)y_height;
-			put_char(cp);
-			g.state.cursor_y -= (int)y_height;
-			const float dx = g.state.cursor_x - x0;
-			const float dy = g.state.cursor_y - y0;
-			restore();
-			g.state.cursor_x += dx;
-			g.state.cursor_y += dy;
-		} else {
-			g.state.cursor_y += (int)y_height;
-			put_char(cp);
-			g.state.cursor_y -= (int)y_height;
-		}
-	}
-
-	#if 0
-	g.cursor_x = g.cursor_x0;
-	g.cursor_y += 40;
-	set_color3f(.8,.8,.8);
-	for (int i=0;i<4;++i) put_char(SPECIAL_CODEPOINT_MISSING_CHARACTER);
-	set_color3f(2,2,2);
-	for (int i=0;i<4;++i) put_char(SPECIAL_CODEPOINT_MISSING_CHARACTER);
-	set_color3f(9,9,9);
-	for (int i=0;i<4;++i) put_char(SPECIAL_CODEPOINT_MISSING_CHARACTER);
-	set_color3f(1,1,1);
-	for (int i=0;i<2;++i) put_char(' ');
-	put_char('W'); put_char(':');
-	for (int i=0;i<4;++i) put_char(SPECIAL_CODEPOINT_CARET);
-
-	for (int j=0;j<5;j++) {
+		#if 0
 		g.cursor_x = g.cursor_x0;
 		g.cursor_y += 40;
-		set_color3f(.9,j,.9);
-		for (int i=0;i<4;++i) put_char(SPECIAL_CODEPOINT_BLOCK);
-	}
-	#endif
+		set_color3f(.8,.8,.8);
+		for (int i=0;i<4;++i) put_char(SPECIAL_CODEPOINT_MISSING_CHARACTER);
+		set_color3f(2,2,2);
+		for (int i=0;i<4;++i) put_char(SPECIAL_CODEPOINT_MISSING_CHARACTER);
+		set_color3f(9,9,9);
+		for (int i=0;i<4;++i) put_char(SPECIAL_CODEPOINT_MISSING_CHARACTER);
+		set_color3f(1,1,1);
+		for (int i=0;i<2;++i) put_char(' ');
+		put_char('W'); put_char(':');
+		for (int i=0;i<4;++i) put_char(SPECIAL_CODEPOINT_CARET);
 
-	g.state.is_dimming = 0;
+		for (int j=0;j<5;j++) {
+			g.cursor_x = g.cursor_x0;
+			g.cursor_y += 40;
+			set_color3f(.9,j,.9);
+			for (int i=0;i<4;++i) put_char(SPECIAL_CODEPOINT_BLOCK);
+		}
+		#endif
 
-	if (pane->code.colorpick_on) {
-		const int num_carets = arrlen(ms->caret_arr);
-		assert(arrlen(caret_coord_arr) == (2*num_carets));
-		for (int i=0; i<num_carets; ++i) {
-			const int cx = caret_coord_arr[i*2];
-			const int cy = caret_coord_arr[i*2+1];
+		g.state.is_dimming = 0;
 
-			const int x0 = cx;
-			const int y0 = cy;
-			g.state.cursor_x = x0;
-			g.state.cursor_y = y0;
-			set_y_stretch_index(2);
-			set_color3f(1,1,1);
-			int red,green,blue,shake;
-			splash4_explode(pane->code.splash4_cache,&red,&green,&blue,&shake);
-			set_color_splash4(splash4_implode(red,0,0,0));
-			put_char('0'+red);
-			set_color_splash4(splash4_implode(0,green,0,0));
-			put_char('0'+green);
-			set_color_splash4(splash4_implode(0,0,blue,0));
-			put_char('0'+blue);
-			set_color_splash4(splash4_implode(3,3,3,shake));
-			put_char('0'+shake);
-			g.state.cursor_x = x0;
-			g.state.cursor_y = y0+30;
-			set_color_splash4(splash4_implode(red,green,blue,shake));
-			const int comp = pane->code.splash4_comp;
-			for (int i=0; i<4; ++i) {
-				put_char(i==comp?'^':' ');
+		if (pane->code.colorpick_on) {
+			const int num_carets = arrlen(ms->caret_arr);
+			assert(arrlen(caret_coord_arr) == (2*num_carets));
+			for (int i=0; i<num_carets; ++i) {
+				const int cx = caret_coord_arr[i*2];
+				const int cy = caret_coord_arr[i*2+1];
+
+				const int x0 = cx;
+				const int y0 = cy;
+				g.state.cursor_x = x0;
+				g.state.cursor_y = y0;
+				set_y_stretch_index(2);
+				set_color3f(1,1,1);
+				int red,green,blue,shake;
+				splash4_explode(pane->code.splash4_cache,&red,&green,&blue,&shake);
+				set_color_splash4(splash4_implode(red,0,0,0));
+				put_char('0'+red);
+				set_color_splash4(splash4_implode(0,green,0,0));
+				put_char('0'+green);
+				set_color_splash4(splash4_implode(0,0,blue,0));
+				put_char('0'+blue);
+				set_color_splash4(splash4_implode(3,3,3,shake));
+				put_char('0'+shake);
+				g.state.cursor_x = x0;
+				g.state.cursor_y = y0+30;
+				set_color_splash4(splash4_implode(red,green,blue,shake));
+				const int comp = pane->code.splash4_comp;
+				for (int i=0; i<4; ++i) {
+					put_char(i==comp?'^':' ');
+				}
 			}
 		}
 	}
 
+	if (g.tt_is_suspended) {
+
+		// XXX ugly and temporary? :)
+		g.state.cursor_x = pr.w/2;
+		g.state.cursor_y = pr.h/2;
+		put_char('x');
+
+		static uint8_t* image1d_arr;
+		arrsetlen(image1d_arr, pr.w);
+		const int64_t r = 20000000;
+		render_activity(image1d_arr, pr.w, g.tt_timestamp_us-r, g.tt_timestamp_us+r);
+		if ((g.activity_texture_width != pr.w) || (g.activity_texture_id == -1)) {
+			if (g.activity_texture_id >= 0) destroy_texture(g.activity_texture_id);
+			g.activity_texture_id = create_texture(TT_LUMEN8 | TT_PIXELATED | TT_STREAM, pr.w, 1);
+			g.activity_texture_width = pr.w;
+		}
+		update_texture(g.activity_texture_id, 0, pr.w, 1, image1d_arr);
+
+		set_blend_mode(ADDITIVE);
+		set_texture(g.activity_texture_id);
+		const int r0 = 20;
+		push_mesh_quad(0, pr.h/2-r0, pr.w, r0*2, 0, 0, pr.w, 1, 0xffffffff);
+	}
 }
 
 static void gui_draw1(void)

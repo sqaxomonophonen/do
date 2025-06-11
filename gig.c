@@ -5,7 +5,7 @@
 #include <assert.h>
 #include <string.h>
 #include <stdio.h> // XXX
-#include <threads.h>
+#include <pthread.h>
 
 #include "stb_ds_sysalloc.h"
 #include "stb_sprintf.h"
@@ -37,6 +37,12 @@
 #define INDEX_HEADER_SIZE     (16L)
 #define INDEX_ENTRY_SIZE_LOG2 (4)
 #define INDEX_ENTRY_SIZE      (1L << INDEX_ENTRY_SIZE_LOG2)
+
+struct activitycache_entry {
+	int64_t timestamp;
+	int32_t artist_id;
+	int32_t weight;
+};
 
 static int match_fundament(const char* s)
 {
@@ -262,6 +268,7 @@ static struct {
 	unsigned is_host       :1;
 	unsigned is_peer       :1;
 	struct ringbuf peer2host_mim_ringbuf;
+	struct ringbuf host2peer_activitycache_ringbuf;
 } g; // globals
 
 static struct {
@@ -288,6 +295,7 @@ static struct {
 	uint8_t* bb_arr;
 	int next_artist_id;
 	struct peer_state* peer_state_arr;
+	pthread_mutex_t mutex;
 } hg; // host globals
 
 static struct peer_state* host_get_or_create_peer_state_by_artist_id(int artist_id)
@@ -326,6 +334,8 @@ static struct {
 	double artificial_mim_latency_variance;
 	int64_t tracer_sequence;
 	uint8_t* unackd_mimbuf_arr;
+
+	struct activitycache_entry* activitycache_entry_arr;
 
 	unsigned is_time_travelling   :1;
 } pg; // peer globals
@@ -381,6 +391,23 @@ int peer_tick(void)
 			pg.journal_cursor = jc1;
 			return 1;
 		}
+
+		int64_t p0,p1;
+		struct ringbuf* rb = &g.host2peer_activitycache_ringbuf;
+		ringbuf_get_readable_range(rb, &p0, &p1);
+		while (p0 < p1) {
+			uint8_t data[16];
+			ringbuf_read_range(rb, data, p0, p0+16);
+			p0 += sizeof data;
+			struct bufstream bs;
+			bufstream_init_from_memory(&bs, data, sizeof data);
+			struct activitycache_entry e;
+			e.timestamp = bs_read_leu64(&bs);
+			e.artist_id = bs_read_leu32(&bs);
+			e.weight    = bs_read_leu32(&bs);
+			arrput(pg.activitycache_entry_arr, e);
+		}
+
 		return 0;
 	} else if (g.is_peer && !g.is_host) {
 		// already handled elsewhere, no?
@@ -2204,11 +2231,42 @@ void commit_mim_to_host(int artist_id, int session_id, int64_t tracer, uint8_t* 
 	if (it_is_time_for_a_snapshotcache_push(jsz)) {
 		snapshotcache_push(snap, jsz, ts);
 	}
+
+	struct jio* ja = igo.jio_activitycache;
+	assert(ja != NULL);
+	arrreset(*bb);
+	assert(0 == arrlen(*bb));
+	bb_append_leu64(bb, ts);
+	assert(8 == arrlen(*bb));
+	bb_append_leu32(bb, artist_id);
+	assert(12 == arrlen(*bb));
+	bb_append_leu32(bb, count);
+	assert(16 == arrlen(*bb));
+	if (ringbuf_write(&g.host2peer_activitycache_ringbuf, *bb, arrlen(*bb)) < 0) {
+		fprintf(stderr, "host2peer_activitycache_ringbuf is full!\n");
+		return;
+	}
+	jio_flush_bb(ja, bb);
+}
+
+static void H_LOCK(void)
+{
+	assert(0 == pthread_mutex_lock(&hg.mutex));
+}
+
+static void H_UNLOCK(void)
+{
+	assert(0 == pthread_mutex_unlock(&hg.mutex));
 }
 
 int host_tick(void)
 {
-	assert(g.is_host);
+	H_LOCK();
+
+	if (!g.is_host) {
+		H_UNLOCK();
+		return 0;
+	}
 
 	// handle completion events from io port
 	int did_work = 0;
@@ -2282,6 +2340,8 @@ int host_tick(void)
 	#ifndef __EMSCRIPTEN__ // XXX not totally right?
 	did_work |= webserv_broadcast_journal(jio_get_size(igo.jio_journal));
 	#endif
+
+	H_UNLOCK();
 
 	return did_work;
 }
@@ -2412,6 +2472,7 @@ static int setup_datadir(const char* dir)
 
 	uint64_t wax = 0;
 
+	int is_new = 0;
 	const int64_t jjsz = jio_get_size(jj);
 	if (jjsz == 0) {
 		uint8_t** bb = &hg.bb_arr;
@@ -2436,7 +2497,7 @@ static int setup_datadir(const char* dir)
 			return IOERR(FILENAME_JOURNAL, err);
 		}
 
-		if (g.is_host) setup_default_stub();
+		is_new = 1;
 	} else {
 		if (!g.is_host) {
 			return FMTERR(pathbuf, "journal save file already exists; delete it or choose another savedir");
@@ -2527,13 +2588,19 @@ static int setup_datadir(const char* dir)
 		if (acwax != wax) {
 			return FMTERR(FILENAME_ACTIVITYCACHE, "wax mismatch");
 		}
-
+		assert(bs.offset == 16);
+		const int num_entries = (jasz - bs.offset) / 16;
+		arrsetlen(pg.activitycache_entry_arr, num_entries);
+		int index = 0;
 		while (bs.offset < jasz) {
-			const int64_t timestamp = bs_read_leu64(&bs);
-			const int32_t artist_id = bs_read_leu32(&bs);
-			const int32_t weight = bs_read_leu32(&bs);
+			assert((0 <= index) && (index < num_entries));
+			struct activitycache_entry* entry = &pg.activitycache_entry_arr[index];
+			entry->timestamp = bs_read_leu64(&bs);
+			entry->artist_id = bs_read_leu32(&bs);
+			entry->weight    = bs_read_leu32(&bs);
+			++index;
 		}
-
+		assert(index == num_entries);
 		if (bs.offset != jasz) {
 			return FMTERR(FILENAME_ACTIVITYCACHE, "activitycache: bad EOF alignment");
 		}
@@ -2542,6 +2609,8 @@ static int setup_datadir(const char* dir)
 
 	unwax_all();
 
+	if (is_new && g.is_host) setup_default_stub();
+
 	return 0;
 }
 
@@ -2549,16 +2618,19 @@ int gig_configure_as_host_and_peer(const char* rootdir)
 {
 	assert(!g.is_configured);
 	g.is_configured = 1;
+	H_LOCK();
 	g.is_host = 1;
 	g.is_peer = 1;
 	pg.my_artist_id = 1;
 	hg.next_artist_id = 2;
 	ringbuf_init(&g.peer2host_mim_ringbuf, 16);
+	ringbuf_init(&g.host2peer_activitycache_ringbuf, 12);
 	int e = setup_datadir(rootdir);
 	if (e<0) {
 		dumperr();
 		return e;
 	}
+	H_UNLOCK();
 	//snapshot_copy(&pg.upstream_snapshot, &hg.present_snapshot);
 	return 0;
 }
@@ -2567,19 +2639,24 @@ int gig_configure_as_host_only(const char* rootdir)
 {
 	assert(!g.is_configured);
 	g.is_configured = 1;
+	H_LOCK();
 	g.is_host = 1;
 	hg.next_artist_id = 1;
-	return setup_datadir(rootdir);
+	const int e = setup_datadir(rootdir);
+	H_UNLOCK();
+	return e;
 }
 
 int gig_configure_as_peer_only(const char* savedir)
 {
 	assert(!g.is_configured);
 	g.is_configured = 1;
+	H_LOCK();
 	g.is_peer = 1;
 	hg.next_artist_id = -1;
-	return setup_datadir(savedir);
-	return 0;
+	const int e = setup_datadir(savedir);
+	H_UNLOCK();
+	return e;
 }
 
 void gig_unconfigure(void)
@@ -2587,12 +2664,15 @@ void gig_unconfigure(void)
 	assert(g.is_configured);
 	assert(g.is_host || g.is_peer);
 
+	H_LOCK();
+
 	// globals (g)
 	if (g.is_host && g.is_peer) {
 		ringbuf_free(&g.peer2host_mim_ringbuf);
-	} else {
-		assert(g.peer2host_mim_ringbuf.buf != NULL);
+		ringbuf_free(&g.host2peer_activitycache_ringbuf);
 	}
+	assert(g.peer2host_mim_ringbuf.buf == NULL);
+	assert(g.host2peer_activitycache_ringbuf.buf == NULL);
 	memset(&g, 0, sizeof g);
 
 	rewax_all();
@@ -2608,7 +2688,11 @@ void gig_unconfigure(void)
 	arrfree(hg.bb_arr);
 	arrfree(hg.peer_state_arr);
 	snapshot_free(&hg.present_snapshot);
+	pthread_mutex_t tmp = hg.mutex;
 	memset(&hg, 0, sizeof hg);
+	hg.mutex = tmp;
+
+	H_UNLOCK();
 
 	// peer globals
 	arrfree(pg.bb_arr);
@@ -2627,6 +2711,7 @@ void gig_set_journal_snapshot_growth_threshold(int t)
 
 void gig_init(void)
 {
+	assert(0 == pthread_mutex_init(&hg.mutex, NULL));
 	#ifdef __EMSCRIPTEN__
 	igo.io_port_id = -1;
 	#else
@@ -2653,11 +2738,54 @@ void get_time_travel_range(int64_t* out_ts0, int64_t* out_ts1)
 
 void render_activity(uint8_t* image1d, int image1d_width, int64_t ts0, int64_t ts1)
 {
-	// XXX test pattern
-	for (int i=0; i<image1d_width; ++i) {
-		image1d[i] = (i&4) ? 0xc0 : 0x40;
+	memset(image1d, 0, image1d_width);
+
+	if (ts0 >= ts1) return;
+
+	const int num = arrlen(pg.activitycache_entry_arr);
+
+	int left = 0;
+	int right = num;
+	while (left < right) {
+		const int mid = (left + right) >> 1;
+		struct activitycache_entry e = pg.activitycache_entry_arr[mid];
+		if (e.timestamp < ts0) {
+			left = mid + 1;
+		} else {
+			right = mid;
+		}
 	}
-	TODO(render activity)
+	int i0 = left;
+	if (i0<0)    i0=0;
+	if (i0>=num) i0=num-1;
+
+	left = 0;
+	right = num;
+	while (left < right) {
+		const int mid = (left + right) >> 1;
+		struct activitycache_entry e = pg.activitycache_entry_arr[mid];
+		if (e.timestamp > ts1) {
+			right = mid;
+		} else {
+			left = mid + 1;
+		}
+	}
+	int i1 = right-1;
+	if (i1<0)    i1=0;
+	if (i1>=num) i1=num-1;
+
+	if (i0 >= i1) return;
+
+	for (int i=i0; i<i1; ++i) {
+		struct activitycache_entry e = pg.activitycache_entry_arr[i];
+		int x = ((e.timestamp - ts0) * image1d_width) / (ts1-ts0);
+		if ((0 <= x) && (x < image1d_width)) {
+			int v = image1d[x];
+			v += e.weight * 30;
+			if (v>255) v=255;
+			image1d[x] = v;
+		}
+	}
 }
 
 static void suspend_time_ex(int64_t seek_ts)
