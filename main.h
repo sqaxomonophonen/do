@@ -16,6 +16,12 @@ static inline int64_t get_microseconds_monotonic(void)
 {
 	return get_nanoseconds_monotonic()/1000LL;
 }
+
+static inline double get_seconds_monotonic(void)
+{
+	return (double)get_nanoseconds_monotonic() * 1e-9;
+}
+
 int64_t get_microseconds_epoch(void);
 void sleep_microseconds(int64_t);
 

@@ -51,21 +51,21 @@ static inline int is_valid_splash4(int v)
 }
 
 // these flags are persistent (written in snapshotcache):
-#define FC_IS_INSERT (1LL<<0)
-#define FC_IS_DELETE (1LL<<1)
-#define FC_IS_DEFER  (1LL<<2)
-#define FC_PERSISTENT_MASK ((1LL<<24)-1) // NOTE must mask out all FC__* flags (see below)
+#define DC_IS_INSERT (1LL<<0)
+#define DC_IS_DELETE (1LL<<1)
+#define DC_IS_DEFER  (1LL<<2)
+#define DC_PERSISTENT_MASK ((1LL<<24)-1) // NOTE must mask out all DC__* flags (see below)
 // these flags are transient/ephemeral, not persisted; keep them in high bits
-// so persistent flags can be stored in fewer bytes (due to leb128):
-#define FC__FLIPPED_INSERT (1LL<<24)
-#define FC__FLIPPED_DELETE (1LL<<25)
-#define FC__FLIPPED_DEFER  (1LL<<26)
-#define FC__FILL           (1LL<<31)
+// so persistent flags can be stored in fewer bytes (due to LEB128):
+#define DC__FLIPPED_INSERT (1LL<<24)
+#define DC__FLIPPED_DELETE (1LL<<25)
+#define DC__FLIPPED_DEFER  (1LL<<26)
+#define DC__FILL           (1LL<<31)
 
 struct docchar {
 	struct colorchar colorchar;
 	unsigned timestamp; // last change (or created)
-	uint32_t flags; // FC_*
+	uint32_t flags; // DC_*
 };
 
 struct caret {
@@ -111,9 +111,9 @@ struct book {
 struct document {
 	int book_id, doc_id;
 	uint64_t snapshotcache_offset;
+	// (update snapshot_copy() when adding arr-fields here:)
 	char* name_arr;
 	struct docchar* docchar_arr;
-	// (update snapshot_copy() when adding arr-fields here)
 };
 
 struct snapshot {

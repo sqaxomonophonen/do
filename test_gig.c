@@ -498,3 +498,8 @@ int main(int argc, char** argv)
 
 	return EXIT_SUCCESS;
 }
+
+// TODO: in time some/most of this probably ought to be replaced by small
+// DO_JAM_JOURNAL files combined with code that asserts the expected outcomes?
+// or perhaps "automate" it completely where you can record a small session and
+// then assert that the "final snapshot" stays the same?

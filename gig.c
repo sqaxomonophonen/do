@@ -69,8 +69,10 @@ static void snapshot_copy(struct snapshot* dst, struct snapshot* src)
 		struct document* srcdoc = &src->document_arr[i];
 		struct document tmp = *dstdoc;
 		*dstdoc = *srcdoc;
+
 		dstdoc->name_arr = tmp.name_arr;
 		arrcpy(dstdoc->name_arr, srcdoc->name_arr);
+
 		dstdoc->docchar_arr = tmp.docchar_arr;
 		arrcpy(dstdoc->docchar_arr , srcdoc->docchar_arr);
 	}
@@ -529,6 +531,16 @@ static void doc_location_constraint(struct document* doc, struct location* loc)
 	*loc = it.location;
 }
 
+static void doc_set_location_to_end_of_line(struct document* doc, struct location* loc)
+{
+	struct doc_iterator it = doc_iterator(doc);
+	while (doc_iterator_next(&it)) {
+		struct location dloc = it.location;
+		if (dloc.line > loc->line) break;
+		if (loc->line == dloc.line) loc->column = dloc.column;
+	}
+}
+
 struct mimop {
 	struct snapshot* snap;
 	struct mim_state* ms;
@@ -580,67 +592,174 @@ static int mimop_has_doc(struct mimop* mo)
 	return (mo->ms != NULL) && (mimop_lookup_doc(mo) != NULL);
 }
 
-static void doc_del(struct document* doc, struct snapshot* snap, int index)
+enum d_type {
+	OPN_DELETE=1,
+	OPN_BACKSPACE,
+	OPN_COMMIT,
+	OPN_CANCEL
+};
+
+static void doc_opn(struct document* doc, struct snapshot* snap, struct location* cloc, int index, int count, enum d_type type)
 {
+	// update caret positions ahead of insertion index if necessary
+	int is_backspace = 0;
+	switch (type) {
+
+	case OPN_BACKSPACE:
+		is_backspace = 1;
+		index -= count;
+		if (index < 0) {
+			count += index;
+			index = 0;
+		}
+		type = OPN_DELETE;
+		break;
+
+	case OPN_COMMIT:
+	case OPN_CANCEL:
+		assert(index == 0);
+		assert(count == arrlen(doc->docchar_arr));
+		break;
+
+	case OPN_DELETE:
+		break;
+
+	}
+
+	if ((index+count) > arrlen(doc->docchar_arr)) {
+		count = arrlen(doc->docchar_arr) - index;
+		if (count <= 0) return;
+	}
+
 	struct location dloc = document_reverse_locate(doc, index);
-	const struct docchar dc = arrchkget(doc->docchar_arr, index);
-	const int cp = dc.colorchar.codepoint;
-	const int num_ms = arrlen(snap->mim_state_arr);
-	for (int i=0; i<num_ms; ++i) {
-		struct mim_state* ms = &snap->mim_state_arr[i];
-		const int num_carets = arrlen(ms->caret_arr);
-		for (int ii=0; ii<num_carets; ++ii) {
-			struct caret* c = &ms->caret_arr[ii];
-			for (int ca=0; ca<2; ++ca) {
-				struct location* loc = (ca==0) ? &c->caret_loc : (ca==1) ? &c->anchor_loc : NULL;
-				if (loc->line > dloc.line) {
-					if (cp=='\n') {
-						--loc->line;
-						if (loc->line == dloc.line) {
-							loc->column += (dloc.column-1);
+	int end = index+count;
+	for (; index<end; ++index) {
+		struct docchar* dc = arrchkptr(doc->docchar_arr, index);
+		const int is_newline = (dc->colorchar.codepoint == '\n');
+
+		int do_delete = 0;
+		switch (type) {
+		case OPN_DELETE:
+			if (dc->flags & DC_IS_INSERT) {
+				do_delete = 1;
+			} else if (!(dc->flags & DC_IS_DELETE)) {
+				dc->flags |= (DC_IS_DELETE | DC__FLIPPED_DELETE);
+			}
+			break;
+		case OPN_COMMIT:
+			if (dc->flags & DC__FILL) {
+				if (dc->flags & DC_IS_INSERT) { // commit
+					dc->flags &= ~(DC__FILL | DC_IS_INSERT);
+				} else if (dc->flags & DC_IS_DELETE) {
+					do_delete = 1;
+				}
+			}
+			break;
+		case OPN_CANCEL:
+			if (dc->flags & DC__FILL) {
+				if (dc->flags & DC_IS_INSERT) {
+					do_delete = 1;
+				} else if (dc->flags & DC_IS_DELETE) {
+					dc->flags &= ~(DC__FILL | DC_IS_DELETE);
+				}
+			}
+			break;
+		default: assert(!"unhandled opn case");
+		}
+
+		if (do_delete) {
+			const int num_ms = arrlen(snap->mim_state_arr);
+			for (int i=0; i<num_ms; ++i) {
+				struct mim_state* ms = &snap->mim_state_arr[i];
+				const int num_carets = arrlen(ms->caret_arr);
+				for (int ii=0; ii<num_carets; ++ii) {
+					struct caret* c = &ms->caret_arr[ii];
+					for (int ca=0; ca<2; ++ca) {
+						struct location* loc = (ca==0) ? &c->caret_loc : (ca==1) ? &c->anchor_loc : NULL;
+						if (loc->line > dloc.line) {
+							if (is_newline) {
+								--loc->line;
+								if (loc->line == dloc.line) {
+									loc->column += (dloc.column-1);
+								}
+							}
+						} else if (loc->line == dloc.line) {
+							if (dloc.column < loc->column) {
+								--loc->column;
+							}
 						}
 					}
-				} else if (loc->line == dloc.line) {
-					if (dloc.column < loc->column) {
-						assert(cp!='\n');
-						--loc->column;
-					}
+				}
+			}
+			arrdel(doc->docchar_arr, arrchk(doc->docchar_arr, index));
+			--index;
+			--end;
+		}
+
+		if (!is_newline) {
+			++dloc.column;
+		} else if (!do_delete) {
+			++dloc.line;
+			dloc.column=1;
+		}
+
+		if (cloc && !do_delete) {
+			if (is_backspace) {
+				if (!is_newline) {
+					--cloc->column;
+				} else {
+					--cloc->line;
+					cloc->column=1;
+					doc_set_location_to_end_of_line(doc, cloc);
+				}
+			} else {
+				if (!is_newline) {
+					++cloc->column;
+				} else {
+					++cloc->line;
+					cloc->column=1;
 				}
 			}
 		}
 	}
-	arrdel(doc->docchar_arr, arrchk(doc->docchar_arr, index));
 }
 
-static void doc_ins(struct document* doc, struct snapshot* snap, int index, struct docchar dc)
+static void doc_adv(struct document* doc, struct snapshot* snap, struct location* iloc, int index, struct docchar* dcs, int num_dcs)
 {
-	struct location iloc = document_reverse_locate(doc, index);
-	const int cp = dc.colorchar.codepoint;
-	const int num_ms = arrlen(snap->mim_state_arr);
-	for (int i=0; i<num_ms; ++i) {
-		struct mim_state* ms = &snap->mim_state_arr[i];
-		const int num_carets = arrlen(ms->caret_arr);
-		for (int ii=0; ii<num_carets; ++ii) {
-			struct caret* c = &ms->caret_arr[ii];
-			for (int ca=0; ca<2; ++ca) {
-				struct location* loc = (ca==0) ? &c->caret_loc : (ca==1) ? &c->anchor_loc : NULL;
-				if (loc->line > iloc.line) {
-					if (cp=='\n') ++loc->line;
-				} else if (loc->line == iloc.line) {
-					if (iloc.column < loc->column) {
-						if (cp=='\n') {
-							++loc->line;
-							loc->column -= (iloc.column-1);
-							assert(loc->column >= 1);
-						} else {
-							++loc->column;
+	// update caret positions ahead of insertion index if necessary
+	for (int j=0; j<num_dcs; ++j) {
+		const int is_newline = dcs[j].colorchar.codepoint == '\n';
+		const int num_ms = arrlen(snap->mim_state_arr);
+		for (int i=0; i<num_ms; ++i) {
+			struct mim_state* ms = &snap->mim_state_arr[i];
+			const int num_carets = arrlen(ms->caret_arr);
+			for (int ii=0; ii<num_carets; ++ii) {
+				struct caret* c = &ms->caret_arr[ii];
+				for (int ca=0; ca<2; ++ca) {
+					struct location* loc = (ca==0) ? &c->caret_loc : (ca==1) ? &c->anchor_loc : NULL;
+					if (loc->line > iloc->line) {
+						if (is_newline) ++loc->line;
+					} else if (loc->line == iloc->line) {
+						if (iloc->column < loc->column) {
+							if (is_newline) {
+								++loc->line;
+								loc->column -= (iloc->column-1);
+								assert(loc->column >= 1);
+							} else {
+								++loc->column;
+							}
 						}
 					}
 				}
 			}
 		}
+		if (is_newline) {
+			++iloc->line;
+			iloc->column = 1;
+		} else {
+			++iloc->column;
+		}
 	}
-	arrins(doc->docchar_arr, index, dc);
 }
 
 static void mimop_delete(struct mimop* mo, struct location* loc0, struct location* loc1)
@@ -648,18 +767,9 @@ static void mimop_delete(struct mimop* mo, struct location* loc0, struct locatio
 	struct document* rw_doc = mimop_get_doc(mo);
 	location_sort2(&loc0, &loc1);
 	const int o0 = document_locate(rw_doc, loc0);
-	int o1 = document_locate(rw_doc, loc1);
-	if (o1==o0) return;
-	for (int o=o0; o<o1; ++o) {
-		struct docchar* fc = arrchkptr(rw_doc->docchar_arr, o);
-		if (fc->flags & FC_IS_INSERT) {
-			doc_del(rw_doc, mo->snap, o);
-			--o;
-			--o1;
-		} else if (!(fc->flags & FC_IS_DELETE)) {
-			fc->flags |= FC_IS_DELETE;
-		}
-	}
+	const int o1 = document_locate(rw_doc, loc1);
+	assert(o0<=o1);
+	doc_opn(rw_doc, mo->snap, NULL, o0, o1-o0, OPN_DELETE);
 }
 
 struct mimexscanner {
@@ -787,13 +897,6 @@ static int mimex_matches(struct mimexscanner* s, const char* cmd, const char* fm
 	return !s->has_error;
 }
 
-#if 0
-static inline int64_t get_journal_timestamp_us(void)
-{
-	return (get_microseconds_epoch() - igo.journal_time_zero_epoch_us);
-}
-#endif
-
 int64_t get_monotonic_jam_time_us(void)
 {
 	return atomic_load(&igo.jam_time_offset_us) + get_microseconds_monotonic();
@@ -817,39 +920,21 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 		EX,
 	};
 
-	enum { UTF8, U16 };
+	//enum { UTF8, U16 };
 
 	int mode = COMMAND;
-	int datamode = UTF8;
 	int previous_mode = -1;
 	int number=0, number_sign=0;
 	int push_chr = -1;
-	int suffix_bytes_remaining = 0;
+	int trailer_bytes_following = 0;
 	int arg_tag = -1;
 	int arg_num = -1;
 	int motion_cmd = -1;
 	const int64_t now = get_monotonic_jam_time_us();
 	int chr=0;
-	uint16_t u16val=0;
-	const char* ex0 = NULL;
 
 	while ((push_chr>=0) || (remaining>0)) {
-		int expect_suffix_bytes = 0;
-		const char* p0 = input_cursor;
-		if (datamode == UTF8) {
-			chr = (push_chr>=0) ? push_chr : utf8_decode(&input_cursor, &remaining);
-		} else if (datamode == U16) {
-			assert(push_chr == -1);
-			assert(remaining >= 2);
-			const uint8_t* p8 = (const uint8_t*)input_cursor;
-			u16val = leu16_pdecode(&p8);
-			input_cursor = (const char*)p8;
-			remaining -= 2;
-		} else {
-			assert(!"unhandled datamode");
-		}
-		const char* p1 = input_cursor;
-		const int num_bytes = (p1-p0);
+		chr = (push_chr>=0) ? push_chr : utf8_decode(&input_cursor, &remaining);
 		push_chr = -1;
 		if (chr == -1) return mimerr("invalid UTF-8 input");
 		const int num_args = arrlen(number_stack_arr);
@@ -874,12 +959,69 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 					if (num_args != 1) {
 						return mimerr("command '%c' expected 1 argument; got %d", chr, num_args);
 					}
-					suffix_bytes_remaining = arrchkget(number_stack_arr, 0);
-					if (suffix_bytes_remaining > 0) {
-						mode = EX;
-						ex0 = input_cursor; // NOTE points at /next/ character after ':'
+					assert(trailer_bytes_following == 0);
+					trailer_bytes_following = arrchkget(number_stack_arr, 0);
+					if (trailer_bytes_following <= 0) {
+						return mimerr("%d byte mimex", trailer_bytes_following);
+					}
+					arrreset(number_stack_arr);
+					mode = EX;
+				}	break;
+
+				case 'i': // text insert
+				case 'I': // color text insert
+				{
+					if (num_args != 2) {
+						return mimerr("command '%c' expected 2 arguments; got %d", chr, num_args);
+					}
+					assert(trailer_bytes_following == 0);
+					trailer_bytes_following = arrchkget(number_stack_arr, 1);
+					arg_tag = arrchkget(number_stack_arr, 0);
+					arrreset(number_stack_arr);
+					if (trailer_bytes_following <= 0) {
+						return mimerr("command '%c' num bytes arg must be positive, got %d", chr, trailer_bytes_following);
+					}
+					if (!mimop_has_doc(mo)) {
+						return mimerr("command '%c' requires doc; mim state has none", chr);
+					}
+					previous_mode = mode;
+					switch (chr) {
+					case 'i': mode = INSERT_STRING; break;
+					case 'I': mode = INSERT_COLOR_STRING; break;
+					default: assert(!"unexpected chr");
 					}
 				}	break;
+
+				case 'X': // backspace
+				case 'x': // delete
+				{
+					if (num_args != 1) {
+						return mimerr("command '%c' expected 1 argument; got %d", chr, num_args);
+					}
+					arg_tag = arrchkget(number_stack_arr, 0);
+					arg_num = 1; // XXX make it an optional arg?
+					arrreset(number_stack_arr);
+
+					if (!mimop_has_doc(mo)) return mimerr("command '%c' requires doc; mim state has none", chr);
+
+					struct document* rw_doc = mimop_get_doc(mo);
+					struct mim_state* ms = mimop_ms(mo);
+					const int num_carets = arrlen(ms->caret_arr);
+					for (int i=0; i<num_carets; ++i) {
+						struct caret* car = arrchkptr(ms->caret_arr, i);
+						if (car->tag != arg_tag) continue;
+						struct location* caret_loc = &car->caret_loc;
+						struct location* anchor_loc = &car->anchor_loc;
+						if (0 == location_compare(caret_loc, anchor_loc)) {
+							int o = document_locate(rw_doc, caret_loc);
+							doc_opn(rw_doc, mo->snap, caret_loc, o, arg_num, (chr=='X')?OPN_BACKSPACE:(chr=='x')?OPN_DELETE:0);
+						} else {
+							mimop_delete(mo, caret_loc, anchor_loc);
+						}
+						*anchor_loc = *caret_loc;
+					}
+				}	break;
+
 
 				case '!': // commit
 				case '/': // cancel
@@ -915,10 +1057,10 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 								else assert(!"unreachable");
 								while ((0 <= o) && (o < num_chars)) {
 									struct docchar* fc = arrchkptr(rw_doc->docchar_arr, o);
-									const int is_fillable = fc->flags & (FC_IS_INSERT | FC_IS_DELETE);
-									if ((fc->flags & (FC__FILL | FC_IS_DEFER)) || !is_fillable) break;
+									const int is_fillable = fc->flags & (DC_IS_INSERT | DC_IS_DELETE);
+									if ((fc->flags & (DC__FILL | DC_IS_DEFER)) || !is_fillable) break;
 									if (is_fillable) {
-										fc->flags |= FC__FILL;
+										fc->flags |= DC__FILL;
 									}
 									o += d;
 								}
@@ -927,37 +1069,12 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 						car->anchor_loc = car->caret_loc;
 					}
 
-					for (int i=0; i<num_chars; ++i) {
-						struct docchar* fc = arrchkptr(rw_doc->docchar_arr, i);
-						if (!(fc->flags & FC__FILL)) continue;
-
-						if (chr=='!') {
-							if (fc->flags & FC_IS_INSERT) { // commit
-								fc->flags &= ~(FC__FILL | FC_IS_INSERT);
-							}
-							if (fc->flags & FC_IS_DELETE) {
-								doc_del(rw_doc, mo->snap, i);
-								--i;
-								--num_chars;
-							}
-						} else if (chr=='/') { // cancel
-							if (fc->flags & FC_IS_INSERT) {
-								doc_del(rw_doc, mo->snap, i);
-								--i;
-								--num_chars;
-							}
-							if (fc->flags & FC_IS_DELETE) {
-								fc->flags &= ~(FC__FILL | FC_IS_DELETE);
-							}
-						} else {
-							assert(!"unhandled command");
-						}
-					}
+					doc_opn(rw_doc, mo->snap, NULL, 0, num_chars, (chr=='!')?OPN_COMMIT:(chr=='/' )?OPN_CANCEL:0);
 
 				}	break;
 
-				case 'S':   // caret movement
-				case 'M': { // anchor movement
+				case 'S':   // caret-only movement   (e.g. shift+arrows)
+				case 'M': { // caret+anchor movement (e.g. arrows)
 					if (num_args != 1) {
 						return mimerr("command '%c' expected 1 argument; got %d", chr, num_args);
 					}
@@ -1026,91 +1143,6 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 					}
 				}	break;
 
-				case 'i':   // text insert
-				case 'I': { // color text insert
-					if (num_args != 2) {
-						return mimerr("command '%c' expected 2 arguments; got %d", chr, num_args);
-					}
-					assert(suffix_bytes_remaining == 0);
-					suffix_bytes_remaining = arrchkget(number_stack_arr, 1);
-					arg_tag = arrchkget(number_stack_arr, 0);
-					arrreset(number_stack_arr);
-					if (suffix_bytes_remaining > 0) {
-						if (!mimop_has_doc(mo)) return mimerr("command '%c' requires doc; mim state has none", chr);
-						previous_mode = mode;
-						switch (chr) {
-						case 'i': mode = INSERT_STRING; break;
-						case 'I': mode = INSERT_COLOR_STRING; break;
-						default: assert(!"unexpected chr");
-						}
-					}
-				}	break;
-
-				case 'X': // backspace
-				case 'x': // delete
-				{
-					if (num_args != 1) {
-						return mimerr("command '%c' expected 1 argument; got %d", chr, num_args);
-					}
-					arg_tag = arrchkget(number_stack_arr, 0);
-					arg_num = 1; // XXX make it an optional arg?
-					arrreset(number_stack_arr);
-
-					if (!mimop_has_doc(mo)) return mimerr("command '%c' requires doc; mim state has none", chr);
-
-					struct document* rw_doc = mimop_get_doc(mo);
-					struct mim_state* ms = mimop_ms(mo);
-					const int num_carets = arrlen(ms->caret_arr);
-					for (int i=0; i<num_carets; ++i) {
-						struct caret* car = arrchkptr(ms->caret_arr, i);
-						if (car->tag != arg_tag) continue;
-						struct location* caret_loc = &car->caret_loc;
-						struct location* anchor_loc = &car->anchor_loc;
-						if (0 == location_compare(caret_loc, anchor_loc)) {
-							int o = document_locate(rw_doc, caret_loc);
-							int d,m0,m1,adj;
-							if (chr == 'X') { // backspace
-								d=-1; m0=-1; m1=-1;
-								adj=0;
-							} else if (chr == 'x') { // delete
-								d=0;  m0=0;  m1=1;
-								adj=1;
-							} else {
-								assert(!"unexpected char");
-							}
-
-							for (int i=0; i<arg_num; ++i) {
-								const int num_chars = arrlen(rw_doc->docchar_arr);
-								const int od = o+d;
-								int dc=0;
-								if ((0 <= od) && (od < num_chars)) {
-									struct docchar* fc = arrchkptr(rw_doc->docchar_arr, od);
-									if (fc->flags & FC_IS_INSERT) {
-										doc_del(rw_doc, mo->snap, od);
-										dc=m0;
-									} else if (fc->flags & FC_IS_DELETE) {
-										dc=m1;
-									} else {
-										assert(!(fc->flags & FC_IS_INSERT));
-										assert(!(fc->flags & FC_IS_DELETE));
-										fc->flags |= (FC_IS_DELETE | FC__FLIPPED_DELETE);
-										fc->timestamp = now;
-										dc=m1;
-									}
-								}
-								if (adj) {
-									caret_loc->column += dc;
-									doc_location_constraint(rw_doc, caret_loc);
-								}
-								o += dc;
-							}
-						} else {
-							mimop_delete(mo, caret_loc, anchor_loc);
-						}
-						*anchor_loc = *caret_loc;
-					}
-				}	break;
-
 				default:
 					return mimerr("invalid command '%c'/%d", chr, chr);
 
@@ -1129,102 +1161,9 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 			}
 		}	break;
 
-		case INSERT_STRING:
-		case INSERT_COLOR_STRING: {
-			assert(mimop_has_doc(mo));
-			int do_insert = 0;
-			int next_datamode = datamode;
-			if (mode == INSERT_STRING) {
-				assert(datamode == UTF8);
-				do_insert = 1;
-			} else if (mode == INSERT_COLOR_STRING) {
-				if (datamode == U16) {
-					do_insert = 1;
-					next_datamode = UTF8;
-				} else {
-					next_datamode = U16;
-				}
-			} else {
-				assert(!"unreachable");
-			}
-
-			if (do_insert) {
-				if (chr < ' ') {
-					switch (chr) {
-					case '\n':
-					case '\t': // XXX consider not supporting tabs?
-						// accepted control codes
-						break;
-					default:
-						return mimerr("invalid control code %d in string", chr);
-					}
-				}
-
-				struct mim_state* ms = mimop_ms(mo);
-
-				int16_t splash4=0;
-				if (mode == INSERT_STRING) {
-					// insert with artist mim state color
-					splash4 = ms->splash4;
-				} else if (mode == INSERT_COLOR_STRING) {
-					// insert with encoded color
-					splash4 = u16val;
-				} else {
-					assert(!"unreachable");
-				}
-
-				if (!is_valid_splash4(splash4)) {
-					return mimerr("invalid splash4 value (%d)", splash4);
-				}
-
-				struct document* rw_doc = mimop_get_doc(mo);
-				const int num_carets = arrlen(ms->caret_arr);
-				for (int i=0; i<num_carets; ++i) {
-					struct caret* car = arrchkptr(ms->caret_arr, i);
-					if (car->tag != arg_tag) continue;
-
-					struct location* loc = &car->caret_loc;
-					struct location* anchor = &car->anchor_loc;
-					if (0 != location_compare(loc, anchor)) mimop_delete(mo, loc, anchor);
-					*anchor = *loc;
-
-					const int off = document_locate(rw_doc, loc);
-					const int n0 = arrlen(rw_doc->docchar_arr);
-					doc_ins(rw_doc, mo->snap, off, ((struct docchar){
-						.colorchar = {
-							.codepoint = chr,
-							.splash4 = splash4,
-						},
-						.timestamp = now,
-						//.artist_id = get_my_artist_id(),
-						.flags = (FC_IS_INSERT | FC__FLIPPED_INSERT),
-					}));
-					const int n1 = arrlen(rw_doc->docchar_arr);
-					assert(n1==(n0+1));
-					//printf("%d => INS [%c] => %d\n", n0, chr, n1);
-					if (chr == '\n') {
-						++loc->line;
-						loc->column = 1;
-					} else {
-						++loc->column;
-					}
-					doc_location_constraint(rw_doc, loc);
-					*anchor = *loc;
-				}
-			}
-
-			datamode = next_datamode;
-			expect_suffix_bytes = 1;
-		}	break;
-
-		case EX: {
-			expect_suffix_bytes = 1;
-		}	break;
-
 		case MOTION: {
 
 			assert(arrlen(number_stack_arr) == 0);
-			// TODO read number?
 
 			switch (chr) {
 
@@ -1232,6 +1171,8 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 			case 'l': // right
 			case 'k': // up
 			case 'j': // down
+			case '^': // home
+			case '$': // end
 			{
 				assert(mimop_has_doc(mo));
 
@@ -1239,6 +1180,8 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 				const int is_right = (chr=='l');
 				const int is_up    = (chr=='k');
 				const int is_down  = (chr=='j');
+				const int is_home  = (chr=='^');
+				const int is_end   = (chr=='$');
 
 				struct mim_state* ms = mimop_ms(mo);
 				const int num_carets = arrlen(ms->caret_arr);
@@ -1253,22 +1196,23 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 						if (is_left) {
 							--loc0->column;
 							doc_location_constraint(readonly_doc, loc0);
-						}
-						if (is_right) {
+						} else if (is_right) {
 							++loc1->column;
 							doc_location_constraint(readonly_doc, loc1);
-						}
-						if (is_up) {
+						} else if (is_home) {
+							loc0->column = 1;
+						} else if (is_end) {
+							doc_set_location_to_end_of_line(readonly_doc, loc1);
+						} else if (is_up) {
 							--loc0->line;
 							doc_location_constraint(readonly_doc, loc0);
-						}
-						if (is_down) {
+						} else if (is_down) {
 							++loc1->line;
 							doc_location_constraint(readonly_doc, loc1);
 						}
 					}
-					if (is_left  || is_up  ) *loc1 = *loc0;
-					if (is_right || is_down) *loc0 = *loc1;
+					if (is_left  || is_up   || is_home) *loc1 = *loc0;
+					if (is_right || is_down || is_end ) *loc0 = *loc1;
 				}
 			}	break;
 
@@ -1282,142 +1226,210 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 
 		}	break;
 
+		case EX:
+		case INSERT_STRING:
+		case INSERT_COLOR_STRING:
+			assert(trailer_bytes_following > 0);
+			break;
+
 		default:
 			assert(!"unhandled mim_spool()-mode");
 
 		}
 
-		if (expect_suffix_bytes) {
-			assert(suffix_bytes_remaining > 0);
-			suffix_bytes_remaining -= num_bytes;
-			assert(suffix_bytes_remaining >= 0);
-			if (suffix_bytes_remaining == 0) {
-				assert(datamode == UTF8);
-				arrreset(number_stack_arr);
-				assert(previous_mode == COMMAND);
+		if (trailer_bytes_following > 0) {
+			arrreset(number_stack_arr);
+			assert(previous_mode == COMMAND);
 
-				if (mode == EX) {
-					struct mimexscanner s;
-					mimexscanner_init(&s, ex0, input_cursor);
+			const char* s0 = input_cursor;
+			input_cursor += trailer_bytes_following;
+			const char* s1 = input_cursor;
+			if (remaining < trailer_bytes_following) {
+				return mimerr("number of trailer bytes (%d) exceeds number of remaining bytes (%d)", trailer_bytes_following, remaining);
+			}
+			remaining -= trailer_bytes_following;
+			assert(remaining >= 0);
+			trailer_bytes_following = 0;
+			int tr = s1-s0;
 
-					{
-						int book_id;
-						const char* book_fundament;
-						const char* book_template;
-						if (mimex_matches(&s, "newbook", "iss", &book_id, &book_fundament, &book_template)) {
-							enum fundament fundament = match_fundament(book_fundament);
-							if (fundament == _NO_FUNDAMENT_) {
-								const char* web_prefix = "web-";
-								if (0 == strncmp(book_fundament, web_prefix, strlen(web_prefix))) {
-									return mimerr("TODO web-* fundament"); // TODO XXX
-								} else {
-									return mimerr(":newbook used with unsupported fundament \"%s\"", book_fundament);
-								}
-							} else {
-								const int is_nil_template = (0 == strcmp(book_template, "-"));
-								//printf("TODO newbook [%d] [%s/%d] [%s/nil=%d]\n", book_id, book_fundament, f, book_template, is_nil_template);
-								if (!is_nil_template) {
-									assert(!"TODO handle/import :newbook template");
-								}
+			if ((mode == INSERT_STRING) || (mode == INSERT_COLOR_STRING)) {
+				static struct docchar* dc_arr;
+				arrreset(dc_arr);
+				struct mim_state* ms = mimop_ms(mo);
+				const int ms_splash4 = ms->splash4;
+				const char* p = s0;
+				while (p < s1) {
+					assert(tr > 0);
+					int codepoint;
+					int splash4;
+					if (mode == INSERT_STRING) {
+						codepoint = utf8_decode(&p, &tr);
+						splash4 = ms_splash4;
+						if (tr < 0) return mimerr("bad input");
+						assert(p<=s1);
+					} else if (mode == INSERT_COLOR_STRING) {
+						codepoint = utf8_decode(&p, &tr);
+						splash4 = leu16_pdecode((const uint8_t**)&p);
+						tr -= 2;
+						if (tr < 0) return mimerr("bad input");
+						assert(p<=s1);
+					} else {
+						assert(!"unreachable");
+					}
+					struct docchar dc = {
+						.colorchar = {
+							.codepoint = codepoint,
+							.splash4 = splash4,
+						},
+						.timestamp = now,
+						.flags = (DC_IS_INSERT | DC__FLIPPED_INSERT),
+					};
+					arrput(dc_arr, dc);
+				}
+				if (p != s1) return mimerr("bad input");
 
-								const int num_books = arrlen(mo->snap->book_arr);
-								for (int ii=0; ii<num_books; ++ii) {
-									struct book* book = &mo->snap->book_arr[ii];
-									if (book_id == book->book_id) {
-										return mimerr("book id %d already exists", book_id);
-									}
-								}
+				struct document* rw_doc = mimop_get_doc(mo);
 
-								arrput(mo->snap->book_arr, ((struct book){
-									.book_id   = book_id,
-									.fundament = fundament,
-								}));
+				const int num_carets = arrlen(ms->caret_arr);
+				for (int i=0; i<num_carets; ++i) {
+					struct caret* car = arrchkptr(ms->caret_arr, i);
+					if (car->tag != arg_tag) continue;
+
+					struct location* loc = &car->caret_loc;
+					struct location* anchor = &car->anchor_loc;
+					if (0 != location_compare(loc, anchor)) {
+						mimop_delete(mo, loc, anchor);
+					}
+					*anchor = *loc;
+
+					const int off = document_locate(rw_doc, loc);
+					const int num_dc = arrlen(dc_arr);
+					doc_adv(rw_doc, mo->snap, loc, off, dc_arr, num_dc);
+					arrinsn(rw_doc->docchar_arr, off, num_dc);
+					memcpy(&rw_doc->docchar_arr[off], dc_arr, num_dc * sizeof(dc_arr[0]));
+					doc_location_constraint(rw_doc, loc);
+					*anchor = *loc;
+				}
+
+			} else if (mode == EX) {
+				struct mimexscanner s;
+				mimexscanner_init(&s, s0, s1);
+
+				int book_id;
+				const char* book_fundament;
+				const char* book_template;
+				if (mimex_matches(&s, "newbook", "iss", &book_id, &book_fundament, &book_template)) {
+					enum fundament fundament = match_fundament(book_fundament);
+					if (fundament == _NO_FUNDAMENT_) {
+						const char* web_prefix = "web-";
+						if (0 == strncmp(book_fundament, web_prefix, strlen(web_prefix))) {
+							return mimerr("TODO web-* fundament"); // TODO XXX
+						} else {
+							return mimerr(":newbook used with unsupported fundament \"%s\"", book_fundament);
+						}
+					} else {
+						const int is_nil_template = (0 == strcmp(book_template, "-"));
+						//printf("TODO newbook [%d] [%s/%d] [%s/nil=%d]\n", book_id, book_fundament, f, book_template, is_nil_template);
+						if (!is_nil_template) {
+							assert(!"TODO handle/import :newbook template");
+						}
+
+						const int num_books = arrlen(mo->snap->book_arr);
+						for (int ii=0; ii<num_books; ++ii) {
+							struct book* book = &mo->snap->book_arr[ii];
+							if (book_id == book->book_id) {
+								return mimerr("book id %d already exists", book_id);
 							}
 						}
-					}
 
-					{
-						int book_id, doc_id;
-						const char* name;
-						if (mimex_matches(&s, "newdoc", "iis", &book_id, &doc_id, &name)) {
-							int book_id_exists = 0;
-
-							const int num_books = arrlen(mo->snap->book_arr);
-							for (int i=0; i<num_books; ++i) {
-								struct book* book = &mo->snap->book_arr[i];
-								if (book->book_id == book_id) {
-									book_id_exists = 1;
-									break;
-								}
-							}
-
-							if (!book_id_exists) {
-								return mimerr("book id %d does not exist", book_id);
-							}
-
-							const int num_docs = arrlen(mo->snap->document_arr);
-							for (int i=0; i<num_docs; ++i) {
-								struct document* doc = &mo->snap->document_arr[i];
-								if ((doc->book_id == book_id) && (doc->doc_id == doc_id)) {
-									return mimerr(":newdoc %d %d collides with existing doc", book_id, doc_id);
-								}
-							}
-							struct document doc = {
-								.book_id = book_id,
-								.doc_id  = doc_id,
-							};
-							const size_t n = strlen(name);
-							arrsetlen(doc.name_arr, n+1);
-							memcpy(doc.name_arr, name, n);
-							doc.name_arr[n]=0;
-							arrput(mo->snap->document_arr, doc);
-						}
-					}
-
-					{
-						int book_id, doc_id;
-						if (mimex_matches(&s, "setdoc", "ii", &book_id, &doc_id)) {
-
-							int book_id_exists = 0;
-							const int num_books = arrlen(mo->snap->book_arr);
-							for (int i=0; i<num_books; ++i) {
-								struct book* book = &mo->snap->book_arr[i];
-								if (book->book_id == book_id) {
-									book_id_exists = 1;
-									break;
-								}
-							}
-							if (!book_id_exists) {
-								return mimerr("setdoc on book id %d, but it doesn't exist", book_id);
-							}
-
-							int doc_id_exists = 0;
-							const int num_docs = arrlen(mo->snap->document_arr);
-							for (int i=0; i<num_docs; ++i) {
-								struct document* doc = &mo->snap->document_arr[i];
-								if ((doc->book_id == book_id) && (doc->doc_id == doc_id)) {
-									doc_id_exists = 1;
-									break;
-								}
-							}
-							if (!doc_id_exists) {
-								return mimerr("setdoc on doc id %d, but it doesn't exist", doc_id);
-							}
-
-							mimop_ms(mo)->book_id = book_id;
-							mimop_ms(mo)->doc_id  = doc_id;
-						}
-					}
-
-					if (s.has_error) {
-						return mimerr("mimex error: %s", s.err);
-					} else if (!s.did_match) {
-						return mimerr("unhandled mimex command [%s]", s.cmd);
+						arrput(mo->snap->book_arr, ((struct book){
+							.book_id   = book_id,
+							.fundament = fundament,
+						}));
 					}
 				}
 
-				mode = previous_mode;
+				{
+					int book_id, doc_id;
+					const char* name;
+					if (mimex_matches(&s, "newdoc", "iis", &book_id, &doc_id, &name)) {
+						int book_id_exists = 0;
+
+						const int num_books = arrlen(mo->snap->book_arr);
+						for (int i=0; i<num_books; ++i) {
+							struct book* book = &mo->snap->book_arr[i];
+							if (book->book_id == book_id) {
+								book_id_exists = 1;
+								break;
+							}
+						}
+
+						if (!book_id_exists) {
+							return mimerr("book id %d does not exist", book_id);
+						}
+
+						const int num_docs = arrlen(mo->snap->document_arr);
+						for (int i=0; i<num_docs; ++i) {
+							struct document* doc = &mo->snap->document_arr[i];
+							if ((doc->book_id == book_id) && (doc->doc_id == doc_id)) {
+								return mimerr(":newdoc %d %d collides with existing doc", book_id, doc_id);
+							}
+						}
+						struct document doc = {
+							.book_id = book_id,
+							.doc_id  = doc_id,
+						};
+						const size_t n = strlen(name);
+						arrsetlen(doc.name_arr, n+1);
+						memcpy(doc.name_arr, name, n);
+						doc.name_arr[n]=0;
+						arrput(mo->snap->document_arr, doc);
+					}
+				}
+
+				{
+					int book_id, doc_id;
+					if (mimex_matches(&s, "setdoc", "ii", &book_id, &doc_id)) {
+
+						int book_id_exists = 0;
+						const int num_books = arrlen(mo->snap->book_arr);
+						for (int i=0; i<num_books; ++i) {
+							struct book* book = &mo->snap->book_arr[i];
+							if (book->book_id == book_id) {
+								book_id_exists = 1;
+								break;
+							}
+						}
+						if (!book_id_exists) {
+							return mimerr("setdoc on book id %d, but it doesn't exist", book_id);
+						}
+
+						int doc_id_exists = 0;
+						const int num_docs = arrlen(mo->snap->document_arr);
+						for (int i=0; i<num_docs; ++i) {
+							struct document* doc = &mo->snap->document_arr[i];
+							if ((doc->book_id == book_id) && (doc->doc_id == doc_id)) {
+								doc_id_exists = 1;
+								break;
+							}
+						}
+						if (!doc_id_exists) {
+							return mimerr("setdoc on doc id %d, but it doesn't exist", doc_id);
+						}
+
+						mimop_ms(mo)->book_id = book_id;
+						mimop_ms(mo)->doc_id  = doc_id;
+					}
+				}
+
+				if (s.has_error) {
+					return mimerr("mimex error: %s", s.err);
+				} else if (!s.did_match) {
+					return mimerr("unhandled mimex command [%s]", s.cmd);
+				}
 			}
+
+			mode = previous_mode;
 		}
 	}
 
@@ -1456,7 +1468,7 @@ static void document_to_colorchar_da(struct colorchar** arr, struct document* do
 	arrreset(*arr);
 	for (int i=0; i<num_src; ++i) {
 		struct docchar* fc = arrchkptr(doc->docchar_arr, i);
-		if (fc->flags & FC_IS_INSERT) continue; // not yet inserted
+		if (fc->flags & DC_IS_INSERT) continue; // not yet inserted
 		arrput(*arr, fc->colorchar);
 	}
 }
@@ -2308,6 +2320,7 @@ int host_tick(void)
 	for (int i=0; i<num_ps; ++i) {
 		struct peer_state* ps = &hg.peer_state_arr[i];
 		const int64_t n = arrlen(ps->cmdbuf_arr);
+		if (n == 0) continue;
 		struct bufstream bs;
 		bufstream_init_from_memory(&bs, ps->cmdbuf_arr, n);
 		int64_t cursor = 0;
@@ -2894,6 +2907,3 @@ void unsuspend_time(void)
 // TODO: optimize suspend_time_at(): the previous call should know which time
 // interval it ended up restoring, so if the following call is within the same
 // interval, it's a no-op and should return immediately
-
-// TODO: perf problem: copy an entire line and insert to try and fill the
-// screen; stuff slows down when pasting... suspend_time_at() is also slow?

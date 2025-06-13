@@ -1487,11 +1487,13 @@ static void handle_editor_input(struct pane* pane)
 		} else if (!g.tt_is_scrubbing) {
 			if (down && mod==0) {
 				switch (code) {
-				// XXX
+
 				case KEY_ARROW_LEFT  : mimf("0Mh"); break;
 				case KEY_ARROW_RIGHT : mimf("0Ml"); break;
 				case KEY_ARROW_UP    : mimf("0Mk"); break;
 				case KEY_ARROW_DOWN  : mimf("0Mj"); break;
+				case KEY_HOME        : mimf("0M^"); break;
+				case KEY_END         : mimf("0M$"); break;
 				case KEY_ENTER       : if (can_edit) { mimi(0,"\n"); } break;
 				case KEY_BACKSPACE   : if (can_edit) { mimf("0X");   } break;
 				case KEY_DELETE      : if (can_edit) { mimf("0x");   } break;
@@ -1505,6 +1507,8 @@ static void handle_editor_input(struct pane* pane)
 				case KEY_ARROW_RIGHT : mimf("0Sl"); break;
 				case KEY_ARROW_UP    : mimf("0Sk"); break;
 				case KEY_ARROW_DOWN  : mimf("0Sj"); break;
+				case KEY_HOME        : mimf("0S^"); break;
+				case KEY_END         : mimf("0S$"); break;
 				}
 			}
 
@@ -1850,8 +1854,8 @@ static void draw_code_pane(struct pane* pane)
 			int splash4 = 0;
 
 			if (fc != NULL) {
-				if (fc->flags & FC_IS_INSERT) bg_color[1] += 0.2f;
-				if (fc->flags & FC_IS_DELETE) bg_color[0] += 0.3f;
+				if (fc->flags & DC_IS_INSERT) bg_color[1] += 0.2f;
+				if (fc->flags & DC_IS_DELETE) bg_color[0] += 0.3f;
 				splash4 = fc->colorchar.splash4;
 			}
 			const int shake = splash4 % 10;

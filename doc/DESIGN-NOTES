@@ -342,3 +342,29 @@ OSC-events) via websockets (probably). you can edit the JS, or other documents,
 and depend on libraries via /dok/. this could support hydra, but also just
 about anything else, like: tic-80 style retro stuff, polygon soups, direct
 glsl/shadertoy-like hacking, and so on.
+
+
+justifications for the journal(/snapshot)-based design:
+ - the journal is the only "source of truth", and fairly small because it only
+   contains "edits", not full documents.
+ - neatly supports peer sync in both websocket and udp configs; simply transmit
+   journal entries the peer hasn't seen yet. with udp it's similar to the
+   quake3 protocol, which is hard to beat in terms of latency and simplicity?
+   (should be significantly better than any tcp-based protocol)
+ - supports system regression tests; run a journal and inspect the results
+ - might make some bugs easier to reproduce because you have a detailed view of
+   what happened, and what led up to the bug.
+ - incentivizes long-term journal format stability
+ - smaller "videos"; share the journal file instead of mp4s or youtube (ew)
+   links
+ - "interactive videos"; jump to any point and "join the performance"; good way
+   to learn by doing? of course you can't really play alongside "people from
+   the past" because it would "desync" fast, but it might still be useful.
+ - supports "predictive edits" in high-latency situations; a peer can
+   optimistically (and also optionally?) assume that an edit gets tail appended
+   to the journal and update the screen as such; the host broadcasts journal
+   entries in the order it receives them; the peer then accepts this as the new
+   source of truth, and replays any pending edits that the journal doesn't yet
+   contain.
+ - supports time travel (snapshots and journal entries are like keyframes and
+   diff-frames in video files; supports fast seeking to any timestamp)

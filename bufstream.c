@@ -20,8 +20,12 @@ static int bufstream_no_refill(struct bufstream* bs)
 void bufstream_init_from_memory(struct bufstream* bs, const void* data, int64_t size)
 {
 	memset(bs, 0, sizeof *bs);
-	bs->cursor = bs->start = data;
-	bs->end = bs->start + size;
+	if (data != NULL) {
+		bs->cursor = bs->start = data;
+		bs->end = bs->start + size;
+	} else {
+		bs->cursor = bs->start = bs->end = NULL;
+	}
 	bs->refill = bufstream_no_refill;
 }
 
