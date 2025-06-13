@@ -526,9 +526,25 @@ static int mimerr(const char* fmt, ...)
 
 static void doc_location_constraint(struct document* doc, struct location* loc)
 {
+	if (loc->column < 1) loc->column = 1;
+	if (loc->line < 1) {
+		loc->line = 1;
+		loc->column = 1;
+	}
 	struct doc_iterator it = doc_iterator(doc);
-	doc_iterator_locate(&it, loc);
-	*loc = it.location;
+	struct location last_dloc;
+	while (doc_iterator_next(&it)) {
+		const struct location dloc = it.location;
+		if (dloc.line > loc->line) {
+			*loc = last_dloc;
+			return;
+		}
+		last_dloc = dloc;
+		if ((dloc.line == loc->line) && (dloc.column == loc->column)) {
+			return;
+		}
+	}
+	*loc = last_dloc;
 }
 
 static void doc_set_location_to_end_of_line(struct document* doc, struct location* loc)
@@ -2893,11 +2909,6 @@ void unsuspend_time(void)
 {
 	suspend_time_ex(-1);
 }
-
-
-// TODO: caret movement/adjustment improvements (reinforce with tests in
-// test_gig.c); home/end; arrow up/down when going to a shorter line (currently
-// skips a line)
 
 // TODO: optimize snapshot_copy() by using content hashing or maybe even some
 // merkel-chain stuff to avoid having to hash the entire document for every
