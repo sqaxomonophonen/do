@@ -1494,6 +1494,7 @@ static void handle_editor_input(struct pane* pane)
 				case KEY_ARROW_DOWN  : mimf("0Mj"); break;
 				case KEY_HOME        : mimf("0M^"); break;
 				case KEY_END         : mimf("0M$"); break;
+				case KEY_TAB         : if (can_edit) { mimi(0,"  "); } break;
 				case KEY_ENTER       : if (can_edit) { mimi(0,"\n"); } break;
 				case KEY_BACKSPACE   : if (can_edit) { mimf("0X");   } break;
 				case KEY_DELETE      : if (can_edit) { mimf("0x");   } break;

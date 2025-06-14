@@ -615,6 +615,16 @@ enum d_type {
 	OPN_CANCEL
 };
 
+static void doc_edit(struct document* doc)
+{
+	doc->snapshotcache_offset = 0;
+}
+
+static void ms_edit(struct mim_state* ms)
+{
+	ms->snapshotcache_offset = 0;
+}
+
 static void doc_opn(struct document* doc, struct snapshot* snap, struct location* cloc, int index, int count, enum d_type type)
 {
 	// update caret positions ahead of insertion index if necessary
@@ -660,12 +670,14 @@ static void doc_opn(struct document* doc, struct snapshot* snap, struct location
 				do_delete = 1;
 			} else if (!(dc->flags & DC_IS_DELETE)) {
 				dc->flags |= (DC_IS_DELETE | DC__FLIPPED_DELETE);
+				doc_edit(doc);
 			}
 			break;
 		case OPN_COMMIT:
 			if (dc->flags & DC__FILL) {
 				if (dc->flags & DC_IS_INSERT) { // commit
 					dc->flags &= ~(DC__FILL | DC_IS_INSERT);
+					doc_edit(doc);
 				} else if (dc->flags & DC_IS_DELETE) {
 					do_delete = 1;
 				}
@@ -677,6 +689,7 @@ static void doc_opn(struct document* doc, struct snapshot* snap, struct location
 					do_delete = 1;
 				} else if (dc->flags & DC_IS_DELETE) {
 					dc->flags &= ~(DC__FILL | DC_IS_DELETE);
+					doc_edit(doc);
 				}
 			}
 			break;
@@ -694,6 +707,7 @@ static void doc_opn(struct document* doc, struct snapshot* snap, struct location
 						struct location* loc = (ca==0) ? &c->caret_loc : (ca==1) ? &c->anchor_loc : NULL;
 						if (loc->line > dloc.line) {
 							if (is_newline) {
+								ms_edit(ms);
 								--loc->line;
 								if (loc->line == dloc.line) {
 									loc->column += (dloc.column-1);
@@ -701,6 +715,7 @@ static void doc_opn(struct document* doc, struct snapshot* snap, struct location
 							}
 						} else if (loc->line == dloc.line) {
 							if (dloc.column < loc->column) {
+								ms_edit(ms);
 								--loc->column;
 							}
 						}
@@ -710,6 +725,7 @@ static void doc_opn(struct document* doc, struct snapshot* snap, struct location
 			arrdel(doc->docchar_arr, arrchk(doc->docchar_arr, index));
 			--index;
 			--end;
+			doc_edit(doc);
 		}
 
 		if (!is_newline) {
@@ -754,14 +770,19 @@ static void doc_adv(struct document* doc, struct snapshot* snap, struct location
 				for (int ca=0; ca<2; ++ca) {
 					struct location* loc = (ca==0) ? &c->caret_loc : (ca==1) ? &c->anchor_loc : NULL;
 					if (loc->line > iloc->line) {
-						if (is_newline) ++loc->line;
+						if (is_newline) {
+							ms_edit(ms);
+							++loc->line;
+						}
 					} else if (loc->line == iloc->line) {
 						if (iloc->column < loc->column) {
 							if (is_newline) {
+								ms_edit(ms);
 								++loc->line;
 								loc->column -= (iloc->column-1);
 								assert(loc->column >= 1);
 							} else {
+								ms_edit(ms);
 								++loc->column;
 							}
 						}
@@ -1031,8 +1052,10 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 						if (0 == location_compare(caret_loc, anchor_loc)) {
 							int o = document_locate(rw_doc, caret_loc);
 							doc_opn(rw_doc, mo->snap, caret_loc, o, arg_num, (chr=='X')?OPN_BACKSPACE:(chr=='x')?OPN_DELETE:0);
+							ms_edit(ms);
 						} else {
 							mimop_delete(mo, caret_loc, anchor_loc);
+							ms_edit(ms);
 						}
 						*anchor_loc = *caret_loc;
 					}
@@ -1086,6 +1109,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 					}
 
 					doc_opn(rw_doc, mo->snap, NULL, 0, num_chars, (chr=='!')?OPN_COMMIT:(chr=='/' )?OPN_CANCEL:0);
+					ms_edit(ms);
 
 				}	break;
 
@@ -1116,6 +1140,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 						.caret_loc  = { .line=line, .column=column },
 						.anchor_loc = { .line=line, .column=column },
 					}));
+					ms_edit(ms);
 				}	break;
 
 				case '~': { // set mim state color
@@ -1129,6 +1154,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 					}
 					struct mim_state* ms = mimop_ms(mo);
 					ms->splash4 = splash4;
+					ms_edit(ms);
 				}	break;
 
 				case 'P': { // paint selection with color
@@ -1153,10 +1179,12 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 							struct docchar* dc = arrchkptr(rw_doc->docchar_arr, o);
 							if (dc->colorchar.splash4 != ms->splash4) {
 								dc->colorchar.splash4 = ms->splash4;
+								doc_edit(rw_doc);
 							}
 						}
 						car->anchor_loc = car->caret_loc;
 					}
+					ms_edit(ms);
 				}	break;
 
 				default:
@@ -1230,6 +1258,7 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 					if (is_left  || is_up   || is_home) *loc1 = *loc0;
 					if (is_right || is_down || is_end ) *loc0 = *loc1;
 				}
+				ms_edit(ms);
 			}	break;
 
 			default:
@@ -1322,8 +1351,10 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 					const int num_dc = arrlen(dc_arr);
 					doc_adv(rw_doc, mo->snap, loc, off, dc_arr, num_dc);
 					arrinsn(rw_doc->docchar_arr, off, num_dc);
+					doc_edit(rw_doc);
 					memcpy(&rw_doc->docchar_arr[off], dc_arr, num_dc * sizeof(dc_arr[0]));
 					doc_location_constraint(rw_doc, loc);
+					ms_edit(ms);
 					*anchor = *loc;
 				}
 
@@ -1345,9 +1376,8 @@ static int mim_spool(struct mimop* mo, const uint8_t* input, int num_input_bytes
 						}
 					} else {
 						const int is_nil_template = (0 == strcmp(book_template, "-"));
-						//printf("TODO newbook [%d] [%s/%d] [%s/nil=%d]\n", book_id, book_fundament, f, book_template, is_nil_template);
 						if (!is_nil_template) {
-							assert(!"TODO handle/import :newbook template");
+							XXX_NOW(handle newbook template) // XXX
 						}
 
 						const int num_books = arrlen(mo->snap->book_arr);
@@ -2842,7 +2872,7 @@ static void suspend_time_ex(int64_t seek_ts)
 	snapshot_free(snap);
 
 	struct jio* jidx = igo.jio_snapshotcache_index;
-	int64_t size = jio_get_size(jidx);
+	const int64_t size = jio_get_size(jidx);
 	const int num = get_num_snapshotcache_index_entries_from_size(size);
 	int left = 0;
 	int right = num;

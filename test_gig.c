@@ -11,32 +11,8 @@
 #include "arg.h"
 #include "path.h"
 #include "util.h"
-#include "stb_ds.h" // XXX?
+#include "stb_ds.h"
 
-int64_t get_microseconds_epoch(void)
-{
-	// XXX for testing purposes maybe make this "settable"?
-	struct timespec ts;
-	clock_gettime(CLOCK_REALTIME, &ts);
-	return (int64_t)ts.tv_sec * 1000000LL + (ts.tv_nsec / 1000LL);
-}
-
-int64_t get_nanoseconds_monotonic(void)
-{
-	struct timespec ts;
-	clock_gettime(CLOCK_MONOTONIC, &ts);
-	return (int64_t)ts.tv_sec * 1000000000LL + ts.tv_nsec;
-}
-
-void sleep_microseconds(int64_t us)
-{
-	const int64_t one_million = 1000000LL;
-	const struct timespec ts = {
-		.tv_nsec = (us % one_million) * 1000LL,
-		.tv_sec  = us / one_million,
-	};
-	nanosleep(&ts, NULL);
-}
 
 const static int VERBOSE = 0;
 static int growth_threshold;
@@ -49,7 +25,28 @@ static struct {
 	struct mim_state* ms;
 	struct document* doc;
 	struct caret* cr;
+	int64_t time_us_monotonic;
 } g;
+
+int64_t get_microseconds_epoch(void)
+{
+	return 0;
+}
+
+int64_t get_nanoseconds_monotonic(void)
+{
+	return g.time_us_monotonic * 1000LL;
+}
+
+void sleep_microseconds(int64_t us)
+{
+	const int64_t one_million = 1000000LL;
+	const struct timespec ts = {
+		.tv_nsec = (us % one_million) * 1000LL,
+		.tv_sec  = us / one_million,
+	};
+	nanosleep(&ts, NULL);
+}
 
 static void all_the_ticking(void)
 {
@@ -455,6 +452,53 @@ static void test_caret_adjustment(void)
 	teardown();
 }
 
+static void test_time_travel(void)
+{
+	new_test("ttt1");
+	setup(test_dir);
+
+	g.time_us_monotonic = 250;
+	peer_begin_mim(1);
+	mimex("setdoc 1 50");
+	mimf("0,1,1c");
+	peer_end_mim();
+
+	const int N=500;
+	for (int i=0; i<N; ++i) {
+		get_state_and_doc(1, &g.ms, &g.doc);
+		assert(arrlen(g.doc->docchar_arr)==i);
+		g.time_us_monotonic = 500 + 1000 * i;
+		peer_begin_mim(1);
+		mimi(0, "x");
+		peer_end_mim();
+		all_the_ticking();
+	}
+	get_state_and_doc(1, &g.ms, &g.doc);
+	assert(arrlen(g.doc->docchar_arr)==N);
+
+	for (int i=0; i<N; ++i) {
+		suspend_time_at(700 + 1000 * i);
+		get_state_and_doc(1, &g.ms, &g.doc);
+		const int num_chars = arrlen(g.doc->docchar_arr);
+		assert(num_chars==(i+1));
+	}
+
+	#if 0
+	for (int i=(N-1); i>=0; --i) {
+		suspend_time_at(700 + 1000 * i);
+		get_state_and_doc(1, &g.ms, &g.doc);
+		const int num_chars = arrlen(g.doc->docchar_arr);
+		assert(num_chars==(i+1));
+	}
+	#endif
+
+	unsuspend_time();
+	get_state_and_doc(1, &g.ms, &g.doc);
+	assert(arrlen(g.doc->docchar_arr)==N);
+
+	teardown();
+}
+
 int webserv_broadcast_journal(int64_t until_journal_cursor)
 {
 	return 0;
@@ -492,6 +536,8 @@ int main(int argc, char** argv)
 		test_regress_0d();
 
 		test_caret_adjustment();
+
+		test_time_travel();
 
 		printf("OK (gt=%d)\n", growth_threshold);
 	}
