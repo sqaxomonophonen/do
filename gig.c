@@ -23,6 +23,9 @@
 #include "webserv.h"
 #endif
 
+
+#define JIO_LOG2       (16)
+#define JIO_LARGE_LOG2 (20)
 #define DO_JAM_JOURNAL_MAGIC      ("DOJJ0001")
 #define SNAPSHOTCACHE_INDEX_MAGIC ("DOSI0001")
 #define SNAPSHOTCACHE_DATA_MAGIC  ("DOSD0001")
@@ -1854,7 +1857,7 @@ static int snapshotcache_open(const char* dir, uint64_t journal_wax)
 
 	int err;
 	STATIC_PATH_JOIN(pathbuf, dir, FILENAME_SNAPSHOTCACHE_DATA);
-	struct jio* jdat = jio_open(pathbuf, IO_OPEN, igo.io_port_id, 16, &err);
+	struct jio* jdat = jio_open(pathbuf, IO_OPEN, igo.io_port_id, JIO_LARGE_LOG2, &err);
 	if (jdat == NULL) return IOERR(pathbuf, err);
 	igo.jio_snapshotcache_data = jdat;
 	const int64_t szdat = jio_get_size(jdat);
@@ -1864,7 +1867,7 @@ static int snapshotcache_open(const char* dir, uint64_t journal_wax)
 	}
 
 	STATIC_PATH_JOIN(pathbuf, dir, FILENAME_SNAPSHOTCACHE_INDEX);
-	struct jio* jidx = jio_open(pathbuf, IO_OPEN, igo.io_port_id, 16, &err);
+	struct jio* jidx = jio_open(pathbuf, IO_OPEN, igo.io_port_id, JIO_LOG2, &err);
 	if (jidx == NULL) return IOERR(pathbuf, err);
 	igo.jio_snapshotcache_index = jidx;
 	const int64_t szidx = jio_get_size(jidx);
@@ -1934,7 +1937,7 @@ static int snapshotcache_create(const char* dir)
 
 	STATIC_PATH_JOIN(pathbuf, dir, FILENAME_SNAPSHOTCACHE_DATA);
 	int err;
-	struct jio* jdat = jio_open(pathbuf, IO_CREATE, igo.io_port_id, 16, &err);
+	struct jio* jdat = jio_open(pathbuf, IO_CREATE, igo.io_port_id, JIO_LARGE_LOG2, &err);
 	if (jdat == NULL) {
 		return IOERR(FILENAME_SNAPSHOTCACHE_DATA, err);
 	}
@@ -1946,7 +1949,7 @@ static int snapshotcache_create(const char* dir)
 	jio_flush_bb(jdat, bb);
 
 	STATIC_PATH_JOIN(pathbuf, dir, FILENAME_SNAPSHOTCACHE_INDEX);
-	struct jio* jidx = jio_open(pathbuf, IO_CREATE, igo.io_port_id, 16, &err);
+	struct jio* jidx = jio_open(pathbuf, IO_CREATE, igo.io_port_id, JIO_LOG2, &err);
 	if (jidx == NULL) {
 		jio_close(jdat);
 		return IOERR(FILENAME_SNAPSHOTCACHE_INDEX, err);
@@ -2526,7 +2529,7 @@ static int setup_datadir(const char* dir)
 	char pathbuf[1<<14];
 	STATIC_PATH_JOIN(pathbuf, dir, FILENAME_JOURNAL);
 	int err;
-	struct jio* jj = jio_open(pathbuf, IO_OPEN_OR_CREATE, igo.io_port_id, 16, &err);
+	struct jio* jj = jio_open(pathbuf, IO_OPEN_OR_CREATE, igo.io_port_id, JIO_LARGE_LOG2, &err);
 	igo.jio_journal = jj;
 	if (jj == NULL) return IOERR(FILENAME_JOURNAL, err);
 
@@ -2622,7 +2625,7 @@ static int setup_datadir(const char* dir)
 	}
 
 	STATIC_PATH_JOIN(pathbuf, dir, FILENAME_ACTIVITYCACHE);
-	struct jio* ja = jio_open(pathbuf, IO_OPEN_OR_CREATE, igo.io_port_id, 16, &err);
+	struct jio* ja = jio_open(pathbuf, IO_OPEN_OR_CREATE, igo.io_port_id, JIO_LOG2, &err);
 	const int64_t jasz = jio_get_size(ja);
 	if (jasz == 0) {
 		uint8_t** bb = &hg.bb_arr;
