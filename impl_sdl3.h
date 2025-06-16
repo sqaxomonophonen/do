@@ -124,6 +124,10 @@ static void handle_events()
 
 		if (event.type == SDL_EVENT_QUIT) {
 			g0.exiting = 1;
+		} else if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
+			if (window != NULL) {
+				window->state = WINDOW_IS_CLOSING;
+			}
 		} else if (event.type == SDL_EVENT_WINDOW_MOUSE_ENTER) {
 			msc.flags |= M_INSIDE;
 		} else if (event.type == SDL_EVENT_WINDOW_MOUSE_LEAVE) {
@@ -159,18 +163,12 @@ static void handle_events()
 		} else if ((event.type == SDL_EVENT_KEY_DOWN) || (event.type == SDL_EVENT_KEY_UP)) {
 			const int is_down = event.key.down;
 
-			if (window != NULL && is_down && event.key.key == SDLK_ESCAPE) {
-				// XXX temp?
-				window->state = WINDOW_IS_CLOSING;
-			}
-
 			#if 0
 			if (window != NULL && is_down && event.key.key == 'f') {
 				// XXX temp?
 				window->is_fullscreen = !window->is_fullscreen;
 				SDL_SetWindowFullscreen(get_sdl_window(window), window->is_fullscreen ? SDL_WINDOW_FULLSCREEN : 0);
 			}
-
 			if (is_down && event.key.key == 'w') {
 				// XXX temp?
 				open_window();

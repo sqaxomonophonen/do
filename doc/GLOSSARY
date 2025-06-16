@@ -3,6 +3,10 @@
 WORDS USED INTERNALLY
 ===============================================================================
 
+: pane
+a "window inside your window"; the thing you have a code editor, debugger, in
+
+
 : book and fundament
 the "book" is collection of documents, written against a "fundament" that tells
 Do how to interpret the documents. "mie-urlyd" is the default sound/music

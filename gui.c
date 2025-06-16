@@ -10,6 +10,7 @@
 #include "stb_truetype.h"
 #include "stb_image_write.h"
 #include "stb_image_resize2.h"
+#include "stb_sprintf.h"
 
 #include "main.h"
 #include "util.h"
@@ -200,6 +201,8 @@ static struct {
 	char* gray_copybuf_arr;
 	struct colorchar* color_copybuf_arr;
 
+	unsigned   show_menu :1;
+
 	unsigned   key_control :1;
 	unsigned   key_shift   :1;
 	unsigned   key_alt     :1;
@@ -215,6 +218,7 @@ static struct {
 	int64_t tt_timestamp_us;
 	double tt_scale_log2;
 } g;
+
 
 static inline int make_focus_id(void)
 {
@@ -1140,14 +1144,14 @@ static void set_y_stretch_index(int index)
 	g.state.current_y_stretch_index = index;
 }
 
-static void set_colorv(float color[3])
+static void set_color3v(float color[3])
 {
 	for (int i=0; i<3; ++i) g.state.current_color[i] = color[i];
 }
 
 static void set_color3f(float red, float green, float blue)
 {
-	set_colorv((float[]){red,green,blue});
+	set_color3v((float[]){red,green,blue});
 }
 
 static inline void splash4_explode(int splash4, int* out_red, int* out_green, int* out_blue, int* out_shake)
@@ -1448,6 +1452,71 @@ static void time_accelerate(int direction)
 	}
 }
 
+//XXX
+#define SHORTCUT "\033[1;"
+#define NORMAL   "\033[0;"
+
+struct escape_machine {
+	int put_char_codepoint;
+	int esc_state;
+	int esc_count;
+	float color[3];
+	char esc_buf[64];
+	unsigned  do_put_char  :1;
+	unsigned  do_set_color :1;
+	unsigned  not_first    :1;
+};
+
+static inline void color_copy(float* dst, const float* src) { memcpy(dst, src, sizeof(*dst)*3); }
+
+static void em_push(struct escape_machine* em, int codepoint)
+{
+	// TODO CONFIG
+	const static float normal_color[3] = {0.4, 0.4, 0.4};
+	const static float shortcut_color[3] = {1.0, 1.0, 0.4};
+
+	em->do_put_char = 0;
+	em->do_set_color = 0;
+	if (!em->not_first) {
+		em->do_set_color = 1;
+		color_copy(em->color, normal_color);
+		em->not_first =1;
+	}
+	if (em->esc_state == 0) {
+		if (codepoint == '\033') {
+			++em->esc_state;
+		} else {
+			em->do_put_char = 1;
+			em->put_char_codepoint = codepoint;
+		}
+	} else if (em->esc_state == 1) {
+		assert((codepoint == '[') && "bad escape");
+		em->esc_count = 0;
+		++em->esc_state;
+	} else if (em->esc_state == 2) {
+		assert((' ' <= codepoint) && (codepoint <= '~'));
+		if (codepoint != ';') {
+			assert(em->esc_count < sizeof(em->esc_buf));
+			em->esc_buf[em->esc_count++] = codepoint;
+		} else {
+			// XXX bad escape matching here
+			if (em->esc_count == 1 && em->esc_buf[0] == '0') { // XXX
+				em->do_set_color = 1;
+				color_copy(em->color, normal_color);
+			} else if (em->esc_count == 1 && em->esc_buf[0] == '1') { // XXX
+				em->do_set_color = 1;
+				color_copy(em->color, shortcut_color);
+			} else {
+				assert(!"bad escape");
+			}
+			em->esc_state = 0;
+		}
+	} else {
+		assert(!"bad state");
+	}
+}
+
+
 static void handle_editor_input(struct pane* pane)
 {
 	assert(pane->type == CODE);
@@ -1461,6 +1530,11 @@ static void handle_editor_input(struct pane* pane)
 		const int mod  = get_key_mod(key);
 		last_mod = mod;
 		const int code = get_key_code(key);
+
+		if (down && mod==0 && code==KEY_ESCAPE) {
+			assert(!g.show_menu);
+			g.show_menu = 1;
+		}
 
 		if (code == KEY_CONTROL) g.key_control = down;
 		if (code == KEY_SHIFT)   g.key_shift   = down;
@@ -1498,7 +1572,6 @@ static void handle_editor_input(struct pane* pane)
 				case KEY_ENTER       : if (can_edit) { mimi(0,"\n"); } break;
 				case KEY_BACKSPACE   : if (can_edit) { mimf("0X");   } break;
 				case KEY_DELETE      : if (can_edit) { mimf("0x");   } break;
-				//case KEY_ESCAPE       mimf("\033"); break;
 				}
 			}
 
@@ -1622,7 +1695,6 @@ static void handle_editor_input(struct pane* pane)
 			}
 		}
 	}
-
 	if (!(last_mod & MOD_CONTROL)) {
 		const int num_chars = utf8_strlen(g.text_buffer_arr);
 		if (num_chars > 0) {
@@ -1681,6 +1753,9 @@ static void handle_editor_input(struct pane* pane)
 		if (g.key_up)    g.tt_scale_log2 -= scale_zoom_speed;
 		if (g.key_down)  g.tt_scale_log2 += scale_zoom_speed;
 	}
+
+	arrreset(g.key_buffer_arr);
+	arrreset(g.text_buffer_arr);
 }
 
 static void save(void)
@@ -1728,7 +1803,7 @@ static void draw_code_pane(struct pane* pane)
 		}
 	}
 
-	g.state.is_dimming = pane->code.colorpick_on;
+	g.state.is_dimming = (pane->code.colorpick_on || g.show_menu);
 
 	const struct rect pr = get_pane_rect(pane);
 
@@ -1736,7 +1811,7 @@ static void draw_code_pane(struct pane* pane)
 	if (flags & WAS_CLICKED) {
 		focus(pane->code.focus_id);
 	}
-	if (flags & HAS_FOCUS) {
+	if (flags & HAS_FOCUS && !g.show_menu) {
 		handle_editor_input(pane);
 	}
 
@@ -1863,7 +1938,7 @@ static void draw_code_pane(struct pane* pane)
 
 			if (has_light(bg_color) && cp >= ' ') {
 				save();
-				set_colorv(bg_color);
+				set_color3v(bg_color);
 				g.state.cursor_y += (int)y_height;
 				put_char(SPECIAL_CODEPOINT_BLOCK);
 				g.state.cursor_y -= (int)y_height;
@@ -2001,6 +2076,65 @@ static void draw_code_pane(struct pane* pane)
 	}
 }
 
+static struct {
+	int x,y,w,h;
+	unsigned is_begun :1;
+	float y_advance;
+} ll;
+
+static void begin_layout(int x, int y, int width, int height)
+{
+	assert(!ll.is_begun);
+	ll.is_begun = 1;
+	ll.x = x;
+	ll.y = y;
+	ll.w = width;
+	ll.h = height;
+
+	const int m=50;
+	g.state.cursor_x0 = g.state.cursor_x = x+m;
+	g.state.cursor_y = y+m;
+	set_y_stretch_index(g.font_config.num_y_stretch_levels - 1);
+	ll.y_advance = get_y_advance();
+}
+
+static void end_layout(void)
+{
+	assert(ll.is_begun);
+	ll.is_begun = 0;
+}
+
+static int widget(const char* text)
+{
+	const char* p = text;
+	int r = strlen(p);
+	struct escape_machine em = {0};
+	while (r>0) {
+		const int codepoint = utf8_decode(&p, &r);
+		em_push(&em, codepoint);
+		if (em.do_set_color) set_color3v(em.color);
+		if (em.do_put_char) put_char(em.put_char_codepoint);
+	}
+	g.state.cursor_y += ll.y_advance;
+	g.state.cursor_x = g.state.cursor_x0;
+	return 0;
+}
+
+static void text_line(const char* text)
+{
+	widget(text);
+}
+
+static int menu_item(const char* text)
+{
+	return widget(text);
+}
+
+static void tooltip(const char* text)
+{
+	//TODO(tooltip)
+}
+
 static void gui_draw1(void)
 {
 	for (int i=0; i<arrlen(g.pane_arr); ++i) {
@@ -2023,6 +2157,31 @@ static void gui_draw1(void)
 
 		// TODO render pane overlay? (e.g. pane border lines)
 	}
+
+	if (g.show_menu) {
+		#if 0
+		handle_menu_input(&g.menu);
+		render_menu(&g.menu);
+		#endif
+		begin_layout(0, 0, g.current_window->true_width, g.current_window->true_height);
+		text_line("I would like to ..");
+		if (menu_item(".. manage " SHORTCUT "w" NORMAL "indows")) {
+			// TODO goto manage windows
+			// XXX kan jeg være fræk og finde shortcuttet "w" vha
+			// escape_machine?
+		}
+		tooltip("open, close, swap, move, resize, windows");
+		if (menu_item(".. join another " SHORTCUT "s" NORMAL "erver")) {
+			// TODO
+		}
+		if (menu_item(".. " SHORTCUT "q" NORMAL "uit")) {
+			// TODO
+		}
+		//slider("brightness", 0.0, 1.0, &brightness);
+		//checkbox("maybe later", &maybe_later);
+		end_layout();
+	}
+
 }
 
 void gui_draw(struct window* window)
@@ -2116,6 +2275,10 @@ void gui_drop_file(const char* name, size_t num_bytes, uint8_t* bytes)
 
 // TODO: mouse caret/selection
 
+// TODO: document scrolling (smooth)
+
+// FIXME: weird y-stretch behavior with selections
+
 // TODO: time travel topics:
 // - bar placement? dimming?
 // - bar tics?
@@ -2129,3 +2292,27 @@ void gui_drop_file(const char* name, size_t num_bytes, uint8_t* bytes)
 //   50% CPU usage gig on average, then it takes 1 hour to recalc a 2 hour
 //   set). i.e. the UI should be perfectly useable without, but it's an extra
 //   luxury when available
+
+// TODO panes? debug pane?
+
+// TODO pipette: "steal" color under caret
+// TODO palette? "last color"?
+
+// TODO multi-caret?
+
+// TODO show stack height at beginning of every line? (only for .mie docs)
+
+// TODO "draw rect"!
+
+// TODO the math in time_accelerate() is broken I think; velocity is added to
+// position with no regards to fps?
+
+// deferred TODO: OS clipboard integration; there are many legitimate reasons
+// for this, but for now I think it's interesting to live without it? (there's
+// still the internal copy-paste buffer!) also an interesting idea to have
+// one-way clipboard integration, like; copying sets the clipboard, but pasting
+// still always uses the internal copy-paste buffer, that is, information can
+// leave do, but not be entered from the outside. it's also oddly convenient
+// that I want to store "stdlib.mie" in colorchar format, which consists of
+// [utf8:codepoint,u16:splash4] tuples, meaning I can't just open it in vim if
+// the do editor sucks for a particular editing task :)

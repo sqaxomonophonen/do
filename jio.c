@@ -386,7 +386,7 @@ int jio_pread(struct jio* jio, void* ptr, int64_t size, int64_t offset)
 
 int jio_pwrite(struct jio* jio, const void* ptr, int64_t size, int64_t offset)
 {
-	XXX(jio_pwrite should potentially write to ringbuf or changes may be invisible to jio_pread)
+	//XXX(jio_pwrite should potentially write to ringbuf or changes may be invisible to jio_pread)
 	return io_pwrite(jio->file_id, ptr, size, offset);
 }
 
