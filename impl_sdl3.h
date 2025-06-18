@@ -115,6 +115,11 @@ static void drop_path(const char* path)
 	}
 }
 
+void quit_now(void)
+{
+	g0.exiting = 1;
+}
+
 static void handle_events()
 {
 	SDL_Event event;
@@ -123,7 +128,7 @@ static void handle_events()
 		struct window* window = get_event_window(&event);
 
 		if (event.type == SDL_EVENT_QUIT) {
-			g0.exiting = 1;
+			quit_now();
 		} else if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED) {
 			if (window != NULL) {
 				window->state = WINDOW_IS_CLOSING;
@@ -178,7 +183,7 @@ static void handle_events()
 			int mod = 0;
 			if (event.key.mod & SDL_KMOD_SHIFT) mod |= MOD_SHIFT;
 			if (event.key.mod & SDL_KMOD_ALT)   mod |= MOD_ALT;
-			if (event.key.mod & SDL_KMOD_CTRL)  mod |= MOD_CONTROL;
+			if (event.key.mod & SDL_KMOD_CTRL)  mod |= MOD_CTRL;
 			if (event.key.mod & SDL_KMOD_GUI)   mod |= MOD_GUI;
 
 			int keycode = -1;

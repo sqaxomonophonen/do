@@ -81,7 +81,7 @@ static bool handle_key_event(int type, const EmscriptenKeyboardEvent* ev, void* 
 	int mod = 0;
 	if (ev->shiftKey) mod |= MOD_SHIFT;
 	if (ev->altKey)   mod |= MOD_ALT;
-	if (ev->ctrlKey)  mod |= MOD_CONTROL;
+	if (ev->ctrlKey)  mod |= MOD_CTRL;
 	if (ev->metaKey)  mod |= MOD_GUI;
 
 	//printf("key [%s]\n", ev->key);
@@ -159,7 +159,7 @@ static bool handle_key_event(int type, const EmscriptenKeyboardEvent* ev, void* 
 		arrput(g.key_buffer_arr, key);
 	}
 
-	return (mod & MOD_CONTROL) ? true : false;
+	return (mod & MOD_CTRL) ? true : false;
 }
 
 // (NOTE _heap_malloc in Makefile.emscripten)

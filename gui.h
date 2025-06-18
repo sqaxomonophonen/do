@@ -83,10 +83,10 @@ enum special_key {
 };
 
 enum modifier_key_flag {
-	MOD_SHIFT   = (1<<22),
-	MOD_CONTROL = (1<<23),
-	MOD_ALT     = (1<<24),
-	MOD_GUI     = (1<<25),
+	MOD_SHIFT = (1<<22),
+	MOD_CTRL  = (1<<23),
+	MOD_ALT   = (1<<24),
+	MOD_GUI   = (1<<25),
 };
 
 enum key_state_flag {
@@ -100,7 +100,7 @@ struct mouse_state {
 	double wheel_x, wheel_y;
 };
 
-#define MOD_MASK (MOD_SHIFT | MOD_CONTROL | MOD_ALT | MOD_GUI)
+#define MOD_MASK (MOD_SHIFT | MOD_CTRL | MOD_ALT | MOD_GUI)
 #define KEY_MASK ((1<<22)-1)
 
 static inline int get_key_mod(int key) { return key & MOD_MASK; }
@@ -210,6 +210,8 @@ int create_texture(int type, int width, int height);
 void get_texture_dim(int texture, int* out_width, int* out_height);
 void destroy_texture(int texture);
 void update_texture(int texture, int y0, int width, int height, void* data);
+
+void quit_now(void);
 
 
 #define GUI_H

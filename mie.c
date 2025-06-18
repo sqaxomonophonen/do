@@ -24,22 +24,6 @@
 // instance per thread at that timescale. it also means we only need one
 // scratch allocator per thread.
 
-#include <stdio.h> // XXX remove me eventually?
-#include <string.h>
-#include <stdlib.h>
-#include <assert.h>
-#include <limits.h>
-#include <math.h>
-
-#include "mie.h"
-#include "gig.h"
-#include "util.h"
-#include "utf8.h"
-#include "stb_sprintf.h"
-#include "stb_divide.h"
-#include "stb_ds.h" // NOTE we use various allocators, so no stb_ds_sysalloc.h
-#include "allocator.h"
-
 // forth-like stack-manipulation notation:
 //   (before -- after) for stack
 //   [before -- after] for rstack ("return stack")
@@ -208,6 +192,21 @@
 	X( SEW_SEMICOLON , "SEW-SEMICOLON" , 0 , "End word def outside of comptime") \
 	/* ====================================================================== */
 
+#include <stdio.h> // XXX remove me eventually?
+#include <string.h>
+#include <stdlib.h>
+#include <assert.h>
+#include <limits.h>
+#include <math.h>
+
+#include "mie.h"
+#include "gig.h"
+#include "util.h"
+#include "utf8.h"
+#include "stb_sprintf.h"
+#include "stb_divide.h"
+#include "stb_ds.h" // NOTE we use various allocators, so no stb_ds_sysalloc.h
+#include "allocator.h"
 
 enum builtin_word {
 	_NO_WORD_=0,

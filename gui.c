@@ -1,3 +1,22 @@
+
+#define LIST_OF_SHORTCUTS \
+	X(NO_SHORTCUT  , 0                          , 0              , NULL) \
+	/* enum        , combo 0                    , combo 1        , description */ \
+	X(COPY         , MOD_CTRL | 'C'             , 0              , "Copy selection") \
+	X(COLOR_COPY   , MOD_CTRL | MOD_SHIFT | 'C' , 0              , "Color-copy selection") \
+	X(CUT          , MOD_CTRL | 'X'             , 0              , "Cut selection") \
+	X(COLOR_CUT    , MOD_CTRL | MOD_SHIFT | 'X' , 0              , "Color-cut selection") \
+	X(PASTE        , MOD_CTRL | MOD_SHIFT | 'V' , MOD_CTRL | 'V' , "Paste") \
+	X(COMMIT       , MOD_CTRL | KEY_ENTER       , 0              , "Commit pending changes touching your caret") \
+	X(CANCEL       , MOD_CTRL | ' '             , 0              , "Cancel pending changes touching your caret") \
+	X(PAINT        , MOD_CTRL | 'P'             , 0              , "Paint selection with current color") \
+	X(GOTO         , MOD_CTRL | 'G'             , 0              , "Go to a new document") \
+	X(DEBUGGER     , MOD_CTRL | 'D'             , 0              , "Toggle debugger") \
+	X(MAGIC_INSERT , MOD_CTRL | 'M'             , 0              , "The next shortcut is inserted into the text as a magic shortcut") \
+	X(TIME_TRAVEL  , MOD_CTRL | 'Z'             , 0              , "Toggle time-travel (explore the past)") \
+	/* enum        , combo 0                    , combo 1        , description */
+
+
 #include <assert.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -11,6 +30,7 @@
 #include "stb_image_write.h"
 #include "stb_image_resize2.h"
 #include "stb_sprintf.h"
+#include "stb_divide.h"
 
 #include "main.h"
 #include "util.h"
@@ -19,6 +39,19 @@
 #include "gig.h"
 #include "fonts.h"
 #include "utf8.h"
+
+enum shortcut {
+	#define X(ENUM,_COMBO0,_COMBO1,_DOC) ENUM,
+	LIST_OF_SHORTCUTS
+	#undef X
+	SHORTCUT_COUNT
+};
+
+const static int shortcut_combo[][2] = {
+	#define X(_ENUM,COMBO0,COMBO1,_DOC) {COMBO0,COMBO1},
+	LIST_OF_SHORTCUTS
+	#undef X
+};
 
 #define ATLAS_MIN_SIZE_LOG2 (8)
 #define ATLAS_MAX_SIZE_LOG2 (13)
@@ -166,6 +199,22 @@ struct draw_state {
 	int current_y_stretch_index;
 };
 
+
+enum {
+	MENU_MAIN = 1,
+	MENU_MANAGE_PANES,
+};
+
+struct menu {
+	int x,y,w,h;
+	int page;
+	int selected_item;
+	int item_sequence;
+	float y_advance;
+	unsigned is_begun               :1;
+	unsigned is_shown               :1;
+	unsigned do_enter_selected_item :1;
+};
 static struct {
 	struct window* window_arr;
 	struct pane* pane_arr;
@@ -201,7 +250,7 @@ static struct {
 	char* gray_copybuf_arr;
 	struct colorchar* color_copybuf_arr;
 
-	unsigned   show_menu :1;
+	struct menu menu;
 
 	unsigned   key_control :1;
 	unsigned   key_shift   :1;
@@ -218,7 +267,6 @@ static struct {
 	int64_t tt_timestamp_us;
 	double tt_scale_log2;
 } g;
-
 
 static inline int make_focus_id(void)
 {
@@ -1457,14 +1505,16 @@ static void time_accelerate(int direction)
 #define NORMAL   "\033[0;"
 
 struct escape_machine {
-	int put_char_codepoint;
+	int codepoint;
 	int esc_state;
 	int esc_count;
 	float color[3];
 	char esc_buf[64];
-	unsigned  do_put_char  :1;
-	unsigned  do_set_color :1;
-	unsigned  not_first    :1;
+	unsigned  has_codepoint     :1;
+	unsigned  do_set_color      :1;
+	unsigned  do_begin_shortcut :1;
+	unsigned  do_end_shortcut   :1;
+	unsigned  not_first         :1;
 };
 
 static inline void color_copy(float* dst, const float* src) { memcpy(dst, src, sizeof(*dst)*3); }
@@ -1475,7 +1525,7 @@ static void em_push(struct escape_machine* em, int codepoint)
 	const static float normal_color[3] = {0.4, 0.4, 0.4};
 	const static float shortcut_color[3] = {1.0, 1.0, 0.4};
 
-	em->do_put_char = 0;
+	em->has_codepoint = 0;
 	em->do_set_color = 0;
 	if (!em->not_first) {
 		em->do_set_color = 1;
@@ -1486,8 +1536,8 @@ static void em_push(struct escape_machine* em, int codepoint)
 		if (codepoint == '\033') {
 			++em->esc_state;
 		} else {
-			em->do_put_char = 1;
-			em->put_char_codepoint = codepoint;
+			em->has_codepoint = 1;
+			em->codepoint = codepoint;
 		}
 	} else if (em->esc_state == 1) {
 		assert((codepoint == '[') && "bad escape");
@@ -1503,8 +1553,10 @@ static void em_push(struct escape_machine* em, int codepoint)
 			if (em->esc_count == 1 && em->esc_buf[0] == '0') { // XXX
 				em->do_set_color = 1;
 				color_copy(em->color, normal_color);
+				em->do_end_shortcut = 1;
 			} else if (em->esc_count == 1 && em->esc_buf[0] == '1') { // XXX
 				em->do_set_color = 1;
+				em->do_begin_shortcut = 1;
 				color_copy(em->color, shortcut_color);
 			} else {
 				assert(!"bad escape");
@@ -1532,8 +1584,10 @@ static void handle_editor_input(struct pane* pane)
 		const int code = get_key_code(key);
 
 		if (down && mod==0 && code==KEY_ESCAPE) {
-			assert(!g.show_menu);
-			g.show_menu = 1;
+			assert(!g.menu.is_shown);
+			memset(&g.menu, 0, sizeof g.menu);
+			g.menu.is_shown = 1;
+			g.menu.page = MENU_MAIN;
 		}
 
 		if (code == KEY_CONTROL) g.key_control = down;
@@ -1544,10 +1598,22 @@ static void handle_editor_input(struct pane* pane)
 		if (code == KEY_ARROW_UP)    g.key_up    = down;
 		if (code == KEY_ARROW_DOWN)  g.key_down  = down;
 
-		if (g.tt_is_scrubbing) {
-			if (down && (mod==MOD_CONTROL) && (code=='Z')) {
-				toggle_time_scrub();
+		enum shortcut shortcut = NO_SHORTCUT;
+		if (down) {
+			for (int i=(NO_SHORTCUT+1); i<SHORTCUT_COUNT; ++i) {
+				for (int ii=0; ii<2; ++ii) {
+					const int combo = shortcut_combo[i][ii];
+					if (combo == 0) continue;
+					if (((KEY_IS_DOWN | combo) == key) && (shortcut == NO_SHORTCUT)) {
+						shortcut = i;
+					}
+				}
 			}
+		}
+
+		if (g.tt_is_scrubbing) {
+			if (shortcut == TIME_TRAVEL) toggle_time_scrub();
+
 			if (down && mod==0 && code==KEY_HOME) {
 				g.tt_is_suspended = 1;
 				get_time_travel_range(&g.tt_timestamp_us, NULL);
@@ -1606,30 +1672,33 @@ static void handle_editor_input(struct pane* pane)
 
 			int do_gray_copy=0, do_color_copy=0, do_paste=0;
 
-			if (down && mod==MOD_CONTROL) {
-				if (can_edit) {
-					if (code==KEY_ENTER) mimf("0!"); // commit
-					if (code==' ')       mimf("0/"); // cancel
-					if (code=='P')       mimf("0P"); // paint
-				}
-				if (code=='C')       do_gray_copy=1;
-				if (code=='X') {
-					do_gray_copy=1;
-					if (can_edit) mimf("0x");
-				}
-				if (can_edit) {
-					if (code=='V') do_paste=1;
-				}
-				if (code=='Z') toggle_time_scrub();
+			if (can_edit) {
+				if (shortcut==COMMIT) mimf("0!"); // commit
+				if (shortcut==CANCEL) mimf("0/"); // cancel
+				if (shortcut==PAINT)  mimf("0P"); // paint
+
+				if (shortcut == GOTO)       TODO(goto document); // TODO
+				// "goto document" is a menu that lets you change the
+				// current document you're viewing/editing
+
+				if (shortcut == DEBUGGER) TODO(toggle debugger); // TODO
+				// debugger view is a left-side subpane?
+
+				if (code == MAGIC_INSERT) TODO(insert magic shortcut); // TODO
 			}
 
-			if (down && (mod==(MOD_CONTROL|MOD_SHIFT))) {
-				if (code=='C') do_color_copy=1;
-				if (code=='X') {
-					do_gray_copy=1;
-					if (can_edit) mimf("0x");
-				}
-				if (code=='V') do_paste=1;
+			if (shortcut == COPY) do_gray_copy=1;
+			if (shortcut == CUT) {
+				do_gray_copy=1;
+				if (can_edit) mimf("0x");
+			}
+			if (can_edit && shortcut == PASTE) do_paste=1;
+			if (shortcut == TIME_TRAVEL) toggle_time_scrub();
+
+			if (shortcut==COLOR_COPY) do_color_copy=1;
+			if (shortcut==COLOR_CUT) {
+				do_gray_copy=1;
+				if (can_edit) mimf("0x");
 			}
 
 			if (do_gray_copy || do_color_copy) {
@@ -1695,7 +1764,7 @@ static void handle_editor_input(struct pane* pane)
 			}
 		}
 	}
-	if (!(last_mod & MOD_CONTROL)) {
+	if (!(last_mod & MOD_CTRL)) {
 		const int num_chars = utf8_strlen(g.text_buffer_arr);
 		if (num_chars > 0) {
 			const int num_bytes = arrlen(g.text_buffer_arr) - 1;
@@ -1803,7 +1872,7 @@ static void draw_code_pane(struct pane* pane)
 		}
 	}
 
-	g.state.is_dimming = (pane->code.colorpick_on || g.show_menu);
+	g.state.is_dimming = (pane->code.colorpick_on || g.menu.is_shown);
 
 	const struct rect pr = get_pane_rect(pane);
 
@@ -1811,7 +1880,7 @@ static void draw_code_pane(struct pane* pane)
 	if (flags & WAS_CLICKED) {
 		focus(pane->code.focus_id);
 	}
-	if (flags & HAS_FOCUS && !g.show_menu) {
+	if (flags & HAS_FOCUS && !g.menu.is_shown) {
 		handle_editor_input(pane);
 	}
 
@@ -2076,58 +2145,140 @@ static void draw_code_pane(struct pane* pane)
 	}
 }
 
-static struct {
-	int x,y,w,h;
-	unsigned is_begun :1;
-	float y_advance;
-} ll;
-
-static void begin_layout(int x, int y, int width, int height)
+static void begin_menu(int x, int y, int width, int height)
 {
-	assert(!ll.is_begun);
-	ll.is_begun = 1;
-	ll.x = x;
-	ll.y = y;
-	ll.w = width;
-	ll.h = height;
+	struct menu* mn = &g.menu;
+	assert(!mn->is_begun);
+	mn->is_begun = 1;
+	mn->x = x;
+	mn->y = y;
+	mn->w = width;
+	mn->h = height;
 
 	const int m=50;
 	g.state.cursor_x0 = g.state.cursor_x = x+m;
 	g.state.cursor_y = y+m;
 	set_y_stretch_index(g.font_config.num_y_stretch_levels - 1);
-	ll.y_advance = get_y_advance();
+	mn->y_advance = get_y_advance();
+
+	for (int i=0; i<arrlen(g.key_buffer_arr); ++i) {
+		const int key  = arrchkget(g.key_buffer_arr, i);
+		const int down = !!get_key_down(key);
+		const int mod  = get_key_mod(key);
+		const int code = get_key_code(key);
+		if (down && (mod==0)) {
+			if (code==KEY_ESCAPE) {
+				mn->is_shown = 0;
+			} else if (code==KEY_ARROW_UP) {
+				--mn->selected_item;
+			} else if (code==KEY_ARROW_DOWN) {
+				++mn->selected_item;
+			} else if (code==KEY_ENTER) {
+				mn->do_enter_selected_item = 1;
+			}
+		}
+	}
+	arrreset(g.key_buffer_arr);
+	mn->item_sequence = 0;
 }
 
-static void end_layout(void)
+static void end_menu(void)
 {
-	assert(ll.is_begun);
-	ll.is_begun = 0;
+	struct menu* mn = &g.menu;
+	assert(mn->is_begun);
+	mn->is_begun = 0;
+	arrreset(g.text_buffer_arr);
+	mn->selected_item = stb_mod_eucl(mn->selected_item, mn->item_sequence);
 }
 
-static int widget(const char* text)
+static int text_buffer_contains_codepoint(int sought_codepoint)
 {
+	const char* p = g.text_buffer_arr;
+	int r = arrlen(g.text_buffer_arr)-1;
+	while (r>0) {
+		const int codepoint = utf8_decode(&p, &r);
+		if (codepoint == sought_codepoint) {
+			return 1;
+		}
+	}
+	return 0;
+}
+
+#define W_WAS_SELECTED   (1<<0)
+#define W_IS_SELECTABLE  (1<<1)
+
+static int widget(int input_flags, const char* text)
+{
+	struct menu* mn = &g.menu;
+	assert(mn->is_begun);
 	const char* p = text;
 	int r = strlen(p);
 	struct escape_machine em = {0};
+	const int can_select = !!(input_flags & W_IS_SELECTABLE);
+
+	unsigned flags = 0;
+
+	int is_hovered = 0;
+	if (can_select) {
+		const int item = (mn->item_sequence++);
+		if (item == mn->selected_item) {
+			if (mn->do_enter_selected_item) {
+				flags |= W_WAS_SELECTED;
+				mn->do_enter_selected_item = 0;
+			}
+			is_hovered = 1;
+		}
+	}
+
+	enum {
+		WAITING_FOR_SHORTCUT = -1,
+		EXPECTING_SHORTCUT_CODEPOINT = -2,
+		SHORTCUT_ERROR = -3,
+	};
+	int shortcut_codepoint = WAITING_FOR_SHORTCUT;
 	while (r>0) {
 		const int codepoint = utf8_decode(&p, &r);
 		em_push(&em, codepoint);
 		if (em.do_set_color) set_color3v(em.color);
-		if (em.do_put_char) put_char(em.put_char_codepoint);
+		if (em.do_begin_shortcut) {
+			if (shortcut_codepoint == WAITING_FOR_SHORTCUT) {
+				shortcut_codepoint = EXPECTING_SHORTCUT_CODEPOINT;
+			}
+		}
+		if (em.has_codepoint) {
+			if (is_hovered) {
+				save();
+				set_color3f(.2,.2,.2);
+				put_char(SPECIAL_CODEPOINT_BLOCK);
+				restore();
+			}
+			put_char(em.codepoint);
+			if (shortcut_codepoint == EXPECTING_SHORTCUT_CODEPOINT) {
+				shortcut_codepoint = em.codepoint;
+			} else if (shortcut_codepoint != WAITING_FOR_SHORTCUT) {
+				shortcut_codepoint = SHORTCUT_ERROR;
+			}
+		}
+		if (em.do_end_shortcut) {
+			if (can_select && shortcut_codepoint > 0 && text_buffer_contains_codepoint(shortcut_codepoint)) {
+				flags |= W_WAS_SELECTED;
+			}
+		}
 	}
-	g.state.cursor_y += ll.y_advance;
+	g.state.cursor_y += mn->y_advance;
 	g.state.cursor_x = g.state.cursor_x0;
-	return 0;
+
+	return flags;
 }
 
 static void text_line(const char* text)
 {
-	widget(text);
+	widget(0, text);
 }
 
 static int menu_item(const char* text)
 {
-	return widget(text);
+	return widget(W_IS_SELECTABLE, text);
 }
 
 static void tooltip(const char* text)
@@ -2158,30 +2309,40 @@ static void gui_draw1(void)
 		// TODO render pane overlay? (e.g. pane border lines)
 	}
 
-	if (g.show_menu) {
-		#if 0
-		handle_menu_input(&g.menu);
-		render_menu(&g.menu);
-		#endif
-		begin_layout(0, 0, g.current_window->true_width, g.current_window->true_height);
-		text_line("I would like to ..");
-		if (menu_item(".. manage " SHORTCUT "w" NORMAL "indows")) {
-			// TODO goto manage windows
-			// XXX kan jeg være fræk og finde shortcuttet "w" vha
-			// escape_machine?
+	if (g.menu.is_shown) {
+		begin_menu(0, 0, g.current_window->true_width, g.current_window->true_height);
+
+		if (g.menu.page == MENU_MAIN) {
+			text_line("I would like to ..");
+			if (menu_item(".. manage " SHORTCUT "p" NORMAL "anes")) {
+				printf("GOTO WINDOWS\n"); // TODO
+				g.menu.page = MENU_MANAGE_PANES;
+			}
+			tooltip("open, close, swap, move, resize, windows");
+			if (menu_item(".. join another " SHORTCUT "s" NORMAL "erver")) {
+				printf("JOIN SERVER\n"); // TODO
+			}
+			if (menu_item(".. " SHORTCUT "q" NORMAL "uit")) {
+				quit_now();
+			}
+		} else if (g.menu.page == MENU_MANAGE_PANES) {
+			text_line("[manage panes] I would like to ..");
+			if (menu_item(".. " SHORTCUT "o" NORMAL "pen a new pane")) {
+			}
+			if (menu_item(".. remove a pane (" SHORTCUT "x" NORMAL ")")) {
+			}
+			if (menu_item(".. swap " SHORTCUT "2" NORMAL " panes")) {
+			}
+			if (menu_item(".. " SHORTCUT "m" NORMAL "ove/resize panes")) {
+			}
+		} else {
+			FIXME_NOW(bad menu page)
 		}
-		tooltip("open, close, swap, move, resize, windows");
-		if (menu_item(".. join another " SHORTCUT "s" NORMAL "erver")) {
-			// TODO
-		}
-		if (menu_item(".. " SHORTCUT "q" NORMAL "uit")) {
-			// TODO
-		}
+
 		//slider("brightness", 0.0, 1.0, &brightness);
 		//checkbox("maybe later", &maybe_later);
-		end_layout();
+		end_menu();
 	}
-
 }
 
 void gui_draw(struct window* window)
