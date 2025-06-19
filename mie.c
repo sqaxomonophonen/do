@@ -74,7 +74,6 @@
 // execute the square-root operation at runtime.
 
 
-
 // the words below have direct 1:1 mappings to vmie VM ops.
 // `foo:i32` means `foo` is bitwise ("reinterpret") cast to i32, i.e. without
 // any type checking. by convention, words that do bitwise casting should not

@@ -17,7 +17,8 @@ enum io_open_mode {
 	X(IO_READ_ERROR        , "read error"              , -21004) \
 	X(IO_READ_OUT_OF_RANGE , "read out of range"       , -21005) \
 	X(IO_PENDING           , "work remaining"          , -21006) \
-	X(IO_BUFFER_FULL       , "buffer is full"          , -21007)
+	X(IO_BUFFER_FULL       , "buffer is full"          , -21007) \
+	X(IO_BAD_PATH          , "bad/invalid path"        , -21008)
 
 enum io_error {
 	#define X(ENUM,_MSG,ID) ENUM=ID,
@@ -54,6 +55,9 @@ static inline const char* io_error_to_string_safe(int error)
 	const char* s = io_error_to_string(error);
 	return s ? s : "(not a io error)";
 }
+
+int io_mkdir(const char* path);
+int io_write_file(const char* path, const void* ptr, int64_t count);
 
 int io_open(const char* path, enum io_open_mode, int64_t* out_filesize);
 int io_close(int file_id);

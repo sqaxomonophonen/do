@@ -10,6 +10,7 @@
 #include "stb_ds_sysalloc.h"
 #include "stb_sprintf.h"
 #include "jio.h"
+#include "io.h"
 #include "gig.h"
 #include "util.h"
 #include "bb.h"
@@ -33,6 +34,7 @@
 #define DO_FORMAT_VERSION (10000)
 #define JOURNAL_HEADER_SIZE (8*4)
 #define SYNC (0xfa)
+#define DIR_CACHE                     "cache"
 #define FILENAME_JOURNAL              "DO_JAM_JOURNAL"
 #define FILENAME_SNAPSHOTCACHE_DATA   "snapshotcache.data"
 #define FILENAME_SNAPSHOTCACHE_INDEX  "snapshotcache.index"
@@ -277,6 +279,7 @@ static struct {
 } g; // globals
 
 static struct {
+	const char* cache_dir;
 	int io_port_id;
 	int64_t journal_offset_at_last_snapshotcache_push;
 	struct jio* jio_journal;
@@ -1856,7 +1859,7 @@ static int snapshotcache_open(const char* dir, uint64_t journal_wax)
 	char pathbuf[1<<14];
 
 	int err;
-	STATIC_PATH_JOIN(pathbuf, dir, FILENAME_SNAPSHOTCACHE_DATA);
+	STATIC_PATH_JOIN(pathbuf, dir, DIR_CACHE, FILENAME_SNAPSHOTCACHE_DATA);
 	struct jio* jdat = jio_open(pathbuf, IO_OPEN, igo.io_port_id, JIO_LARGE_LOG2, &err);
 	if (jdat == NULL) return IOERR(pathbuf, err);
 	igo.jio_snapshotcache_data = jdat;
@@ -1866,7 +1869,7 @@ static int snapshotcache_open(const char* dir, uint64_t journal_wax)
 		return FMTERR(pathbuf, "file is empty");
 	}
 
-	STATIC_PATH_JOIN(pathbuf, dir, FILENAME_SNAPSHOTCACHE_INDEX);
+	STATIC_PATH_JOIN(pathbuf, dir, DIR_CACHE, FILENAME_SNAPSHOTCACHE_INDEX);
 	struct jio* jidx = jio_open(pathbuf, IO_OPEN, igo.io_port_id, JIO_LOG2, &err);
 	if (jidx == NULL) return IOERR(pathbuf, err);
 	igo.jio_snapshotcache_index = jidx;
@@ -1935,7 +1938,10 @@ static int snapshotcache_create(const char* dir)
 {
 	char pathbuf[1<<14];
 
-	STATIC_PATH_JOIN(pathbuf, dir, FILENAME_SNAPSHOTCACHE_DATA);
+	STATIC_PATH_JOIN(pathbuf, dir, DIR_CACHE);
+	(void)io_mkdir(pathbuf);
+
+	STATIC_PATH_JOIN(pathbuf, dir, DIR_CACHE, FILENAME_SNAPSHOTCACHE_DATA);
 	int err;
 	struct jio* jdat = jio_open(pathbuf, IO_CREATE, igo.io_port_id, JIO_LARGE_LOG2, &err);
 	if (jdat == NULL) {
@@ -1948,7 +1954,8 @@ static int snapshotcache_create(const char* dir)
 	bb_append_leu64(bb, /*wax=*/0);
 	jio_flush_bb(jdat, bb);
 
-	STATIC_PATH_JOIN(pathbuf, dir, FILENAME_SNAPSHOTCACHE_INDEX);
+
+	STATIC_PATH_JOIN(pathbuf, dir, DIR_CACHE, FILENAME_SNAPSHOTCACHE_INDEX);
 	struct jio* jidx = jio_open(pathbuf, IO_CREATE, igo.io_port_id, JIO_LOG2, &err);
 	if (jidx == NULL) {
 		jio_close(jdat);
@@ -2270,6 +2277,53 @@ int peer_spool_raw_journal_into_upstream_snapshot(void* data, int64_t count)
 	return 0;
 }
 
+static void write_doc_as_cc(struct document* doc, const char* path)
+{
+	uint8_t** bb = &hg.bb_arr;
+	arrreset(*bb);
+	const int num_chars = arrlen(doc->docchar_arr);
+	for (int i=0; i<num_chars; ++i) {
+		struct colorchar cc = doc->docchar_arr[i].colorchar;
+		bb_append_utf8(bb, cc.codepoint);
+		bb_append_leu16(bb, cc.splash4);
+	}
+	io_write_file(path, *bb, arrlen(*bb));
+}
+
+static void write_doc_as_txt(struct document* doc, const char* path)
+{
+	uint8_t** bb = &hg.bb_arr;
+	arrreset(*bb);
+	const int num_chars = arrlen(doc->docchar_arr);
+	for (int i=0; i<num_chars; ++i) {
+		struct colorchar cc = doc->docchar_arr[i].colorchar;
+		bb_append_utf8(bb, cc.codepoint);
+	}
+	io_write_file(path, *bb, arrlen(*bb));
+}
+
+static void write_snapshot_documents(struct snapshot* snap)
+{
+	const int num_docs = arrlen(snap->document_arr);
+	for (int i=0; i<num_docs; ++i) {
+		struct document* doc = &snap->document_arr[i];
+
+		char pathbuf[1<<14];
+		char fnbuf[1<<10];
+
+		stbsp_snprintf(fnbuf, sizeof fnbuf, "%2d-%s.cc", doc->doc_id, doc->name_arr);
+		STATIC_PATH_JOIN(pathbuf, igo.cache_dir, fnbuf);
+		write_doc_as_cc(doc,   pathbuf);
+
+		stbsp_snprintf(fnbuf, sizeof fnbuf, "%2d-%s.txt", doc->doc_id, doc->name_arr);
+		STATIC_PATH_JOIN(pathbuf, igo.cache_dir, fnbuf);
+		write_doc_as_txt(doc,  pathbuf);
+
+		// TODO HTML? it's a bit cumbersome and I don't know what the value is?
+		// and it's easy to do with a few lines of python?
+	}
+}
+
 void commit_mim_to_host(int artist_id, int session_id, int64_t tracer, uint8_t* data, int count)
 {
 	struct snapshot* snap = &hg.present_snapshot;
@@ -2311,6 +2365,8 @@ void commit_mim_to_host(int artist_id, int session_id, int64_t tracer, uint8_t* 
 		return;
 	}
 	jio_flush_bb(ja, bb);
+
+	write_snapshot_documents(&hg.present_snapshot);
 }
 
 static void H_LOCK(void)
@@ -2527,6 +2583,10 @@ static void rewax_all(void)
 static int setup_datadir(const char* dir)
 {
 	char pathbuf[1<<14];
+
+	STATIC_PATH_JOIN(pathbuf, dir, DIR_CACHE);
+	igo.cache_dir = strdup(pathbuf);
+
 	STATIC_PATH_JOIN(pathbuf, dir, FILENAME_JOURNAL);
 	int err;
 	struct jio* jj = jio_open(pathbuf, IO_OPEN_OR_CREATE, igo.io_port_id, JIO_LARGE_LOG2, &err);
@@ -2624,7 +2684,10 @@ static int setup_datadir(const char* dir)
 			:0);
 	}
 
-	STATIC_PATH_JOIN(pathbuf, dir, FILENAME_ACTIVITYCACHE);
+	STATIC_PATH_JOIN(pathbuf, dir, DIR_CACHE);
+	(void)io_mkdir(pathbuf);
+
+	STATIC_PATH_JOIN(pathbuf, dir, DIR_CACHE, FILENAME_ACTIVITYCACHE);
 	struct jio* ja = jio_open(pathbuf, IO_OPEN_OR_CREATE, igo.io_port_id, JIO_LOG2, &err);
 	const int64_t jasz = jio_get_size(ja);
 	if (jasz == 0) {

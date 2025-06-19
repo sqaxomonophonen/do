@@ -16,7 +16,6 @@
 	X(TIME_TRAVEL  , MOD_CTRL | 'Z'             , 0              , "Toggle time-travel (explore the past)") \
 	/* enum        , combo 0                    , combo 1        , description */
 
-
 #include <assert.h>
 #include <stdio.h>
 #include <stdint.h>

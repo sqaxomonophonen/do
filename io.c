@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 
 #ifdef __linux__
 #include <sys/sendfile.h>
@@ -134,6 +135,88 @@ static void G_UNLOCK(void)
 	assert(0 == pthread_mutex_unlock(&g.mutex));
 }
 
+static int pwriten(int posix_fd, const void* ptr, int64_t count, int64_t offset)
+{
+	int64_t remaining = count;
+	const void* p = ptr;
+	while (remaining > 0) {
+		const int64_t count = pwrite(posix_fd, p, remaining, offset);
+		if (count == -1) {
+			if (errno == EINTR) continue;
+			return -1;
+		}
+		assert(count >= 0);
+		p += count;
+		remaining -= count;
+		offset += count;
+	}
+	assert(remaining == 0);
+	return 0;
+}
+
+static int preadn(int posix_fd, void* ptr, int64_t count, int64_t offset)
+{
+	int64_t remaining = count;
+	void* p = ptr;
+	while (remaining > 0) {
+		const int64_t count = pread(posix_fd, p, remaining, offset);
+		if (count == -1) {
+			if (errno == EINTR) continue;
+			return -1;
+		}
+		assert(count >= 0);
+		p += count;
+		remaining -= count;
+		offset += count;
+	}
+	assert(remaining == 0);
+	return 0;
+}
+
+int io_mkdir(const char* path)
+{
+	if (0 == mkdir(path, 0777)) {
+		return 0;
+	} else {
+		switch (errno) {
+		case EEXIST:
+			return IO_ALREADY_EXISTS;
+		case EPERM:
+		case EACCES:
+			return IO_NOT_PERMITTED;
+		case ENOENT:
+			return IO_BAD_PATH;
+			// XXX or return IO_NOT_FOUND for ENOENT? is it like mkdir
+			// ./foo/bar where foo doesn't exist?
+		case EINVAL:
+			return IO_BAD_PATH;
+		case ENOTDIR:
+			return IO_BAD_PATH;
+		default: return IO_ERROR;
+		}
+	}
+}
+
+int io_write_file(const char* path, const void* ptr, int64_t count)
+{
+	const int fd = open(path, O_WRONLY | O_CREAT, 0666);
+	if (fd == -1) {
+		FIXME_NOW()
+	}
+	int e = ftruncate(fd, 0);
+	if (e == -1) {
+		FIXME_NOW()
+	}
+	e = pwriten(fd, ptr, count, 0);
+	if (e == -1) {
+		FIXME_NOW()
+	}
+	e = close(fd);
+	if (e == -1) {
+		FIXME_NOW()
+	}
+	return 0;
+}
 
 int io_open(const char* path, enum io_open_mode mode, int64_t* out_filesize)
 {
@@ -234,45 +317,6 @@ int io_close(int file_id)
 	arrdel(g.file_arr, i);
 	return 0;
 }
-
-static int pwriten(int posix_fd, const void* ptr, int64_t count, int64_t offset)
-{
-	int64_t remaining = count;
-	const void* p = ptr;
-	while (remaining > 0) {
-		const int64_t count = pwrite(posix_fd, p, remaining, offset);
-		if (count == -1) {
-			if (errno == EINTR) continue;
-			return -1;
-		}
-		assert(count >= 0);
-		p += count;
-		remaining -= count;
-		offset += count;
-	}
-	assert(remaining == 0);
-	return 0;
-}
-
-static int preadn(int posix_fd, void* ptr, int64_t count, int64_t offset)
-{
-	int64_t remaining = count;
-	void* p = ptr;
-	while (remaining > 0) {
-		const int64_t count = pread(posix_fd, p, remaining, offset);
-		if (count == -1) {
-			if (errno == EINTR) continue;
-			return -1;
-		}
-		assert(count >= 0);
-		p += count;
-		remaining -= count;
-		offset += count;
-	}
-	assert(remaining == 0);
-	return 0;
-}
-
 
 int io_pread(int file_id, void* ptr, int64_t count, int64_t offset)
 {

@@ -3,7 +3,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <string.h>
-#define BLOCKING
+#define BLOCKING // XXX I'm starting to dislike the "BLOCKING" approach more and more...
 const char* io_error_to_string(int error)
 {
 	// XXX a bit of a hack (ignores `error`)

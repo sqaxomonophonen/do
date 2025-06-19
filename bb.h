@@ -10,11 +10,17 @@
 
 #include "binary.h"
 #include "leb128.h"
+#include "utf8.h"
 
-static inline void bb_append(uint8_t** bbarr, void* data, size_t sz)
+static inline void bb_append(uint8_t** bbarr, const void* data, size_t sz)
 {
 	uint8_t* p0 = arraddnptr(*bbarr, sz);
 	memcpy(p0, data, sz);
+}
+
+static inline void bb_append_cstr(uint8_t** bbarr, const char* cstr)
+{
+	bb_append(bbarr, cstr, strlen(cstr));
 }
 
 static inline void bb_append_u8(uint8_t** bbarr, uint8_t value)
@@ -38,7 +44,6 @@ static inline void bb_append_leu32(uint8_t** bbarr, uint32_t value)
 	assert(p == (p0+4));
 }
 
-
 static inline void bb_append_leu64(uint8_t** bbarr, uint64_t value)
 {
 	uint8_t* p0 = arraddnptr(*bbarr, 8);
@@ -52,6 +57,15 @@ static inline void bb_append_leb128(uint8_t** bbarr, int64_t value)
 	uint8_t buf0[LEB128_MAX_LENGTH];
 	uint8_t* buf1 = leb128_encode_int64_buf(buf0, value);
 	bb_append(bbarr, buf0, buf1-buf0);
+}
+
+static inline void bb_append_utf8(uint8_t** bbarr, int codepoint)
+{
+	char buf[10];
+	char* end = utf8_encode(buf, codepoint);
+	const int n = end-buf;
+	assert(n <= sizeof(buf));
+	bb_append(bbarr, buf, n);
 }
 
 static inline void* bb_dup2plain(uint8_t** bbarr)
