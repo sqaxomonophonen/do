@@ -2311,11 +2311,11 @@ static void write_snapshot_documents(struct snapshot* snap)
 		char pathbuf[1<<14];
 		char fnbuf[1<<10];
 
-		stbsp_snprintf(fnbuf, sizeof fnbuf, "%2d-%s.cc", doc->doc_id, doc->name_arr);
+		stbsp_snprintf(fnbuf, sizeof fnbuf, "book%d-doc%2d-%s.cc", doc->book_id, doc->doc_id, doc->name_arr);
 		STATIC_PATH_JOIN(pathbuf, igo.cache_dir, fnbuf);
 		write_doc_as_cc(doc,   pathbuf);
 
-		stbsp_snprintf(fnbuf, sizeof fnbuf, "%2d-%s.txt", doc->doc_id, doc->name_arr);
+		stbsp_snprintf(fnbuf, sizeof fnbuf, "book%d-doc%2d-%s.txt", doc->book_id, doc->doc_id, doc->name_arr);
 		STATIC_PATH_JOIN(pathbuf, igo.cache_dir, fnbuf);
 		write_doc_as_txt(doc,  pathbuf);
 
@@ -2467,23 +2467,6 @@ int host_tick(void)
 	return did_work;
 }
 
-#if 0
-void gig_maybe_setup_stub(void)
-{
-	// XXX doesn't work too well
-	struct snapshot* snap = &g.cool_snapshot;
-	if (arrlen(snap->book_arr) > 0) {
-		return;
-	}
-	peer_begin_mim(1);
-	mimex("newbook 1 mie-urlyd -");
-	mimex("newdoc 1 50 art.mie");
-	mimex("setdoc 1 50");
-	mimf("0,1,1c");
-	peer_end_mim();
-}
-#endif
-
 static void host_begin_mim(void)
 {
 	assert(g.is_host);
@@ -2516,7 +2499,7 @@ static void setup_default_stub(void)
 	// (which remembers everything) if we're not going to need it
 	host_begin_mim();
 	mimex("newbook 1 mie-urlyd -");
-	mimex("newdoc 1 50 art.mie");
+	mimex("newdoc 1 50 scene.mie");
 	host_end_mim();
 }
 
