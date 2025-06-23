@@ -1,20 +1,23 @@
 
 #define LIST_OF_SHORTCUTS \
-	X(NO_SHORTCUT  , 0                          , 0              , NULL) \
-	/* enum        , combo 0                    , combo 1        , description */ \
-	X(COPY         , MOD_CTRL | 'C'             , 0              , "Copy selection") \
-	X(COLOR_COPY   , MOD_CTRL | MOD_SHIFT | 'C' , 0              , "Color-copy selection") \
-	X(CUT          , MOD_CTRL | 'X'             , 0              , "Cut selection") \
-	X(COLOR_CUT    , MOD_CTRL | MOD_SHIFT | 'X' , 0              , "Color-cut selection") \
-	X(PASTE        , MOD_CTRL | MOD_SHIFT | 'V' , MOD_CTRL | 'V' , "Paste") \
-	X(COMMIT       , MOD_CTRL | KEY_ENTER       , 0              , "Commit pending changes touching your caret") \
-	X(CANCEL       , MOD_CTRL | ' '             , 0              , "Cancel pending changes touching your caret") \
-	X(PAINT        , MOD_CTRL | 'P'             , 0              , "Paint selection with current color") \
-	X(GOTO         , MOD_CTRL | 'G'             , 0              , "Go to a new document") \
-	X(DEBUGGER     , MOD_CTRL | 'D'             , 0              , "Toggle debugger") \
-	X(MAGIC_INSERT , MOD_CTRL | 'M'             , 0              , "The next shortcut is inserted into the text as a magic shortcut") \
-	X(TIME_TRAVEL  , MOD_CTRL | 'Z'             , 0              , "Toggle time-travel (explore the past)") \
-	/* enum        , combo 0                    , combo 1        , description */
+	X(NO_SHORTCUT   , 0                          , 0              , NULL) \
+	/* enum         , combo 0                    , combo 1        , description */ \
+	X(COPY          , MOD_CTRL | 'C'             , 0              , "Copy selection") \
+	X(COLOR_COPY    , MOD_CTRL | MOD_SHIFT | 'C' , 0              , "Color-copy selection") \
+	X(CUT           , MOD_CTRL | 'X'             , 0              , "Cut selection") \
+	X(COLOR_CUT     , MOD_CTRL | MOD_SHIFT | 'X' , 0              , "Color-cut selection") \
+	X(PASTE         , MOD_CTRL | MOD_SHIFT | 'V' , MOD_CTRL | 'V' , "Paste") \
+	X(COMMIT        , MOD_CTRL | KEY_ENTER       , 0              , "Commit pending changes touching your caret") \
+	X(CANCEL        , MOD_CTRL | ' '             , 0              , "Cancel pending changes touching your caret") \
+	X(PAINT         , MOD_CTRL | 'P'             , 0              , "Paint selection with current color") \
+	X(GOTO          , MOD_CTRL | 'G'             , 0              , "Go to a new document") \
+	X(DEBUGGER      , MOD_CTRL | 'D'             , 0              , "Toggle debugger") \
+	X(MAGIC_INSERT  , MOD_CTRL | 'M'             , 0              , "The next shortcut is inserted into the text as a magic shortcut") \
+	X(TIME_TRAVEL   , MOD_CTRL | 'Z'             , 0              , "Toggle time-travel (explore the past)") \
+	X(MARK_INTENT   , MOD_CTRL | '.'             , 0              , "Set commit intent marker") \
+	X(UNMARK_INTENT , MOD_CTRL | ','             , 0              , "Clear commit intent markers") \
+	/* enum         , combo 0                    , combo 1        , description */
+
 
 #include <assert.h>
 #include <stdio.h>
@@ -2466,6 +2469,11 @@ void gui_drop_file(const char* name, size_t num_bytes, uint8_t* bytes)
 
 // TODO the math in time_accelerate() is broken I think; velocity is added to
 // position with no regards to fps?
+
+// TODO commit intent markers: [ctrl]+[.] inserts commit intent marker at
+// caret, or if selection, ensures there's a commit marker in all pending
+// inserts/deletes touching. [ctrl]+[,] removes your intent markers from
+// anything touching the caret or selection.
 
 // deferred TODO: OS clipboard integration; there are many legitimate reasons
 // for this, but for now I think it's interesting to live without it? (there's
